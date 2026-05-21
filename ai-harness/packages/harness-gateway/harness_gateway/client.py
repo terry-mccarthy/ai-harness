@@ -1,5 +1,6 @@
 import httpx
 import logging
+import time
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -9,6 +10,14 @@ TOOL_NAME_MAP = {
     "git_diff": "git_diff_stub__git_diff",
     "run_linter": "linter_stub__run_linter",
     "review_diff": "review_server__review_diff",
+    "codebase_search": "architect_stub__codebase_search",
+    "adr_read": "architect_stub__adr_read",
+    "adr_write": "architect_stub__adr_write",
+    "diagram_gen": "architect_stub__diagram_gen",
+    "observability_query": "sre_stub__observability_query",
+    "runbook_read": "sre_stub__runbook_read",
+    "log_search": "sre_stub__log_search",
+    "shell_exec": "sre_stub__shell_exec",
 }
 
 
@@ -18,25 +27,67 @@ class ToolAccessDenied(Exception):
 
 @dataclass
 class GatewayClient:
-    """Thin wrapper: call tools through MCPJungle /api/v0/tools/invoke."""
     gateway_url: str
-    client_id: str       # kept for interface compatibility
-    client_secret: str   # kept for interface compatibility
+    client_id: str
+    client_secret: str
     last_calls: list = field(default_factory=list, repr=False)
+    _token: str | None = field(default=None, init=False, repr=False)
+    _token_exp: float = field(default=0.0, init=False, repr=False)
+
+    async def _get_token(self) -> str | None:
+        """Fetch a bearer token if the gateway has an /oauth/token endpoint."""
+        if not self.client_secret:
+            return None
+        if self._token and time.time() < self._token_exp - 30:
+            return self._token
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{self.gateway_url}/oauth/token",
+                    data={
+                        "grant_type": "client_credentials",
+                        "client_id": self.client_id,
+                        "client_secret": self.client_secret,
+                    },
+                    timeout=10.0,
+                )
+            if resp.status_code == 404:
+                return None  # no OAuth on this gateway (MCPJungle free tier direct)
+            resp.raise_for_status()
+            data = resp.json()
+            self._token = data["access_token"]
+            self._token_exp = time.time() + data.get("expires_in", 900)
+            logger.debug(
+                "fetched token for %s, exp in %ds",
+                self.client_id,
+                data.get("expires_in"),
+            )
+            return self._token
+        except httpx.HTTPStatusError:
+            raise
+        except Exception as e:
+            logger.warning("token fetch failed: %s", e)
+            return None
 
     async def call_tool(self, tool_name: str, params: dict) -> dict:
         full_name = TOOL_NAME_MAP.get(tool_name)
         if full_name is None:
             raise ToolAccessDenied(f"403 Forbidden: {tool_name} not in allowed tool list")
 
+        token = await self._get_token()
         body = {"name": full_name, **params}
         logger.debug("tool_call request: %s", body)
+
+        headers = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
 
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{self.gateway_url}/api/v0/tools/invoke",
                 json=body,
-                timeout=30.0,
+                headers=headers,
+                timeout=60.0,
             )
 
         self.last_calls.append({"tool": tool_name, "status": resp.status_code})
@@ -44,12 +95,13 @@ class GatewayClient:
 
         if resp.status_code == 403:
             raise ToolAccessDenied(f"403 Forbidden: {tool_name}")
+        if resp.status_code == 401:
+            raise ToolAccessDenied(f"401 Unauthorized: {tool_name}")
 
         resp.raise_for_status()
         data = resp.json()
         logger.debug("tool_call raw response: %s", data)
 
-        # MCPJungle returns {"content": [...]} — unwrap first text item to parsed JSON
         import json as _json
         items = data.get("content") or data.get("result") or []
         if items and isinstance(items[0], dict) and items[0].get("type") == "text":

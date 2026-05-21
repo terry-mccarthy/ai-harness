@@ -1,14 +1,18 @@
 import pytest
 import os
+import httpx
 from ollama import AsyncClient
 from harness_gateway.client import GatewayClient
 from harness_agents.reviewer import CodeReviewerAgent
 
+GOVERNANCE_URL = os.environ.get("GOVERNANCE_URL", "http://localhost:8090")
+
 
 @pytest.fixture
 def gateway_client():
+    url = os.environ.get("MCPJUNGLE_URL", GOVERNANCE_URL)
     return GatewayClient(
-        gateway_url=os.environ["MCPJUNGLE_URL"],
+        gateway_url=url,
         client_id="code-reviewer",
         client_secret=os.environ["CODE_REVIEWER_SECRET"],
     )
@@ -21,3 +25,18 @@ def reviewer_agent(gateway_client):
         llm_client=AsyncClient(host=os.environ.get("OLLAMA_HOST", "http://localhost:11434")),
         model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder"),
     )
+
+
+@pytest.fixture
+async def code_reviewer_token():
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{GOVERNANCE_URL}/oauth/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": "code-reviewer",
+                "client_secret": os.environ["CODE_REVIEWER_SECRET"],
+            },
+        )
+    resp.raise_for_status()
+    return resp.json()["access_token"]

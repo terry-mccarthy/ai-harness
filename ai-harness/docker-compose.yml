@@ -106,3 +106,92 @@ services:
       review-server:
         condition: service_healthy
     restart: "no"
+
+  dolt:
+    build:
+      context: ./services/dolt
+    ports: ["3306:3306"]
+    volumes:
+      - dolt-data:/doltdata
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -P 3306 -u root --connect-timeout=2 -e 'SELECT 1' 2>/dev/null || exit 1"]
+      interval: 5s
+      retries: 20
+      start_period: 60s
+
+  architect-stub:
+    build:
+      context: ./stub_servers
+      dockerfile: Dockerfile.stub
+    command: python architect_server.py
+    ports: ["9004:9004"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9004)); s.close()\""]
+      interval: 5s
+      retries: 10
+
+  sre-stub:
+    build:
+      context: ./stub_servers
+      dockerfile: Dockerfile.stub
+    command: python sre_server.py
+    ports: ["9005:9005"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9005)); s.close()\""]
+      interval: 5s
+      retries: 10
+
+  register-architect:
+    image: mcpjungle/mcpjungle:latest
+    command: ["register", "--name", "architect_stub", "--url", "http://architect-stub:9004/mcp", "--registry", "http://mcpjungle:8080", "--force"]
+    depends_on:
+      mcpjungle:
+        condition: service_healthy
+      architect-stub:
+        condition: service_healthy
+    restart: "no"
+
+  register-sre:
+    image: mcpjungle/mcpjungle:latest
+    command: ["register", "--name", "sre_stub", "--url", "http://sre-stub:9005/mcp", "--registry", "http://mcpjungle:8080", "--force"]
+    depends_on:
+      mcpjungle:
+        condition: service_healthy
+      sre-stub:
+        condition: service_healthy
+    restart: "no"
+
+  governance:
+    build:
+      context: ./services/governance
+    ports: ["8090:8090"]
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-prod}
+      MCPJUNGLE_INTERNAL_URL: http://mcpjungle:8080
+      OPA_URL: http://opa:8181
+      CODE_REVIEWER_SECRET: ${CODE_REVIEWER_SECRET:-change-me-in-dev}
+      ARCHITECT_SECRET: ${ARCHITECT_SECRET:-architect-secret}
+      SRE_SECRET: ${SRE_SECRET:-sre-secret}
+      DOLT_HOST: dolt
+      DOLT_PORT: "3306"
+      DOLT_USER: root
+      DOLT_PASSWORD: root
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      mcpjungle:
+        condition: service_healthy
+      opa:
+        condition: service_started
+      dolt:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',8090)); s.close()\""]
+      interval: 5s
+      retries: 10
+
+volumes:
+  dolt-data:
