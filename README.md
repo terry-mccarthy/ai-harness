@@ -1,0 +1,163 @@
+# AI Harness
+
+A governed code-review agent. Submit a git diff, get back structured security and quality findings with a pass/fail verdict. Every tool call routes through a governance layer: OAuth 2.1 auth, OPA policy enforcement, and a tamper-evident Dolt audit log.
+
+## What it does
+
+Point it at a diff (or let it fetch one from a repo). It runs a linter, analyses both, and returns structured JSON:
+
+```json
+{
+  "verdict": "fail",
+  "findings": [
+    {
+      "severity": "CRITICAL",
+      "file": "auth.py",
+      "line": 14,
+      "message": "Password is being printed to stdout — credential leak risk.",
+      "suggestion": "Remove the print statement."
+    }
+  ],
+  "summary": "The diff introduces a critical security vulnerability: passwords are logged in plaintext."
+}
+```
+
+The reviewer checks for security vulnerabilities (credential leaks, injection flaws, path traversal), code quality issues (error handling gaps, dead code, resource leaks), and architectural concerns (hardcoded values, tight coupling, shared mutable state). Findings are classified as `CRITICAL`, `WARNING`, or `INFO`; verdict is `fail` if any `CRITICAL` finding exists.
+
+The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any MCP client can call it directly.
+
+## Stack
+
+- **Governance** — FastAPI service (`:8090`) that issues JWTs, enforces OPA policy, and writes tamper-evident audit rows to Dolt before forwarding to MCPJungle
+- **MCPJungle** — MCP proxy that routes tool calls and exposes itself as an MCP server
+- **OPA** — policy engine; `policies/harness.rego` maps agent roles to allowed tools; enforced on every request
+- **Dolt** — git-versioned MySQL-compatible database; audit rows are auto-committed so the log is append-only and diffable
+- **PostgreSQL** — MCPJungle state store
+- **Ollama** (`qwen2.5-coder:7b`) — local LLM, no API key needed
+- **git-diff-stub** — runs real `git diff` on a baked-in sample repo
+- **linter-stub** — pattern-matching linter (swappable for a real one)
+- **architect-stub** — stub MCP server for architect-role tools (`codebase_search`, `adr_read`, `adr_write`, `diagram_gen`)
+- **sre-stub** — stub MCP server for SRE-role tools (`observability_query`, `runbook_read`, `log_search`, `shell_exec`)
+- **review-server** — FastMCP service wrapping the full code-reviewer agent; callable from Claude Code
+
+## Quick start
+
+**Prerequisites:** Docker, Ollama running with `qwen2.5-coder` pulled.
+
+```bash
+# 1. Configure
+cp .env.example .env
+# edit .env — set CODE_REVIEWER_SECRET, JWT_SECRET, ARCHITECT_SECRET, SRE_SECRET
+
+# 2. Build and start the stack
+docker compose build git-diff-stub linter-stub architect-stub sre-stub review-server governance dolt
+docker compose up -d
+sleep 30  # wait for Dolt to init and MCP init containers to register servers
+
+# 3. Install Python deps
+python3 -m venv .venv
+.venv/bin/pip install -e packages/harness-gateway -e packages/harness-agents -e packages/harness-tests
+
+# 4. Run all tests
+make test-integration
+```
+
+## Configuration
+
+All options are in `.env` (copy from `.env.example`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `OLLAMA_MODEL` | `qwen2.5-coder` | Model used by the reviewer agent |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint |
+| `MCPJUNGLE_URL` | `http://localhost:8090` | Governance service URL (agent tool calls route here) |
+| `GOVERNANCE_URL` | `http://localhost:8090` | Governance service URL (tests use this directly) |
+| `JWT_SECRET` | `dev-jwt-secret-change-in-prod` | HS256 signing key for JWTs — change in production |
+| `CODE_REVIEWER_SECRET` | — | Client secret for the `code-reviewer` OAuth client |
+| `ARCHITECT_SECRET` | `architect-secret` | Client secret for the `architect` OAuth client |
+| `SRE_SECRET` | `sre-secret` | Client secret for the `sre` OAuth client |
+| `DOLT_HOST` | `localhost` | Dolt MySQL endpoint host |
+| `DOLT_PORT` | `3306` | Dolt MySQL endpoint port |
+| `LOG_LEVEL` | `INFO` | Log verbosity |
+
+To enable debug logging without restarting the whole stack:
+
+```bash
+LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server governance
+```
+
+## Tests (26 total)
+
+### Phase 0 — Core reviewer (9 tests)
+
+| Test | What it proves |
+|---|---|
+| `test_reviewer_produces_structured_output` | Diff in → valid JSON out, catches obvious bugs |
+| `test_tool_calls_go_through_gateway` | Tool calls are visible in the gateway audit log |
+| `test_reviewer_denied_cross_role_tool` | Unlisted tools are blocked before the network call |
+| `test_review_diff_tool_is_reachable` | `review_diff` MCP tool is registered and callable |
+| `test_review_diff_returns_valid_schema` | MCP tool output satisfies the output schema |
+| `test_review_diff_catches_credential_leak` | End-to-end: MCP call → agent → model → CRITICAL finding |
+| `test_git_diff_returns_real_diff_format` | `git_diff` runs real git and returns proper diff output |
+| `test_git_diff_contains_commit_changes` | Diff output contains the actual changed lines |
+| `test_git_diff_respects_ref` | Tool accepts base/head refs |
+
+### Phase 1 — Governance (17 tests)
+
+| Test | What it proves |
+|---|---|
+| `test_architect_client_auth` | `/oauth/token` issues tokens for architect client |
+| `test_reviewer_client_auth` | `/oauth/token` issues tokens for code-reviewer client |
+| `test_sre_client_auth` | `/oauth/token` issues tokens for sre client |
+| `test_architect_allowed_tool` | Architect token can call `codebase_search` |
+| `test_architect_denied_tool` | Architect token cannot call `shell_exec` (403) |
+| `test_reviewer_allowed_tool` | code-reviewer token can call `git_diff` |
+| `test_reviewer_denied_tool` | code-reviewer token cannot call `adr_write` (403) |
+| `test_sre_allowed_tool` | sre token can call `runbook_read` |
+| `test_unknown_token_rejected` | Invalid bearer token returns 401 |
+| `test_audit_row_written` | Tool call writes a row to `audit_log` in Dolt |
+| `test_audit_policy_rule_recorded` | Audit row has `policy_decision` and `policy_rule` populated |
+| `test_audit_dolt_commit_created` | Audit INSERT triggers a Dolt commit (visible in `dolt_log`) |
+| `test_audit_dolt_history_queryable` | `dolt_diff_audit_log` is queryable and non-empty |
+| `test_audit_no_delete` | `harness` DB user cannot DELETE from `audit_log` |
+| `test_opa_allow_architect_tool` | OPA returns `true` for architect + codebase_search |
+| `test_opa_deny_cross_role` | OPA returns `false` for architect + shell_exec |
+| `test_token_expiry` | Expired JWT returns 401 |
+
+## Connect Claude Code
+
+MCPJungle exposes itself as an MCP server. Add to Claude Code settings:
+
+```json
+{
+  "mcpServers": {
+    "ai-harness": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
+
+Claude Code will see all registered tools including `review_server__review_diff`.
+
+> Note: Claude Code connects directly to MCPJungle at `:8080/mcp`. The governance layer at `:8090` is for agent-to-agent tool calls — it handles auth, policy, and audit before forwarding to MCPJungle.
+
+## Project layout
+
+```
+├── packages/
+│   ├── harness-gateway/   # GatewayClient — fetches OAuth tokens, calls governance
+│   ├── harness-agents/    # CodeReviewerAgent, AgentState, output schema
+│   └── harness-tests/     # Integration tests (Phase 0 + Phase 1)
+├── services/
+│   ├── governance/        # OAuth + OPA enforcement + Dolt audit (port 8090)
+│   ├── dolt/              # Dolt init script and Dockerfile
+│   └── review_server/     # review_diff MCP tool (wraps the agent)
+├── stub_servers/          # git_diff, run_linter, architect, sre MCP servers
+├── policies/              # OPA policy (harness.rego)
+├── docker-compose.yml
+└── .env.example
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full request flow and design decisions, and [CLAUDE.md](CLAUDE.md) for operational notes and gotchas.
