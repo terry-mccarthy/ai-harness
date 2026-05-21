@@ -1,0 +1,108 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: harness
+      POSTGRES_USER: harness
+      POSTGRES_PASSWORD: harness
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harness"]
+      interval: 5s
+      retries: 5
+
+  opa:
+    image: openpolicyagent/opa:latest
+    command: run --server --addr :8181 /policies
+    volumes:
+      - ./policies:/policies:ro
+    ports: ["8181:8181"]
+
+  mcpjungle:
+    image: mcpjungle/mcpjungle:latest
+    ports: ["8080:8080"]
+    environment:
+      OPA_URL: http://opa:8181
+      DATABASE_URL: postgres://harness:harness@postgres:5432/harness
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/mcpjungle", "list", "servers", "--registry", "http://localhost:8080"]
+      interval: 5s
+      retries: 10
+
+  git-diff-stub:
+    build:
+      context: ./stub_servers
+      dockerfile: Dockerfile.stub
+    command: python git_diff_server.py
+    ports: ["9001:9001"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9001)); s.close()\""]
+      interval: 5s
+      retries: 10
+
+  linter-stub:
+    build:
+      context: ./stub_servers
+      dockerfile: Dockerfile.stub
+    command: python linter_server.py
+    ports: ["9002:9002"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9002)); s.close()\""]
+      interval: 5s
+      retries: 10
+
+  register-git-diff:
+    image: mcpjungle/mcpjungle:latest
+    command: ["register", "--name", "git_diff_stub", "--url", "http://git-diff-stub:9001/mcp", "--registry", "http://mcpjungle:8080", "--force"]
+    depends_on:
+      mcpjungle:
+        condition: service_healthy
+      git-diff-stub:
+        condition: service_healthy
+    restart: "no"
+
+  register-linter:
+    image: mcpjungle/mcpjungle:latest
+    command: ["register", "--name", "linter_stub", "--url", "http://linter-stub:9002/mcp", "--registry", "http://mcpjungle:8080", "--force"]
+    depends_on:
+      mcpjungle:
+        condition: service_healthy
+      linter-stub:
+        condition: service_healthy
+    restart: "no"
+
+  review-server:
+    build:
+      context: .
+      dockerfile: services/review_server/Dockerfile
+    ports: ["9003:9003"]
+    environment:
+      MCPJUNGLE_URL: http://mcpjungle:8080
+      OLLAMA_HOST: http://host.docker.internal:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:7b}
+      CODE_REVIEWER_SECRET: ${CODE_REVIEWER_SECRET:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      mcpjungle:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9003)); s.close()\""]
+      interval: 5s
+      retries: 10
+
+  register-review-server:
+    image: mcpjungle/mcpjungle:latest
+    command: ["register", "--name", "review_server", "--url", "http://review-server:9003/mcp", "--registry", "http://mcpjungle:8080", "--force"]
+    depends_on:
+      mcpjungle:
+        condition: service_healthy
+      review-server:
+        condition: service_healthy
+    restart: "no"

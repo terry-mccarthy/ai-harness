@@ -1,0 +1,13 @@
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "integration: requires Docker stack",
+    "e2e: full graph, slow",
+    "live: requires real LLM (not cassette-recorded)",
+]
+
+[tool.ruff]
+line-length = 100

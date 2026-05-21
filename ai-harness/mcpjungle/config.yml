@@ -1,0 +1,12 @@
+clients:
+  - id: code-reviewer
+    secret: "${CODE_REVIEWER_SECRET}"
+    role: code_reviewer
+
+tool_groups:
+  - name: code_reviewer
+    tools:
+      - name: git_diff
+        server: http://git-diff-stub:9001
+      - name: run_linter
+        server: http://linter-stub:9002

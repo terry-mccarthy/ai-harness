@@ -1,0 +1,16 @@
+[project]
+name = "harness-agents"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "ollama>=0.3",
+    "jsonschema>=4.22",
+    "harness-gateway",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

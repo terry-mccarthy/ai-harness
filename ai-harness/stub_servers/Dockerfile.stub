@@ -1,0 +1,19 @@
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+RUN pip install "mcp[cli]" uvicorn
+
+# Bake in a sample repo with one commit that adds a password-logging line
+RUN git config --global user.email "stub@harness.local" && \
+    git config --global user.name "Harness Stub" && \
+    mkdir -p /app/sample-repo && \
+    cd /app/sample-repo && \
+    git init && \
+    echo 'def login(u, p): pass' > auth.py && \
+    git add . && git commit -m "initial" && \
+    echo 'def login(username, password):' > auth.py && \
+    echo '    print(f"Login: {username} {password}")' >> auth.py && \
+    echo '    return True' >> auth.py && \
+    git add . && git commit -m "add login with debug logging"
+
+COPY . .
