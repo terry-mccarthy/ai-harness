@@ -6,6 +6,7 @@ dependencies = [
     "ollama>=0.3",
     "jsonschema>=4.22",
     "harness-gateway",
+    "google-genai",
 ]
 
 [tool.setuptools.packages.find]

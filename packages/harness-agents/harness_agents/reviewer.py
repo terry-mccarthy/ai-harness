@@ -4,9 +4,9 @@ import os
 import re
 import jsonschema
 from pathlib import Path
-from ollama import AsyncClient
 from harness_gateway.client import GatewayClient, ToolAccessDenied
 from harness_agents.types import AgentState, REVIEWER_OUTPUT_SCHEMA
+from harness_agents.llm import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -33,23 +33,9 @@ class CodeReviewerAgent:
     allowed_tools = ["git_diff", "run_linter"]
     memory_namespace = "code_reviewer"
 
-    def __init__(
-        self,
-        gateway: GatewayClient,
-        llm_client: AsyncClient,
-        model: str = "qwen2.5-coder",
-        num_ctx: int = 8192,
-        temperature: float = 0.1,
-        num_predict: int = 1024,
-    ):
+    def __init__(self, gateway: GatewayClient, llm_provider: LLMProvider):
         self.gateway = gateway
-        self.llm = llm_client
-        self.model = model
-        self._options = {
-            "temperature": temperature,
-            "num_ctx": num_ctx,
-            "num_predict": num_predict,
-        }
+        self.llm = llm_provider
 
     async def run(self, state: AgentState) -> AgentState:
         diff_text = state["diff"]
@@ -77,16 +63,11 @@ Return your structured review as raw JSON."""
             {"role": "user", "content": user_message},
         ]
         logger.debug("llm user_message:\n%s", user_message)
-        logger.debug("llm options: %s", self._options)
 
         raw_output = None
         for attempt in range(MAX_ITERATIONS):
-            response = await self.llm.chat(
-                model=self.model,
-                messages=messages,
-                options=self._options,
-            )
-            raw = _clean_raw(response.message.content)
+            response = await self.llm.chat(messages=messages)
+            raw = _clean_raw(response.content)
             logger.debug("attempt %d cleaned response:\n%s", attempt + 1, raw)
 
             try:

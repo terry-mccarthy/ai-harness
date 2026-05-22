@@ -1,7 +1,7 @@
 import pytest
 import os
 import httpx
-from ollama import AsyncClient
+
 from harness_gateway.client import GatewayClient
 from harness_agents.reviewer import CodeReviewerAgent
 
@@ -18,12 +18,16 @@ def gateway_client():
     )
 
 
+from harness_agents.llm import OllamaProvider
+
 @pytest.fixture
 def reviewer_agent(gateway_client):
     return CodeReviewerAgent(
         gateway=gateway_client,
-        llm_client=AsyncClient(host=os.environ.get("OLLAMA_HOST", "http://localhost:11434")),
-        model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder"),
+        llm_provider=OllamaProvider(
+            host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+            model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder"),
+        ),
     )
 
 

@@ -168,6 +168,7 @@ def _write_audit(
     rule,
     latency_ms,
 ):
+    conn = None
     try:
         conn = get_dolt_conn()
         with conn.cursor() as cur:
@@ -188,11 +189,12 @@ def _write_audit(
                     latency_ms,
                 ),
             )
-            # Create a Dolt git commit for this audit row
             cur.execute(
                 "CALL DOLT_COMMIT('-Am', %s)",
                 (f"audit: {tool_name} by {agent_id} [{decision}]",),
             )
-        conn.close()
     except Exception as e:
         logger.error("Dolt audit write failed: %s", e)
+    finally:
+        if conn:
+            conn.close()

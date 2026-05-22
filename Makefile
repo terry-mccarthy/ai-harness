@@ -32,11 +32,11 @@ review:
 	@set -a && source .env && set +a && \
 	.venv/bin/python -c "\
 import asyncio, os, json; \
-from ollama import AsyncClient; \
+from harness_agents.llm import OllamaProvider; \
 from harness_gateway.client import GatewayClient; \
 from harness_agents.reviewer import CodeReviewerAgent; \
 from harness_agents.types import AgentState; \
 diff = open('sample.diff').read() if os.path.exists('sample.diff') else 'diff --git a/x.py b/x.py\n'; \
-agent = CodeReviewerAgent(gateway=GatewayClient(os.environ['MCPJUNGLE_URL'], 'code-reviewer', os.environ['CODE_REVIEWER_SECRET']), llm_client=AsyncClient(host=os.environ.get('OLLAMA_HOST', 'http://localhost:11434')), model=os.environ.get('OLLAMA_MODEL', 'qwen2.5-coder')); \
+agent = CodeReviewerAgent(gateway=GatewayClient(os.environ['MCPJUNGLE_URL'], 'code-reviewer', os.environ['CODE_REVIEWER_SECRET']), llm_provider=OllamaProvider(host=os.environ.get('OLLAMA_HOST', 'http://localhost:11434'), model=os.environ.get('OLLAMA_MODEL', 'qwen2.5-coder'))); \
 result = asyncio.run(agent.run(AgentState(task='Review this', diff=diff, thread_id='manual-run', agent_output=None, requires_human_approval=False, error=None))); \
 print(json.dumps(result['agent_output'], indent=2))"

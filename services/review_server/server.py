@@ -5,7 +5,7 @@ from mcp.server.fastmcp import FastMCP
 
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 from mcp.server.transport_security import TransportSecuritySettings
-from ollama import AsyncClient
+
 from harness_gateway.client import GatewayClient
 from harness_agents.reviewer import CodeReviewerAgent
 from harness_agents.types import AgentState
@@ -18,9 +18,39 @@ mcp = FastMCP(
 )
 
 
+def _build_llm_provider(provider_name: str):
+    """Factory: instantiate the correct LLMProvider strategy from a provider name.
+
+    Args:
+        provider_name: ``"ollama"`` or ``"gemini"``.  Any other value falls
+            back to Ollama.
+
+    Returns:
+        A concrete :class:`~harness_agents.llm.LLMProvider` instance configured
+        from the relevant environment variables.
+    """
+    from harness_agents.llm import OllamaProvider, GeminiProvider
+
+    if provider_name == "gemini":
+        return GeminiProvider(
+            model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+            api_key=os.environ.get("GEMINI_API_KEY"),
+            temperature=float(os.environ.get("LLM_TEMPERATURE", "0.1")),
+            max_output_tokens=int(os.environ.get("LLM_MAX_TOKENS", "1024")),
+        )
+    return OllamaProvider(
+        host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+        model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"),
+        num_ctx=int(os.environ.get("OLLAMA_NUM_CTX", "8192")),
+        temperature=float(os.environ.get("LLM_TEMPERATURE", os.environ.get("OLLAMA_TEMPERATURE", "0.1"))),
+        num_predict=int(os.environ.get("LLM_MAX_TOKENS", os.environ.get("OLLAMA_NUM_PREDICT", "1024"))),
+    )
+
+
 @mcp.tool()
 async def review_diff(
     diff_text: str,
+    provider: str | None = None,
     task: str = (
         "Review this diff for: "
         "(1) security vulnerabilities — credential leaks, injection flaws, path traversal, missing auth enforcement, insecure defaults; "
@@ -30,22 +60,29 @@ async def review_diff(
         "Verdict is 'fail' if any CRITICAL finding exists."
     ),
 ) -> dict:
-    """Run the governed code-reviewer agent and return structured findings."""
+    """Run the governed code-reviewer agent and return structured findings.
+
+    Args:
+        diff_text: The unified diff string to review.
+        provider: Optional LLM provider override for this request.  Accepted
+            values are ``"ollama"`` and ``"gemini"``.  When omitted the server
+            falls back to the ``LLM_PROVIDER`` environment variable (default:
+            ``"ollama"``).
+        task: High-level review instruction passed to the agent.
+    """
     gateway = GatewayClient(
         gateway_url=os.environ["MCPJUNGLE_URL"],
         client_id="code-reviewer",
         client_secret=os.environ.get("CODE_REVIEWER_SECRET", ""),
     )
-    llm = AsyncClient(host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
-    model = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
+
+    # Resolve provider: per-call arg > env var > default
+    resolved_provider = (provider or os.environ.get("LLM_PROVIDER", "ollama")).lower()
+    llm_provider = _build_llm_provider(resolved_provider)
 
     agent = CodeReviewerAgent(
         gateway=gateway,
-        llm_client=llm,
-        model=model,
-        num_ctx=int(os.environ.get("OLLAMA_NUM_CTX", "8192")),
-        temperature=float(os.environ.get("OLLAMA_TEMPERATURE", "0.1")),
-        num_predict=int(os.environ.get("OLLAMA_NUM_PREDICT", "1024")),
+        llm_provider=llm_provider,
     )
     state = AgentState(
         task=task,
