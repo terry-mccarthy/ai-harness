@@ -4,7 +4,6 @@ import json
 import hashlib
 import logging
 from fastapi import FastAPI, HTTPException, Header, Request
-from fastapi.responses import JSONResponse
 import httpx
 import jwt
 import pymysql
@@ -23,6 +22,7 @@ DOLT_USER = os.environ.get("DOLT_USER", "harness")
 DOLT_PASSWORD = os.environ.get("DOLT_PASSWORD", "harness")
 DOLT_DB = os.environ.get("DOLT_DB", "harness")
 TOKEN_TTL = int(os.environ.get("TOKEN_TTL", "900"))  # 15 min
+UPSTREAM_TIMEOUT = float(os.environ.get("UPSTREAM_TIMEOUT", "180"))
 
 CLIENTS = {
     "architect": {
@@ -134,7 +134,7 @@ async def invoke(
         upstream = await client.post(
             f"{MCPJUNGLE_URL}/api/v0/tools/invoke",
             json=body,
-            timeout=60.0,
+            timeout=UPSTREAM_TIMEOUT,
         )
     latency = int(time.time() * 1000) - start
 

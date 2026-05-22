@@ -1,3 +1,4 @@
+import json
 import httpx
 import logging
 import time
@@ -30,6 +31,7 @@ class GatewayClient:
     gateway_url: str
     client_id: str
     client_secret: str
+    timeout: float = 180.0
     last_calls: list = field(default_factory=list, repr=False)
     _token: str | None = field(default=None, init=False, repr=False)
     _token_exp: float = field(default=0.0, init=False, repr=False)
@@ -87,7 +89,7 @@ class GatewayClient:
                 f"{self.gateway_url}/api/v0/tools/invoke",
                 json=body,
                 headers=headers,
-                timeout=60.0,
+                timeout=self.timeout,
             )
 
         self.last_calls.append({"tool": tool_name, "status": resp.status_code})
@@ -102,11 +104,10 @@ class GatewayClient:
         data = resp.json()
         logger.debug("tool_call raw response: %s", data)
 
-        import json as _json
         items = data.get("content") or data.get("result") or []
         if items and isinstance(items[0], dict) and items[0].get("type") == "text":
             try:
-                return _json.loads(items[0]["text"])
-            except _json.JSONDecodeError:
+                return json.loads(items[0]["text"])
+            except json.JSONDecodeError:
                 return items[0]["text"]
         return data

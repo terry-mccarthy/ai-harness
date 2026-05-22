@@ -12,7 +12,7 @@ if [ ! -d .dolt ]; then
     dolt init
 fi
 
-# Create audit_log table and initial commit using local SQL mode (no server needed)
+# Create audit_log table using local SQL mode (no server needed)
 dolt sql << 'SQL'
 CREATE TABLE IF NOT EXISTS audit_log (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -26,9 +26,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
     timestamp_ms    BIGINT       NOT NULL,
     latency_ms      INT
 );
-CALL DOLT_ADD('.');
-CALL DOLT_COMMIT('-m', 'init: audit_log schema');
 SQL
+
+# Stage and commit schema — idempotent: skip if nothing changed
+dolt add -A && dolt commit -m "init: audit_log schema" || echo "(schema already committed, skipping)"
 
 # Start SQL server in background — newer Dolt: root has no password by default
 dolt sql-server --host 0.0.0.0 --port 3306 &

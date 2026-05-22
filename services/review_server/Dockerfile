@@ -9,6 +9,7 @@ COPY packages/harness-gateway /app/packages/harness-gateway
 COPY packages/harness-agents /app/packages/harness-agents
 RUN pip install -e /app/packages/harness-gateway -e /app/packages/harness-agents
 
+COPY prompts /app/prompts
 COPY services/review_server/server.py /app/server.py
 
 CMD ["python", "server.py"]

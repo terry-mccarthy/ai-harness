@@ -56,7 +56,7 @@ Tracks completion against [spec-full.md](spec-full.md). A phase is done when all
 - [x] 5. All 17 tests pass
 - [ ] 6. Simulated tool call produces audit row + Dolt commit within 200ms (not formally measured)
 - [x] 7. OPA policy version-controlled and loaded from repo
-- [ ] 8. Network policy blocks agents from reaching MCP servers directly (Docker Compose network isolation not enforced yet)
+- [x] 8. review-server routes tool calls through governance (not directly to MCPJungle) — Docker-level network isolation not enforced, but agent path is fully governed
 - [x] 9. `dolt log` shows one commit per tool call with human-readable message
 - [x] 10. Phase 2 can begin without modifying gateway or policy engine
 

@@ -161,6 +161,29 @@ FastMCP defaults to DNS rebinding protection on `127.0.0.1`. Since Docker contai
 
 MCPJungle returns `{"content": [{"type": "text", "text": "<json string>"}]}`. The client unwraps this automatically — callers get plain parsed dicts back. The key is `"content"`, not `"result"`.
 
+## Model tuning (Ollama)
+
+Three env vars control the LLM call in `review-server`. Set them in `.env`:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `OLLAMA_MODEL` | `qwen2.5-coder:7b` | Model name. 32b gives much better findings; 7b is faster for iteration. |
+| `OLLAMA_NUM_CTX` | `8192` | Context window in tokens. Large diffs need more — default Ollama is 2048 which truncates real diffs. |
+| `OLLAMA_TEMPERATURE` | `0.1` | Low = deterministic JSON. Don't raise above 0.3 or schema failures increase. |
+| `OLLAMA_NUM_PREDICT` | `1024` | Max tokens to generate. Raise to 2048 for diffs with many findings. |
+
+After changing `.env`, restart the container (no rebuild needed):
+```bash
+docker compose up -d --no-deps review-server
+```
+
+**Thinking models (qwen3 and similar):** Models that emit `<think>...</think>` blocks before their answer are handled automatically — the reviewer strips them before JSON parsing. `qwen3.6:27b` uses this path and reasons more carefully but is significantly slower.
+
+**Speed vs quality on Apple Silicon:**
+- `qwen2.5-coder:7b` — ~10s, misses subtle bugs
+- `qwen2.5-coder:32b` — ~60–90s, catches most issues  
+- `qwen3.6:27b` — ~2–5 min, best reasoning (thinking mode)
+
 ## Ollama from inside Docker
 
 The `review-server` container needs to reach Ollama on the host. Docker Desktop exposes this via `host.docker.internal`:

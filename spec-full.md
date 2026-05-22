@@ -481,6 +481,9 @@ Implement the three specialist agent nodes as LangGraph graph definitions. Each 
 | Cassette Recording Use pytest-recording (vcrpy wrapper) to record real LLM responses on first run and replay them on subsequent CI runs. Tag tests requiring a live LLM call with @pytest.mark.live so they can be excluded from fast CI and run nightly. |
 | :---- |
 
+| Prompt Management Each agent's system prompt is a standalone file in `prompts/` (e.g. `prompts/code_reviewer.md`). The supervisor classifier and synthesise node have their own prompt files too. Prompts are loaded at agent init time via a `PROMPTS_DIR` env var so they can be reviewed and merged like code and policy changes. **Future (Phase 5+):** migrate prompts into the Dolt formula store so each audit record can reference the exact prompt version active at the time of the tool call — closing the remaining observability gap in the audit trail. |
+| :---- |
+
 ## **Agent Node Contract**
 
 Every agent node must satisfy the same interface so the supervisor can route to any of them uniformly:

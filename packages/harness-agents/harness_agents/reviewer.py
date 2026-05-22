@@ -1,6 +1,9 @@
 import json
 import logging
+import os
+import re
 import jsonschema
+from pathlib import Path
 from ollama import AsyncClient
 from harness_gateway.client import GatewayClient, ToolAccessDenied
 from harness_agents.types import AgentState, REVIEWER_OUTPUT_SCHEMA
@@ -9,30 +12,20 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 3
 
-SYSTEM_PROMPT = """You are a senior security-focused code reviewer acting as the last line of defence before code ships.
+_PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", Path(__file__).resolve().parents[3] / "prompts"))
+SYSTEM_PROMPT = (_PROMPTS_DIR / "code_reviewer.md").read_text()
 
-You will receive tool results from git_diff and run_linter. Synthesise both into a structured review.
+# Match <think>...</think> blocks emitted by qwen3 and other reasoning models
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
-Look for:
-- Security vulnerabilities: credential leaks, injection flaws (SQL, shell, path traversal), missing auth enforcement, insecure defaults, secrets in logs
-- Code quality: missing error handling, dead code, resource leaks, incorrect types, silent failures
-- Architectural concerns: hardcoded values, tight coupling, shared mutable state, missing abstractions
 
-Be skeptical. Flag anything you would block in a real code review, not just the obvious.
-
-Output format (strict JSON, no markdown fences):
-{
-  "verdict": "pass" | "fail",
-  "findings": [
-    {"severity": "CRITICAL"|"WARNING"|"INFO", "file": "...", "line": 0, "message": "...", "suggestion": "..."}
-  ],
-  "summary": "one paragraph summary"
-}
-
-Rules:
-- verdict is "fail" if ANY finding is CRITICAL.
-- verdict is "pass" only if there are zero CRITICAL findings.
-- Raw JSON only. Do not include markdown fences or any text outside the JSON object."""
+def _clean_raw(raw: str) -> str:
+    """Strip thinking blocks and markdown fences from a model response."""
+    raw = _THINK_RE.sub("", raw).strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1]
+        raw = raw[: raw.rfind("```")].strip() if "```" in raw else raw
+    return raw
 
 
 class CodeReviewerAgent:
@@ -40,10 +33,23 @@ class CodeReviewerAgent:
     allowed_tools = ["git_diff", "run_linter"]
     memory_namespace = "code_reviewer"
 
-    def __init__(self, gateway: GatewayClient, llm_client: AsyncClient, model: str = "qwen2.5-coder"):
+    def __init__(
+        self,
+        gateway: GatewayClient,
+        llm_client: AsyncClient,
+        model: str = "qwen2.5-coder",
+        num_ctx: int = 8192,
+        temperature: float = 0.1,
+        num_predict: int = 1024,
+    ):
         self.gateway = gateway
         self.llm = llm_client
         self.model = model
+        self._options = {
+            "temperature": temperature,
+            "num_ctx": num_ctx,
+            "num_predict": num_predict,
+        }
 
     async def run(self, state: AgentState) -> AgentState:
         diff_text = state["diff"]
@@ -71,17 +77,17 @@ Return your structured review as raw JSON."""
             {"role": "user", "content": user_message},
         ]
         logger.debug("llm user_message:\n%s", user_message)
+        logger.debug("llm options: %s", self._options)
 
         raw_output = None
         for attempt in range(MAX_ITERATIONS):
-            response = await self.llm.chat(model=self.model, messages=messages)
-            raw = response.message.content.strip()
-            logger.debug("attempt %d raw response:\n%s", attempt + 1, raw)
-            # Strip markdown fences if the model ignores the instruction
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[-1]
-                raw = raw[: raw.rfind("```")].strip() if "```" in raw else raw
-                logger.debug("attempt %d post-strip:\n%s", attempt + 1, raw)
+            response = await self.llm.chat(
+                model=self.model,
+                messages=messages,
+                options=self._options,
+            )
+            raw = _clean_raw(response.message.content)
+            logger.debug("attempt %d cleaned response:\n%s", attempt + 1, raw)
 
             try:
                 parsed = json.loads(raw)

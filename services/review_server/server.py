@@ -39,7 +39,14 @@ async def review_diff(
     llm = AsyncClient(host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
     model = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
 
-    agent = CodeReviewerAgent(gateway=gateway, llm_client=llm, model=model)
+    agent = CodeReviewerAgent(
+        gateway=gateway,
+        llm_client=llm,
+        model=model,
+        num_ctx=int(os.environ.get("OLLAMA_NUM_CTX", "8192")),
+        temperature=float(os.environ.get("OLLAMA_TEMPERATURE", "0.1")),
+        num_predict=int(os.environ.get("OLLAMA_NUM_PREDICT", "1024")),
+    )
     state = AgentState(
         task=task,
         diff=diff_text,
