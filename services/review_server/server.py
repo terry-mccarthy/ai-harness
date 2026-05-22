@@ -18,6 +18,22 @@ mcp = FastMCP(
 )
 
 
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.environ.get(key, default))
+    except ValueError:
+        logging.warning("Invalid value for %s, using default %s", key, default)
+        return default
+
+
+def _env_int(key: str, default: int) -> int:
+    try:
+        return int(os.environ.get(key, default))
+    except ValueError:
+        logging.warning("Invalid value for %s, using default %s", key, default)
+        return default
+
+
 def _build_llm_provider(provider_name: str):
     """Factory: instantiate the correct LLMProvider strategy from a provider name.
 
@@ -35,15 +51,15 @@ def _build_llm_provider(provider_name: str):
         return GeminiProvider(
             model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
             api_key=os.environ.get("GEMINI_API_KEY"),
-            temperature=float(os.environ.get("LLM_TEMPERATURE", "0.1")),
-            max_output_tokens=int(os.environ.get("LLM_MAX_TOKENS", "1024")),
+            temperature=_env_float("LLM_TEMPERATURE", 0.1),
+            max_output_tokens=_env_int("LLM_MAX_TOKENS", 1024),
         )
     return OllamaProvider(
         host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
         model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"),
-        num_ctx=int(os.environ.get("OLLAMA_NUM_CTX", "8192")),
-        temperature=float(os.environ.get("LLM_TEMPERATURE", os.environ.get("OLLAMA_TEMPERATURE", "0.1"))),
-        num_predict=int(os.environ.get("LLM_MAX_TOKENS", os.environ.get("OLLAMA_NUM_PREDICT", "1024"))),
+        num_ctx=_env_int("OLLAMA_NUM_CTX", 8192),
+        temperature=_env_float("LLM_TEMPERATURE", _env_float("OLLAMA_TEMPERATURE", 0.1)),
+        num_predict=_env_int("LLM_MAX_TOKENS", _env_int("OLLAMA_NUM_PREDICT", 1024)),
     )
 
 
