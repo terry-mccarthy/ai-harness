@@ -38,13 +38,26 @@ make test-integration
 
 ## Python environment
 
-Python 3.14 is in use. **Use the venv**, not system pip:
+Python 3.14 is in use. The project uses **uv** for dependency management with a workspace layout.
 
 ```bash
-.venv/bin/pip install -e packages/harness-gateway -e packages/harness-agents -e packages/harness-tests
+# First time or after adding/changing dependencies
+uv sync --all-packages   # creates .venv and installs all workspace packages
+
+# Regenerate uv.lock after editing any pyproject.toml
+uv lock
 ```
 
-Root `pyproject.toml` uses `[tool.uv.workspace]` for IDE tooling only — the venv is managed manually with pip.
+Workspace members in `packages/` reference each other via `[tool.uv.sources]` with `{ workspace = true }` — do not use PyPI paths for these.
+
+All Docker services (`services/governance`, `services/review_server`, `stub_servers`) are also workspace members. Their `requirements.txt` files are generated from `uv.lock` and committed — Dockerfiles install from them:
+
+```bash
+# After editing any service's pyproject.toml or after uv lock
+make requirements
+```
+
+Never hand-edit a service `requirements.txt` — it is always regenerated from the lockfile.
 
 ## Request flow (Phase 1)
 
@@ -213,6 +226,23 @@ RUN pip install -e /app/packages/harness-gateway -e /app/packages/harness-agents
 ```
 
 Build context must be `.` (repo root), not the service subdirectory, so the `packages/` COPY works.
+
+## Memory layer (Phase 2)
+
+`packages/harness-memory` provides three layers:
+
+- **Checkpointer** (`AsyncPostgresSaver`): use `AsyncPostgresSaver.from_conn_string(PG_DSN)` — not a raw `psycopg.AsyncConnection`. The raw connection path triggers `CREATE INDEX CONCURRENTLY inside transaction block` errors.
+- **Memory store** (`PostgresMemoryStore`): auto-detects embedding dimension at `setup()` by calling Ollama. If the model changes between runs, the table is dropped and recreated. Dimension depends on model: `qwen2.5-coder:32b` → 5120, `qwen2.5:7b` → 3584.
+- **Formula store** (`DoltFormulaStore`): uses synchronous pymysql (consistent with governance). Commit hash retrieved via `SELECT commit_hash FROM dolt_log LIMIT 1` — `@@dolt_repo_head` does not exist in Dolt v1.x.
+
+**Embedding cosine similarity baseline**: code-oriented LLMs produce high baseline cosine similarity (~0.86–0.94) for all short natural-language text. The consolidation cluster threshold is 0.95 so only near-duplicate items merge.
+
+**Formula test isolation**: test formulas use `agent_role="test_sre"` to avoid interference with seed formulas (`agent_role="sre"`).
+
+**Stack startup**: rebuild Dolt when `services/dolt/init.sh` changes:
+```bash
+docker compose build dolt && docker compose up -d --no-deps dolt
+```
 
 ## Connecting Claude Code to the harness
 
