@@ -310,23 +310,22 @@ async def test_semantic_memory_written_by_consolidation(memory_store, consolidat
     assert ep1["consolidated"] is True
 
 
-@pytest.mark.skip(reason="Requires FakeEmbedder to reliably produce 0.95+ similarity; real embeddings are unpredictable.")
-async def test_consolidation_clusters_similar_episodes(memory_store, consolidation_worker):
+async def test_consolidation_clusters_similar_episodes(memory_store_with_fake_embedder, consolidation_worker_with_fake_embedder):
     """Two episodic items with high cosine similarity are merged into one semantic item."""
-    await memory_store.write(
+    await memory_store_with_fake_embedder.write(
         "sre", "sim1",
         {"text": "Database connection pool exhausted causing slow queries"},
         memory_type="episodic",
     )
-    await memory_store.write(
+    await memory_store_with_fake_embedder.write(
         "sre", "sim2",
         {"text": "DB connections running out, queries are timing out"},
         memory_type="episodic",
     )
 
-    result = await consolidation_worker.run_pass("sre")
+    result = await consolidation_worker_with_fake_embedder.run_pass("sre")
 
-    semantic_items = await memory_store._list_by_type("sre", "semantic")
+    semantic_items = await memory_store_with_fake_embedder._list_by_type("sre", "semantic")
     # Two similar items should produce exactly one semantic item
     assert len(semantic_items) == 1
     assert result.semantic_items_created == 1
