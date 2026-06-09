@@ -1,4 +1,4 @@
-# AI Harness — Architecture
+nothing # AI Harness — Architecture
 
 > This file is the authoritative architecture specification for the ai-harness project.
 > It is consumed by both human developers and AI coding agents (Claude Code, Codex, etc.).
@@ -443,7 +443,7 @@ suggestions — violating them breaks the system's core guarantees.
 ## Test Coverage (69 Tests)
 
 | Phase | File                        | Tests | What they cover                                                          |
-|-------|-------|----------|
+|-------|-----------------------------|-------|--------------------------------------------------------------------------|
 | 0     | `test_thin_slice.py`        | 9     | Reviewer agent contract, gateway audit log, tool access denial, MCP reachability |
 | 1     | `test_phase1_governance.py` | 17    | Auth, OPA policy enforcement, Dolt audit, token expiry                   |
 | 2     | `test_phase2_memory.py`     | 27    | Checkpointer, memory store (write/read/search/TTL/Redis), consolidation, formula store |
@@ -466,3 +466,9 @@ suggestions — violating them breaks the system's core guarantees.
 | 0008 | Redis as read-through cache on `PostgresMemoryStore.read()` — write path goes to PostgreSQL only; Redis populated on first read miss, invalidated on write | Accepted |
 | 0009 | Dolt as formula store — every `propose()` is a git commit; formula history is diffable with `dolt log`/`dolt diff`, consistent with audit log approach | Accepted |
 | 0010 | TF-IDF keyword matching for `lookup()` instead of vector similarity — avoids a second embedding index on formulas; reliable for the current test suite and formula descriptions | Accepted |
+| 0011 | LangGraph StateGraph + conditional routing for multi-agent orchestration — native support for pause/resume, checkpoints, and conditional edges | Accepted |
+| 0012 | Human approval tokens as short-lived JWTs scoped to (thread_id, tool_name) — enables fine-grained gating of shell_exec without per-tool governance refactors | Accepted |
+| 0013 | AsyncPostgresSaver checkpointer with async pool — enables graph pause/resume across human approval interrupts; state survives service restart | Accepted |
+| 0014 | FakeEmbedder for unit tests — topic-based deterministic vectors replace real Ollama embeddings in clustering tests, eliminating flakiness from baseline similarity variance | Accepted |
+| 0015 | MockLLMProvider + SequentialMockLLMProvider for agent testing — deterministic responses replace real model calls; SequentialMockLLMProvider handles multi-turn flows (approve-required then approve-granted) | Accepted |
+| 0016 | OTel spans emitted from all supervisor nodes — observability without coupling to logging infrastructure; enables distributed tracing of task classification → formula → agent execution | Accepted |
