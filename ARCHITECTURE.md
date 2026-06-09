@@ -145,7 +145,8 @@ packages/
   harness-gateway/   — GatewayClient: JWT auth + HTTP calls to governance
   harness-agents/    — CodeReviewerAgent + AgentState TypedDict + output schema
   harness-memory/    — PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker
-  harness-tests/     — pytest integration tests (53 tests across 5 files)
+  harness-supervisor/ — LangGraph supervisor orchestration, graph nodes, approval tokens
+  harness-tests/     — pytest integration tests (69 tests across 4 test files)
 
 services/
   governance/        — OAuth 2.1 token issuance + OPA enforcement + Dolt audit
@@ -439,15 +440,15 @@ suggestions — violating them breaks the system's core guarantees.
 
 ---
 
-## Test Coverage (53 Tests)
+## Test Coverage (69 Tests)
 
-| File                        | Tests | What they cover                                                          |
-|-----------------------------|-------|--------------------------------------------------------------------------|
-| `test_thin_slice.py`        | 3     | Core agent contract, gateway audit log, tool access denial               |
-| `test_review_mcp.py`        | 3     | `review_diff` MCP tool reachable, schema valid, catches credential leak  |
-| `test_real_git_diff.py`     | 3     | Real git diff format, contains commit changes, respects ref params       |
-| `test_phase1_governance.py` | 17    | Auth, OPA policy enforcement, Dolt audit, token expiry                   |
-| `test_phase2_memory.py`     | 27    | Checkpointer, memory store (write/read/search/TTL/Redis), consolidation, formula store |
+| Phase | File                        | Tests | What they cover                                                          |
+|-------|-------|----------|
+| 0     | `test_thin_slice.py`        | 9     | Reviewer agent contract, gateway audit log, tool access denial, MCP reachability |
+| 1     | `test_phase1_governance.py` | 17    | Auth, OPA policy enforcement, Dolt audit, token expiry                   |
+| 2     | `test_phase2_memory.py`     | 27    | Checkpointer, memory store (write/read/search/TTL/Redis), consolidation, formula store |
+| 3     | `test_phase3_agents.py`     | 4     | Agent protocol compliance, tool calls via gateway, shell_exec gating    |
+| 4     | `test_phase4_supervisor.py` | 12    | LangGraph orchestration (classify/route/formula/human_gate/checkpoint), E2E task flows |
 
 ---
 
