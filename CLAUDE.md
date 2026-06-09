@@ -244,6 +244,26 @@ Build context must be `.` (repo root), not the service subdirectory, so the `pac
 docker compose build dolt && docker compose up -d --no-deps dolt
 ```
 
+## Agent orchestration (Phases 3–4)
+
+### OllamaProvider timeout
+
+`OllamaProvider` now enforces a **120-second timeout** on embeddings and LLM calls. If Ollama is memory-starved (e.g., 32b model loaded while running large test suite), requests will timeout after 120s rather than hanging forever. The timeout prevents indefinite waits but will fail fast on slow systems.
+
+### Embedding dimension caching
+
+`PostgresMemoryStore` caches the detected embedding dimension as a class variable (`_embed_dim_cache: dict[str, int]`) keyed by model name. The first `setup()` call to detect dimension still calls Ollama (unavoidable), but subsequent stores reuse the cached value instead of calling Ollama again. This eliminates ~19 redundant embed calls per 27-test Phase 2 run (from ~8 min down to ~9 sec).
+
+### FakeEmbedder for deterministic clustering tests
+
+Phase 2 clustering tests use `FakeEmbedder` (not real Ollama embeddings) for determinism. The embedder classifies text by topic (database-connection, deployment, etc.) and generates a deterministic unit vector per topic. Same topic → same vector → guaranteed 1.0 cosine similarity → clustering works reliably. Real embeddings are unpredictable (0.86–0.94 baseline) and won't reliably hit the 0.95 threshold.
+
+**Fixture**: `memory_store_with_fake_embedder` patches `PostgresMemoryStore._embed` to use `FakeEmbedder.embed()`. Tests that need real embeddings can use the regular `memory_store` fixture.
+
+### Human approval token scoping
+
+The `human_approval_token` is a short-lived JWT (10-min TTL) scoped to a specific `thread_id` and `tool_name` (e.g., `shell_exec`). The token is passed as the `X-Human-Approval-Token` header to governance, which validates the signature and scope before allowing the tool call. A token issued for thread A cannot be reused for thread B, and a token for `shell_exec` cannot be used for other tools.
+
 ## Connecting Claude Code to the harness
 
 MCPJungle exposes itself as an MCP server at `http://localhost:8080/mcp`. Add to Claude Code settings:

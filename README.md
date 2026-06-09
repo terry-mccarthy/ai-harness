@@ -88,7 +88,7 @@ To enable debug logging without restarting the whole stack:
 LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server governance
 ```
 
-## Tests (53 total)
+## Tests (69 total: all green)
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -157,6 +157,42 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 | `test_formula_version_history` | Two `propose()` calls → two Dolt commits; both versions queryable |
 | `test_formula_deprecate` | Deprecated formula excluded from `list_active()` and `lookup()` |
 | `test_formula_interface_compliance` | `DoltFormulaStore` satisfies `FormulaStore` Protocol |
+
+### Phase 3 — Specialised Agent Nodes (4 tests)
+
+| Test | What it proves |
+|---|---|
+| `test_agent_node_contract_compliance` | All three agents satisfy `AgentNode` Protocol |
+| `test_architect_tool_calls_go_via_gateway` | ArchitectAgent calls tools through GatewayClient |
+| `test_architect_denied_shell_exec` | Architect role is blocked from `shell_exec` by OPA |
+| `test_sre_shell_exec_blocked_without_approval` | SRE `shell_exec` blocked without `X-Human-Approval-Token` header |
+
+### Phase 4 — Agent Orchestration (22 tests)
+
+| Test | What it proves |
+|---|---|
+| `test_classify_design_task` | Keyword classifier → `task_type='design'` |
+| `test_classify_review_task` | Keyword classifier → `task_type='review'` |
+| `test_classify_incident_task` | Keyword classifier → `task_type='incident'` |
+| `test_route_to_architect` | task_type='design' → architect node |
+| `test_route_to_reviewer` | task_type='review' → code_reviewer node |
+| `test_route_to_sre` | task_type='incident' → sre node |
+| `test_error_handler_on_gateway_403` | 403 from gateway triggers error_handler node |
+| `test_formula_lookup_hit` | `lookup()` matches formula by task description |
+| `test_formula_lookup_miss` | `lookup()` returns None for unmatched task |
+| `test_formula_outcome_recorded` | Formula pours recorded after synthesise node |
+| `test_agent_executes_ad_hoc_without_formula` | SRE agent runs freely without formula guidance |
+| `test_agent_executes_formula_steps` | Agent follows formula steps in order |
+| `test_propose_formula_on_novel_task` | Draft formula created for unmatched ad-hoc run |
+| `test_human_gate_pauses_graph` | Graph pauses when `requires_human_approval=True` |
+| `test_human_gate_resumes_with_valid_token` | Valid approval token resumes graph |
+| `test_human_gate_rejects_expired_token` | Expired token causes error_handler |
+| `test_human_gate_rejects_wrong_scope` | Token with wrong `thread_id` causes error_handler |
+| `test_checkpoint_survives_human_pause` | Graph state survives pause + resume from PostgreSQL |
+| `test_otel_spans_emitted` | All nodes emit OpenTelemetry spans |
+| `test_full_design_task_e2e` | Design task → final_response via architect |
+| `test_full_review_task_e2e` | Review task → final_response via code_reviewer |
+| `test_full_incident_task_no_shell_e2e` | Incident task → final_response without human gate |
 
 ## Connect Claude Code
 
