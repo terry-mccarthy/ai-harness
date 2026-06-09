@@ -71,39 +71,14 @@ class GatewayClient:
             logger.warning("token fetch failed: %s", e)
             return None
 
-    async def call_tool(self, tool_name: str, params: dict) -> dict:
-        full_name = TOOL_NAME_MAP.get(tool_name)
-        if full_name is None:
-            raise ToolAccessDenied(f"403 Forbidden: {tool_name} not in allowed tool list")
-
-        token = await self._get_token()
-        body = {"name": full_name, **params}
-        logger.debug("tool_call request: %s", body)
-
-        headers = {}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self.gateway_url}/api/v0/tools/invoke",
-                json=body,
-                headers=headers,
-                timeout=self.timeout,
-            )
-
-        self.last_calls.append({"tool": tool_name, "status": resp.status_code})
-        logger.info("tool_call tool=%s status=%d", tool_name, resp.status_code)
-
+    def _unwrap(self, resp: "httpx.Response", tool_name: str) -> dict:
         if resp.status_code == 403:
             raise ToolAccessDenied(f"403 Forbidden: {tool_name}")
         if resp.status_code == 401:
             raise ToolAccessDenied(f"401 Unauthorized: {tool_name}")
-
         resp.raise_for_status()
         data = resp.json()
         logger.debug("tool_call raw response: %s", data)
-
         items = data.get("content") or data.get("result") or []
         if items and isinstance(items[0], dict) and items[0].get("type") == "text":
             try:
@@ -111,3 +86,34 @@ class GatewayClient:
             except json.JSONDecodeError:
                 return items[0]["text"]
         return data
+
+    async def _post(self, tool_name: str, full_name: str, params: dict, headers: dict) -> "httpx.Response":
+        body = {"name": full_name, **params}
+        logger.debug("tool_call request: %s", body)
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self.gateway_url}/api/v0/tools/invoke",
+                json=body,
+                headers=headers,
+                timeout=self.timeout,
+            )
+        self.last_calls.append({"tool": tool_name, "status": resp.status_code})
+        logger.info("tool_call tool=%s status=%d", tool_name, resp.status_code)
+        return resp
+
+    async def _auth_headers(self) -> dict:
+        token = await self._get_token()
+        return {"Authorization": f"Bearer {token}"} if token else {}
+
+    def _resolve_name(self, tool_name: str) -> str:
+        full_name = TOOL_NAME_MAP.get(tool_name)
+        if full_name is None:
+            raise ToolAccessDenied(f"403 Forbidden: {tool_name} not in allowed tool list")
+        return full_name
+
+    async def call_tool(self, tool_name: str, params: dict) -> dict:
+        full_name = self._resolve_name(tool_name)
+
+        headers = await self._auth_headers()
+        resp = await self._post(tool_name, full_name, params, headers)
+        return self._unwrap(resp, tool_name)

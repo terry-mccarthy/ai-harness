@@ -12,6 +12,25 @@ async def _mock_post_factory(status=200, json_body=None):
     return mock_post
 
 
+def _capturing_mock(token="test-token", invoke_status=200, invoke_body=None):
+    """Returns (mock_fn, captured) where captured['headers'] is set after call."""
+    captured = {"headers": {}}
+    invoke_body = invoke_body or {"content": [{"type": "text", "text": "{}"}]}
+
+    async def mock_post(self, url, **kwargs):
+        request = httpx.Request("POST", str(url))
+        if "/oauth/token" in str(url):
+            return httpx.Response(
+                200,
+                json={"access_token": token, "expires_in": 900},
+                request=request,
+            )
+        captured["headers"] = dict(kwargs.get("headers") or {})
+        return httpx.Response(invoke_status, json=invoke_body, request=request)
+
+    return mock_post, captured
+
+
 @pytest.mark.asyncio
 async def test_parses_json_content_in_mcp_response(monkeypatch):
     body = {"content": [{"type": "text", "text": '{"verdict": "pass", "findings": [], "summary": "ok"}'}]}
@@ -75,6 +94,28 @@ async def test_missing_content_and_result_returns_raw_data(monkeypatch):
     client = GatewayClient(gateway_url="http://test", client_id="test", client_secret="")
     result = await client.call_tool("git_diff", {})
     assert result == body
+
+
+@pytest.mark.asyncio
+async def test_authorization_header_sent_when_secret_set(monkeypatch):
+    mock, captured = _capturing_mock(token="tok-abc")
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock)
+
+    client = GatewayClient(gateway_url="http://test", client_id="ci", client_secret="secret")
+    await client.call_tool("git_diff", {})
+
+    assert captured["headers"].get("Authorization") == "Bearer tok-abc"
+
+
+@pytest.mark.asyncio
+async def test_no_authorization_header_when_no_secret(monkeypatch):
+    mock, captured = _capturing_mock()
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock)
+
+    client = GatewayClient(gateway_url="http://test", client_id="ci", client_secret="")
+    await client.call_tool("git_diff", {})
+
+    assert "Authorization" not in captured["headers"]
 
 
 @pytest.mark.asyncio
