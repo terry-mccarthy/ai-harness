@@ -152,10 +152,12 @@ class DoltFormulaStore:
                     """,
                     (quality_score, status, formula_id),
                 )
-                cur.execute(
-                    "CALL DOLT_COMMIT('-Am', %s)",
-                    (f"formula: {formula_id} quality={quality_score:.2f} status={status}",),
-                )
+                # Only commit if UPDATE actually matched rows
+                if cur.rowcount > 0:
+                    cur.execute(
+                        "CALL DOLT_COMMIT('-Am', %s)",
+                        (f"formula: {formula_id} quality={quality_score:.2f} status={status}",),
+                    )
 
     def get_pour_stats(self, formula_id: str) -> dict:
         """Return {total, successes} pour counts."""
