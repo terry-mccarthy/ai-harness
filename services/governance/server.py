@@ -81,7 +81,9 @@ async def token(request: Request):
 
 @app.post("/api/v0/tools/invoke")
 async def invoke(
-    request: Request, authorization: str | None = Header(default=None)
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_human_approval_token: str | None = Header(default=None),
 ):
     # 1. Validate token
     if not authorization or not authorization.startswith("Bearer "):
@@ -98,6 +100,10 @@ async def invoke(
     body = await request.json()
     full_tool = body.get("name", "")
     short_tool = full_tool.split("__")[-1] if "__" in full_tool else full_tool
+
+    # shell_exec requires human approval — block before OPA evaluation
+    if short_tool == "shell_exec" and not x_human_approval_token:
+        raise HTTPException(403, "shell_exec_requires_human_approval")
 
     # 2. Consult OPA
     try:

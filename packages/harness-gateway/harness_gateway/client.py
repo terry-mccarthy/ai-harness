@@ -32,6 +32,7 @@ class GatewayClient:
     client_id: str
     client_secret: str
     timeout: float = 180.0
+    human_approval_token: str | None = None
     last_calls: list = field(default_factory=list, repr=False)
     _token: str | None = field(default=None, init=False, repr=False)
     _token_exp: float = field(default=0.0, init=False, repr=False)
@@ -103,7 +104,10 @@ class GatewayClient:
 
     async def _auth_headers(self) -> dict:
         token = await self._get_token()
-        return {"Authorization": f"Bearer {token}"} if token else {}
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        if self.human_approval_token:
+            headers["X-Human-Approval-Token"] = self.human_approval_token
+        return headers
 
     def _resolve_name(self, tool_name: str) -> str:
         full_name = TOOL_NAME_MAP.get(tool_name)

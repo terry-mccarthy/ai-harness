@@ -12,9 +12,9 @@ venv:
 	uv sync --all-packages
 
 requirements:
-	uv export --frozen --package governance   --no-emit-project > services/governance/requirements.txt
-	uv export --frozen --package review-server --no-emit-project > services/review_server/requirements.txt
-	uv export --frozen --package stub-servers  --no-emit-project > stub_servers/requirements.txt
+	uv export --frozen --no-color --package governance    --no-emit-project > services/governance/requirements.txt
+	uv export --frozen --no-color --package review-server --no-emit-project > services/review_server/requirements.txt
+	uv export --frozen --no-color --package stub-servers  --no-emit-project > stub_servers/requirements.txt
 
 test-unit:
 	set -a && source .env && set +a && \
