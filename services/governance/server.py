@@ -40,6 +40,46 @@ CLIENTS = {
 }
 
 
+def _decode_jwt(authorization: str | None) -> dict:
+    """Raises HTTPException on missing/expired/invalid token."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "missing_token")
+    raw_token = authorization[7:]
+    try:
+        return jwt.decode(raw_token, JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "token_expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "invalid_token")
+
+
+async def _check_policy(role: str, short_tool: str) -> bool:
+    """Returns True if OPA allows the call; False on deny or OPA error."""
+    try:
+        async with httpx.AsyncClient() as client:
+            opa_resp = await client.post(
+                f"{OPA_URL}/v1/data/harness/allow",
+                json={"input": {"agent_role": role, "tool_name": short_tool}},
+                timeout=5.0,
+            )
+        return opa_resp.json().get("result", False)
+    except Exception as e:
+        logger.error("OPA unreachable: %s", e)
+        return False
+
+
+async def _forward_to_mcpjungle(body: dict) -> tuple:
+    """POST to MCPJungle; returns (response, latency_ms)."""
+    start = int(time.time() * 1000)
+    async with httpx.AsyncClient() as client:
+        upstream = await client.post(
+            f"{MCPJUNGLE_URL}/api/v0/tools/invoke",
+            json=body,
+            timeout=UPSTREAM_TIMEOUT,
+        )
+    return upstream, int(time.time() * 1000) - start
+
+
 def get_dolt_conn():
     return pymysql.connect(
         host=DOLT_HOST,
@@ -85,80 +125,23 @@ async def invoke(
     authorization: str | None = Header(default=None),
     x_human_approval_token: str | None = Header(default=None),
 ):
-    # 1. Validate token
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "missing_token")
-    raw_token = authorization[7:]
-    try:
-        claims = jwt.decode(raw_token, JWT_SECRET, algorithms=["HS256"])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(401, "token_expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(401, "invalid_token")
-
-    role = claims["role"]
+    claims = _decode_jwt(authorization)
     body = await request.json()
     full_tool = body.get("name", "")
     short_tool = full_tool.split("__")[-1] if "__" in full_tool else full_tool
+    rule = f"harness.allow[{claims['role']}]"
 
-    # shell_exec requires human approval — block before OPA evaluation
     if short_tool == "shell_exec" and not x_human_approval_token:
         raise HTTPException(403, "shell_exec_requires_human_approval")
 
-    # 2. Consult OPA
-    try:
-        async with httpx.AsyncClient() as client:
-            opa_resp = await client.post(
-                f"{OPA_URL}/v1/data/harness/allow",
-                json={"input": {"agent_role": role, "tool_name": short_tool}},
-                timeout=5.0,
-            )
-        allowed = opa_resp.json().get("result", False)
-    except Exception as e:
-        logger.error("OPA unreachable: %s", e)
-        allowed = False
-
-    rule = f"harness.allow[{role}]"
-
-    # 3. Write audit (deny path)
-    if not allowed:
-        _write_audit(
-            claims["sub"],
-            full_tool,
-            short_tool,
-            json.dumps(body),
-            None,
-            "deny",
-            rule,
-            0,
-        )
+    if not await _check_policy(claims["role"], short_tool):
+        _write_audit(claims["sub"], full_tool, short_tool, json.dumps(body), None, "deny", rule, 0)
         raise HTTPException(403, "policy_denied")
 
-    # 4. Forward to MCPJungle
-    start = int(time.time() * 1000)
-    async with httpx.AsyncClient() as client:
-        upstream = await client.post(
-            f"{MCPJUNGLE_URL}/api/v0/tools/invoke",
-            json=body,
-            timeout=UPSTREAM_TIMEOUT,
-        )
-    latency = int(time.time() * 1000) - start
-
-    req_hash = hashlib.sha256(
-        json.dumps(body, sort_keys=True).encode()
-    ).hexdigest()[:16]
+    upstream, latency = await _forward_to_mcpjungle(body)
+    req_hash = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
     resp_hash = hashlib.sha256(upstream.text.encode()).hexdigest()[:16]
-
-    _write_audit(
-        claims["sub"],
-        full_tool,
-        short_tool,
-        req_hash,
-        resp_hash,
-        "allow",
-        rule,
-        latency,
-    )
+    _write_audit(claims["sub"], full_tool, short_tool, req_hash, resp_hash, "allow", rule, latency)
 
     upstream.raise_for_status()
     return upstream.json()
