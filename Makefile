@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: stack-up stack-down venv test test-unit test-integration test-e2e review
+.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e review consolidate alembic-upgrade
 
 stack-up:
 	docker compose up -d --wait
@@ -9,8 +9,12 @@ stack-down:
 	docker compose down -v
 
 venv:
-	python3 -m venv .venv
-	.venv/bin/pip install -e packages/harness-gateway -e packages/harness-agents -e packages/harness-tests
+	uv sync --all-packages
+
+requirements:
+	uv export --frozen --package governance   --no-emit-project > services/governance/requirements.txt
+	uv export --frozen --package review-server --no-emit-project > services/review_server/requirements.txt
+	uv export --frozen --package stub-servers  --no-emit-project > stub_servers/requirements.txt
 
 test-unit:
 	set -a && source .env && set +a && \
@@ -27,6 +31,23 @@ test-e2e:
 	{ ec=$$?; [ $$ec -eq 5 ] && echo "(no e2e tests collected)" && exit 0 || exit $$ec; }
 
 test: test-integration
+
+consolidate:
+	set -a && source .env && set +a && \
+	.venv/bin/python -c "\
+import asyncio, os; \
+from harness_memory.memory_store import PostgresMemoryStore; \
+from harness_memory.formula_store import DoltFormulaStore; \
+from harness_memory.consolidation import ConsolidationWorker; \
+store = PostgresMemoryStore(os.environ['PG_DSN'], os.environ.get('REDIS_URL','redis://localhost:6379'), os.environ.get('OLLAMA_MODEL','qwen2.5:7b'), os.environ.get('OLLAMA_HOST','http://localhost:11434')); \
+fstore = DoltFormulaStore(host=os.environ.get('DOLT_HOST','localhost'), port=int(os.environ.get('DOLT_PORT','3306')), user='root', password='root', database='harness'); \
+worker = ConsolidationWorker(store=store, formula_store=fstore); \
+result = asyncio.run(worker.run_pass('sre')); \
+print(result)"
+
+alembic-upgrade:
+	set -a && source .env && set +a && \
+	cd packages/harness-memory && ../../.venv/bin/alembic upgrade head
 
 review:
 	@set -a && source .env && set +a && \

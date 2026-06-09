@@ -9,10 +9,16 @@ dependencies = [
     "ollama>=0.3",
     "harness-agents",
     "harness-gateway",
+    "harness-memory",
     "pymysql>=1.1",
     "pyjwt>=2.8",
     "httpx>=0.27",
 ]
+
+[tool.uv.sources]
+harness-agents = { workspace = true }
+harness-gateway = { workspace = true }
+harness-memory = { workspace = true }
 
 [tool.setuptools.packages.find]
 where = ["."]
