@@ -1,6 +1,11 @@
 import pytest
 import os
 import httpx
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from repo root so tests work without `source .env` in the shell
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from harness_gateway.client import GatewayClient
 from harness_agents.reviewer import CodeReviewerAgent

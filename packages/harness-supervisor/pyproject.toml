@@ -1,0 +1,28 @@
+[project]
+name = "harness-supervisor"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=0.2",
+    "langgraph-checkpoint-postgres>=2.0",
+    "psycopg[binary,pool]>=3.1",
+    "opentelemetry-sdk>=1.25",
+    "opentelemetry-api>=1.25",
+    "harness-agents",
+    "harness-memory",
+    "harness-gateway",
+    "pyjwt>=2.8",
+    "jsonschema>=4.22",
+]
+
+[tool.uv.sources]
+harness-agents  = { workspace = true }
+harness-memory  = { workspace = true }
+harness-gateway = { workspace = true }
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

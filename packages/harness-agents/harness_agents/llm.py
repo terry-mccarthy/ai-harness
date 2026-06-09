@@ -17,9 +17,10 @@ class OllamaProvider:
         num_ctx: int = 8192,
         temperature: float = 0.1,
         num_predict: int = 1024,
+        timeout: float = 120.0,
     ):
         from ollama import AsyncClient
-        self.client = AsyncClient(host=host)
+        self.client = AsyncClient(host=host, timeout=timeout)
         self.model = model
         self._options = {
             "temperature": temperature,

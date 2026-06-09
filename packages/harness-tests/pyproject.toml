@@ -10,6 +10,8 @@ dependencies = [
     "harness-agents",
     "harness-gateway",
     "harness-memory",
+    "harness-supervisor",
+    "python-dotenv>=1.0",
     "pymysql>=1.1",
     "pyjwt>=2.8",
     "httpx>=0.27",
@@ -18,7 +20,8 @@ dependencies = [
 [tool.uv.sources]
 harness-agents = { workspace = true }
 harness-gateway = { workspace = true }
-harness-memory = { workspace = true }
+harness-memory     = { workspace = true }
+harness-supervisor = { workspace = true }
 
 [tool.setuptools.packages.find]
 where = ["."]

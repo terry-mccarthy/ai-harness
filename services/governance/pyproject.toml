@@ -1,16 +1,15 @@
 [project]
-name = "harness-agents"
+name = "governance"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "ollama>=0.3",
-    "jsonschema>=4.22",
-    "harness-gateway",
-    "google-genai",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pyjwt>=2.8",
+    "httpx>=0.27",
+    "pymysql>=1.1",
+    "python-multipart>=0.0.9",
 ]
-
-[tool.uv.sources]
-harness-gateway = { workspace = true }
 
 [tool.setuptools.packages.find]
 where = ["."]

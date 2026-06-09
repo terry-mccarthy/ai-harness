@@ -1,8 +1,9 @@
 FROM python:3.12-slim
 WORKDIR /app
 
-# Install Python deps
-RUN pip install "mcp[cli]" uvicorn ollama httpx jsonschema
+# Install pinned external deps
+COPY services/review_server/requirements.txt .
+RUN pip install --no-deps -r requirements.txt
 
 # Copy local packages and install
 COPY packages/harness-gateway /app/packages/harness-gateway

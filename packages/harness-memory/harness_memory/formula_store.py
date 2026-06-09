@@ -11,10 +11,19 @@ import pymysql.cursors
 from .models import Formula
 
 
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "in", "on", "to", "for", "of", "by",
+    "is", "be", "are", "was", "were", "it", "this", "that", "with", "as",
+    "at", "from", "not", "no", "if", "its", "than", "then", "so",
+})
+
+
 def _tfidf_score(query: str, doc: str) -> float:
     """Keyword overlap score — no ML needed for formula matching."""
-    q_words = set(re.findall(r"\w+", query.lower()))
-    d_words = re.findall(r"\w+", doc.lower())
+    q_words = set(re.findall(r"\w+", query.lower())) - _STOP_WORDS
+    d_words = [w for w in re.findall(r"\w+", doc.lower()) if w not in _STOP_WORDS]
+    if not q_words or not d_words:
+        return 0.0
     d_counter = Counter(d_words)
     hits = sum(d_counter[w] for w in q_words if w in d_counter)
     denom = len(q_words) + len(set(d_words))
@@ -93,7 +102,7 @@ class DoltFormulaStore:
                     INNER JOIN (
                         SELECT id, MAX(version) AS max_ver
                         FROM formulas
-                        WHERE agent_role = %s AND status NOT IN ('deprecated')
+                        WHERE agent_role = %s AND status NOT IN ('deprecated', 'draft')
                         GROUP BY id
                     ) latest ON f.id = latest.id AND f.version = latest.max_ver
                     WHERE f.status NOT IN ('deprecated')
@@ -195,6 +204,16 @@ class DoltFormulaStore:
                         "INSERT INTO formula_pours (formula_id, success) VALUES (%s, FALSE)",
                         (formula_id,),
                     )
+
+    def _get_drafts_by_role(self, agent_role: str) -> list:
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM formulas WHERE agent_role = %s AND status = 'draft'",
+                    (agent_role,),
+                )
+                rows = cur.fetchall()
+        return [self._row_to_formula(r) for r in rows]
 
     def _delete_where_id_like(self, pattern: str) -> None:
         """Delete test formulas by id pattern (e.g. 'test:%')."""

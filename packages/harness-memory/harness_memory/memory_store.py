@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS memory_items (
 
 
 class PostgresMemoryStore:
+    _embed_dim_cache: dict[str, int] = {}  # keyed by model name; shared across instances
+
     def __init__(
         self,
         pg_dsn: str,
@@ -49,9 +51,11 @@ class PostgresMemoryStore:
         if self._redis is None:
             self._redis = aioredis.from_url(self._redis_url, decode_responses=False)
 
-        # Detect embedding dimension from the configured model
-        sample = await self._embed("setup")
-        dim = len(sample)
+        # Detect embedding dimension once per model; cache across store instances
+        if self._embed_model not in PostgresMemoryStore._embed_dim_cache:
+            sample = await self._embed("setup")
+            PostgresMemoryStore._embed_dim_cache[self._embed_model] = len(sample)
+        dim = PostgresMemoryStore._embed_dim_cache[self._embed_model]
 
         create_table_sql = BASE_CREATE_TABLE_SQL.format(dim=dim)
         async with self._pool.acquire() as conn:

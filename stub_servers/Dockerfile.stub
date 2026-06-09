@@ -1,7 +1,8 @@
 FROM python:3.12-slim
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-RUN pip install "mcp[cli]" uvicorn
+COPY requirements.txt .
+RUN pip install --no-deps -r requirements.txt
 
 # Bake in a sample repo with one commit that adds a password-logging line
 RUN git config --global user.email "stub@harness.local" && \

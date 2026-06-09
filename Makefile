@@ -16,17 +16,20 @@ requirements:
 	uv export --frozen --no-color --package review-server --no-emit-project > services/review_server/requirements.txt
 	uv export --frozen --no-color --package stub-servers  --no-emit-project > stub_servers/requirements.txt
 
+test-fast:
+	.venv/bin/pytest packages/harness-tests/ -v \
+	  -m "integration and not live" \
+	  --ignore=packages/harness-tests/test_review_mcp.py \
+	  --ignore=packages/harness-tests/test_thin_slice.py
+
 test-unit:
-	set -a && source .env && set +a && \
 	.venv/bin/pytest packages/harness-tests/ -v -m "not integration and not e2e and not live" || \
 	{ ec=$$?; [ $$ec -eq 5 ] && echo "(no unit tests collected)" && exit 0 || exit $$ec; }
 
 test-integration:
-	set -a && source .env && set +a && \
 	.venv/bin/pytest packages/harness-tests/ -v -m integration
 
 test-e2e:
-	set -a && source .env && set +a && \
 	.venv/bin/pytest packages/harness-tests/ -v -m e2e || \
 	{ ec=$$?; [ $$ec -eq 5 ] && echo "(no e2e tests collected)" && exit 0 || exit $$ec; }
 

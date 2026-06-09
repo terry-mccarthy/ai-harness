@@ -1,16 +1,11 @@
 [project]
-name = "harness-agents"
+name = "stub-servers"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "ollama>=0.3",
-    "jsonschema>=4.22",
-    "harness-gateway",
-    "google-genai",
+    "mcp[cli]",
+    "uvicorn>=0.27",
 ]
-
-[tool.uv.sources]
-harness-gateway = { workspace = true }
 
 [tool.setuptools.packages.find]
 where = ["."]
