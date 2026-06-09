@@ -1,6 +1,6 @@
 # AI Harness
 
-A governed code-review agent. Submit a git diff, get back structured security and quality findings with a pass/fail verdict. Every tool call routes through a governance layer: OAuth 2.1 auth, OPA policy enforcement, and a tamper-evident Dolt audit log.
+A governed, self-learning agent harness. The current milestone exposes a code-review agent with structured findings; future phases add multi-agent orchestration and persistent memory. Every tool call routes through a governance layer: OAuth 2.1 auth, OPA policy enforcement, and a tamper-evident Dolt audit log.
 
 ## What it does
 
@@ -31,9 +31,10 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 - **Governance** — FastAPI service (`:8090`) that issues JWTs, enforces OPA policy, and writes tamper-evident audit rows to Dolt before forwarding to MCPJungle
 - **MCPJungle** — MCP proxy that routes tool calls and exposes itself as an MCP server
 - **OPA** — policy engine; `policies/harness.rego` maps agent roles to allowed tools; enforced on every request
-- **Dolt** — git-versioned MySQL-compatible database; audit rows are auto-committed so the log is append-only and diffable
-- **PostgreSQL** — MCPJungle state store
-- **Ollama** (`qwen2.5-coder:7b`) — local LLM, no API key needed
+- **Dolt** — git-versioned MySQL-compatible database; audit rows and formula versions are auto-committed so both logs are append-only and diffable
+- **PostgreSQL** (`pgvector/pgvector:pg16`) — MCPJungle state, LangGraph checkpoints, and vector memory store; pgvector extension enables semantic search
+- **Redis 7** — hot-read cache for the memory store; frequently accessed items served in-process without hitting PostgreSQL
+- **Ollama** (`qwen2.5-coder:32b` default) — local LLM for reviews and vector embeddings; no API key needed
 - **git-diff-stub** — runs real `git diff` on a baked-in sample repo
 - **linter-stub** — pattern-matching linter (swappable for a real one)
 - **architect-stub** — stub MCP server for architect-role tools (`codebase_search`, `adr_read`, `adr_write`, `diagram_gen`)
@@ -42,7 +43,7 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 
 ## Quick start
 
-**Prerequisites:** Docker, Ollama running with `qwen2.5-coder` pulled.
+**Prerequisites:** Docker, Ollama running with `qwen2.5-coder` pulled, [uv](https://docs.astral.sh/uv/) installed.
 
 ```bash
 # 1. Configure
@@ -54,9 +55,8 @@ docker compose build git-diff-stub linter-stub architect-stub sre-stub review-se
 docker compose up -d
 sleep 30  # wait for Dolt to init and MCP init containers to register servers
 
-# 3. Install Python deps
-python3 -m venv .venv
-.venv/bin/pip install -e packages/harness-gateway -e packages/harness-agents -e packages/harness-tests
+# 3. Install Python deps (workspace layout — installs all packages including harness-memory)
+uv sync --all-packages
 
 # 4. Run all tests
 make test-integration
@@ -76,6 +76,8 @@ All options are in `.env` (copy from `.env.example`):
 | `CODE_REVIEWER_SECRET` | — | Client secret for the `code-reviewer` OAuth client |
 | `ARCHITECT_SECRET` | `architect-secret` | Client secret for the `architect` OAuth client |
 | `SRE_SECRET` | `sre-secret` | Client secret for the `sre` OAuth client |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL for memory hot-read cache |
+| `PG_DSN` | `postgresql://harness:harness@localhost:5432/harness` | PostgreSQL DSN for memory store and checkpointer |
 | `DOLT_HOST` | `localhost` | Dolt MySQL endpoint host |
 | `DOLT_PORT` | `3306` | Dolt MySQL endpoint port |
 | `LOG_LEVEL` | `INFO` | Log verbosity |
@@ -86,7 +88,7 @@ To enable debug logging without restarting the whole stack:
 LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server governance
 ```
 
-## Tests (26 total)
+## Tests (53 total)
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -124,6 +126,38 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 | `test_opa_deny_cross_role` | OPA returns `false` for architect + shell_exec |
 | `test_token_expiry` | Expired JWT returns 401 |
 
+### Phase 2 — Persistent Memory Layer (27 tests)
+
+| Test | What it proves |
+|---|---|
+| `test_checkpointer_saves_state` | LangGraph checkpoint written to PostgreSQL after a graph step |
+| `test_checkpointer_resumes` | Graph resumed from checkpoint skips already-run nodes |
+| `test_checkpointer_thread_isolation` | Thread A checkpoint not visible from thread B |
+| `test_memory_write_and_read` | `write()` + `read()` round-trip within a session |
+| `test_memory_namespace_isolation` | Writes to `architect/` invisible from `sre/` |
+| `test_memory_cross_session_persistence` | Item survives closing and reopening the store |
+| `test_memory_ttl_expiry` | Expired item not returned by `read()` |
+| `test_memory_redis_hot_read` | Second read served from Redis (cache_hits counter) |
+| `test_memory_semantic_search` | `search()` ranks most-relevant item first via pgvector |
+| `test_memory_overwrite` | Re-writing same key updates value |
+| `test_memory_delete` | `delete()` removes item; subsequent read returns None |
+| `test_memory_interface_compliance` | `PostgresMemoryStore` satisfies `MemoryStore` Protocol |
+| `test_sre_runbook_namespace` | SRE namespace isolated from architect and code_reviewer |
+| `test_episodic_memory_write` | Write with `memory_type='episodic'` stores `consolidated=False` |
+| `test_semantic_memory_written_by_consolidation` | `run_pass()` creates semantic items; source episodes marked consolidated |
+| `test_consolidation_clusters_similar_episodes` | Two similar episodes merge into one semantic item |
+| `test_consolidation_preserves_distinct_episodes` | Two distinct episodes produce two separate semantic items |
+| `test_consolidation_prunes_expired_items` | Expired episodes deleted by `run_pass()` |
+| `test_formula_quality_score_updated` | 8/10 successful pours → quality_score ≥ 0.8 after consolidation |
+| `test_formula_graduates_to_proven` | ≥10 pours, ≥80% success → status='proven' |
+| `test_formula_flagged_for_review` | ≥10 pours, <30% success → status='review' |
+| `test_formula_write_creates_dolt_commit` | `propose()` creates a Dolt commit containing the formula id |
+| `test_formula_lookup_by_task` | `lookup()` returns best-matching formula for a task description |
+| `test_formula_lookup_no_match` | `lookup()` returns None for unmatched task |
+| `test_formula_version_history` | Two `propose()` calls → two Dolt commits; both versions queryable |
+| `test_formula_deprecate` | Deprecated formula excluded from `list_active()` and `lookup()` |
+| `test_formula_interface_compliance` | `DoltFormulaStore` satisfies `FormulaStore` Protocol |
+
 ## Connect Claude Code
 
 MCPJungle exposes itself as an MCP server. Add to Claude Code settings:
@@ -149,10 +183,19 @@ Claude Code will see all registered tools including `review_server__review_diff`
 ├── packages/
 │   ├── harness-gateway/   # GatewayClient — fetches OAuth tokens, calls governance
 │   ├── harness-agents/    # CodeReviewerAgent, AgentState, output schema
-│   └── harness-tests/     # Integration tests (Phase 0 + Phase 1)
+│   ├── harness-memory/    # PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker
+│   │   ├── harness_memory/
+│   │   │   ├── protocols.py      # MemoryStore, FormulaStore, ConsolidationWorker protocols
+│   │   │   ├── models.py         # Formula, ConsolidationResult dataclasses
+│   │   │   ├── memory_store.py   # asyncpg + Redis + Ollama embeddings
+│   │   │   ├── formula_store.py  # pymysql + Dolt commit-per-change
+│   │   │   └── consolidation.py  # cluster episodic→semantic, formula quality scoring
+│   │   └── alembic/              # schema migrations for memory_items
+│   └── harness-tests/     # Integration tests (Phases 0–2)
 ├── services/
 │   ├── governance/        # OAuth + OPA enforcement + Dolt audit (port 8090)
-│   ├── dolt/              # Dolt init script and Dockerfile
+│   ├── dolt/              # Dolt init — audit_log, formulas, formula_pours, seed data
+│   ├── postgres/          # postgres init — enables pgvector extension
 │   └── review_server/     # review_diff MCP tool (wraps the agent)
 ├── stub_servers/          # git_diff, run_linter, architect, sre MCP servers
 ├── policies/              # OPA policy (harness.rego)
