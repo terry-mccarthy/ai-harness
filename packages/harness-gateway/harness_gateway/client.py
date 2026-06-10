@@ -85,23 +85,7 @@ class GatewayClient:
             logger.warning("token fetch failed: %s", e)
             return None
 
-    def _unwrap(self, resp: "httpx.Response", tool_name: str) -> dict:
-        if resp.status_code == 403:
-            raise ToolAccessDenied(f"403 Forbidden: {tool_name}")
-        if resp.status_code == 401:
-            raise ToolAccessDenied(f"401 Unauthorized: {tool_name}")
-        resp.raise_for_status()
-        data = resp.json()
-        logger.debug("tool_call raw response: %s", data)
-        items = data.get("content") or data.get("result") or []
-        if items and isinstance(items[0], dict) and items[0].get("type") == "text":
-            try:
-                return json.loads(items[0]["text"])
-            except json.JSONDecodeError:
-                return items[0]["text"]
-        return data
-
-    def _unwrap_data(self, data: dict, status: int, tool_name: str) -> dict:
+    def _unwrap(self, data: dict, status: int, tool_name: str) -> dict:
         if status == 403:
             raise ToolAccessDenied(f"403 Forbidden: {tool_name}")
         if status == 401:
@@ -110,6 +94,7 @@ class GatewayClient:
             raise httpx.HTTPStatusError(
                 f"HTTP {status}", request=httpx.Request("POST", self.gateway_url), response=None
             )
+        logger.debug("tool_call raw response: %s", data)
         items = data.get("content") or data.get("result") or []
         if items and isinstance(items[0], dict) and items[0].get("type") == "text":
             try:
@@ -286,9 +271,9 @@ class GatewayClient:
             resp_hash = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
             asyncio.create_task(self._governance_audit(token, full_name, req_hash, resp_hash, latency))
 
-            return self._unwrap_data(data, status, tool_name)
+            return self._unwrap(data, status, tool_name)
 
         # Legacy mode: gateway_url is the governance proxy
         headers = await self._auth_headers()
         resp = await self._post(tool_name, full_name, params, headers)
-        return self._unwrap(resp, tool_name)
+        return self._unwrap(resp.json(), resp.status_code, tool_name)

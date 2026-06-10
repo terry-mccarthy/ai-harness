@@ -95,26 +95,29 @@ MCPJungle  :8080
   ▼
 review-server  :9003  (FastMCP)
   │  CodeReviewerAgent
-  │  GatewayClient  ← fetches JWT from governance
+  │  GatewayClient  ← fetches JWT from governance /oauth/token
   │
-  │  POST /api/v0/tools/invoke  (Bearer <JWT>)
+  │  POST /check  (Bearer <JWT>, tool_name)
   ▼
-governance  :8090  (FastAPI)          ← MANDATORY INTERCEPT [HARD]
+governance  :8090  (FastAPI)          — policy + audit sidecar [HARD]
   ├── validate JWT  (HS256, 15-min TTL)
-  ├── POST /v1/data/harness/allow  →  OPA  :8181
-  ├── INSERT audit_log + CALL DOLT_COMMIT  →  Dolt  :3306
+  └── POST /v1/data/harness/allow  →  OPA  :8181  → 200 allowed / 403 denied
   │
-  │  POST /api/v0/tools/invoke  (forwarded)
+  │  (on allow) POST /api/v0/tools/invoke  (direct, no auth)
   ▼
 MCPJungle  :8080
   ├── git_diff_stub__git_diff    →  git-diff-stub  :9001
   └── linter_stub__run_linter    →  linter-stub    :9002
+  │
+  │  (async, fire-and-forget) POST /audit  →  governance
+  ▼
+Dolt  :3306  ← INSERT audit_log + CALL DOLT_COMMIT
 ```
 
 Every tool call the agent makes produces:
 
 1. An OPA policy decision (`allow` or `deny`)
-2. A row in `audit_log` in Dolt
+2. A row in `audit_log` in Dolt (written async after the tool returns)
 3. A Dolt git commit — queryable with `dolt log` and `dolt diff`
 
 ---
@@ -128,7 +131,7 @@ Every tool call the agent makes produces:
 | `opa`            | openpolicyagent/opa:latest     | 8181 | Policy engine — evaluates `policies/harness.rego`            |
 | `mcpjungle`      | mcpjungle/mcpjungle:latest     | 8080 | MCP proxy / tool registry / MCP server for Claude Code       |
 | `dolt`           | local build                    | 3306 | Git-versioned audit log + formula store                      |
-| `governance`     | local build                    | 8090 | OAuth token issuance, OPA enforcement, Dolt audit            |
+| `governance`     | local build                    | 8090 | OAuth token issuance (`/oauth/token`), OPA policy check (`/check`), async Dolt audit (`/audit`) |
 | `git-diff-stub`  | local build                    | 9001 | Real `git diff` MCP server (baked sample repo)               |
 | `linter-stub`    | local build                    | 9002 | Pattern-matching `run_linter` MCP server                     |
 | `architect-stub` | local build                    | 9004 | Stub MCP server for architect-role tools                     |
@@ -149,7 +152,7 @@ packages/
   harness-tests/     — pytest integration tests (77 tests across 5 test files + load test)
 
 services/
-  governance/        — OAuth 2.1 + OPA + Redis rate limiter + Dolt audit + /metrics
+  governance/        — OAuth 2.1 + OPA policy check + async Dolt audit + /metrics (rate limiting delegated to gateway)
   contextforge_setup/ — init script: registers MCP stubs with ContextForge, creates virtual server
   grafana/           — provisioned cost-per-role dashboard
   prometheus/        — scrape config for governance /metrics
@@ -171,15 +174,13 @@ is standalone (no dependency on other harness packages). See
 
 ## Governance Service
 
-`services/governance/server.py` — three responsibilities per request:
+`services/governance/server.py` — policy + audit sidecar (not a forwarding proxy). Three endpoints:
 
-1. **Auth**: validates `Authorization: Bearer <JWT>`, rejects with 401 on missing/expired/invalid tokens
-2. **Policy**: calls `POST /v1/data/harness/allow` on OPA with `{agent_role, tool_name}`; returns 403 if denied
-3. **Audit**: inserts a row into Dolt `audit_log`, then calls `DOLT_COMMIT` — every tool call is a git commit
+1. **`POST /oauth/token`** — client credentials grant. Three clients: `architect`, `code-reviewer`, `sre`. Issues HS256 JWTs with `sub`, `role`, 15-min TTL, signed with `JWT_SECRET`.
+2. **`POST /check`** — validates Bearer JWT, calls OPA `POST /v1/data/harness/allow`; returns `{"allowed": true, "role": ..., "agent_id": ..., "rule": ...}` on allow, 403 on deny. Also gates `shell_exec` behind `X-Human-Approval-Token`.
+3. **`POST /audit`** — accepts an audit record from GatewayClient and writes to Dolt async (202 response, background task). Emits Prometheus counters/histograms.
 
-Token issuance: `POST /oauth/token` with client credentials (grant type `client_credentials`).
-Three clients: `architect`, `code-reviewer`, `sre`. Tokens are HS256 JWTs signed with
-`JWT_SECRET`, 15-min TTL.
+Governance no longer forwards tool calls. Rate limiting is delegated to the gateway (ContextForge).
 
 ---
 
@@ -335,12 +336,16 @@ Triggered manually: `make consolidate`
 
 `packages/harness-gateway/harness_gateway/client.py`:
 
-- `_get_token()` posts to `{gateway_url}/oauth/token`, caches the JWT until 30s before expiry
-- Falls back gracefully (returns `None`) if the gateway returns 404 on `/oauth/token`
-- `call_tool(name, params)` maps short names → `server__tool` via `TOOL_NAME_MAP`, adds
-  `Authorization: Bearer` header, POSTs to `/api/v0/tools/invoke`
-- 401 and 403 responses raise `ToolAccessDenied`
-- Response unwrapping: MCPJungle returns `{"content": [{"type": "text", "text": "<json>"}]}`; the client unwraps to a plain dict
+- `gateway_url` — direct tool invocation endpoint (MCPJungle `:8080` or CF `:4444`)
+- `governance_url` — policy+audit sidecar (governance `:8090`); optional
+- `call_tool(name, params)` when `governance_url` is set:
+  1. Fetches JWT from `governance_url/oauth/token`
+  2. POSTs `governance_url/check` — 403 raises `ToolAccessDenied` immediately
+  3. Calls gateway directly (`_invoke_mcpjungle` or `_invoke_cf`)
+  4. Fires `governance_url/audit` as an async background task (non-blocking)
+- `gateway_backend="contextforge"` enables CF's JSON-RPC format + CF JWT auth
+- Legacy mode (no `governance_url`): gateway_url is treated as a proxy (backward-compatible)
+- Response unwrapping: `_unwrap(data, status, tool_name)` — parses `{"content": [{"type": "text", "text": "<json>"}]}` to a plain dict; 401/403 raise `ToolAccessDenied`
 
 ---
 
@@ -422,8 +427,7 @@ section. Every change to the codebase should pass all of them.
 These prohibitions apply to any AI coding agent working on this codebase. They are not
 suggestions — violating them breaks the system's core guarantees.
 
-- **[HARD]** Do not add calls from agent code directly to MCPJungle (`:8080`). All tool calls
-  must go through governance (`:8090`).
+- **[HARD]** Do not bypass the governance policy check. All agent tool calls must go through `GatewayClient` with `governance_url` set — `POST /check` is what enforces OPA policy before any tool executes.
 
 - **[HARD]** Do not add a new tool to any stub server or service without a corresponding entry
   in `policies/harness.rego`. Deploying a tool without a policy entry is a governance gap.
@@ -448,16 +452,16 @@ suggestions — violating them breaks the system's core guarantees.
 
 ---
 
-## Test Coverage (69 Tests)
+## Test Coverage (74 Tests)
 
 | Phase | File                        | Tests | What they cover                                                          |
 |-------|-----------------------------|-------|--------------------------------------------------------------------------|
 | 0     | `test_thin_slice.py`        | 9     | Reviewer agent contract, gateway audit log, tool access denial, MCP reachability |
-| 1     | `test_phase1_governance.py` | 17    | Auth, OPA policy enforcement, Dolt audit, token expiry                   |
+| 1     | `test_phase1_governance.py` | 17    | Auth, OPA policy check (`/check`), Dolt audit (`/audit`), token expiry  |
 | 2     | `test_phase2_memory.py`     | 27    | Checkpointer, memory store (write/read/search/TTL/Redis), consolidation, formula store |
 | 3     | `test_phase3_agents.py`     | 4     | Agent protocol compliance, tool calls via gateway, shell_exec gating    |
 | 4     | `test_phase4_supervisor.py` | 12    | LangGraph orchestration (classify/route/formula/human_gate/checkpoint), E2E task flows |
-| 5     | `test_phase5_hardening.py`  | 8     | OWASP mitigations, OTel cost tags, token budget, rate limiting, ContextForge parity     |
+| 5     | `test_phase5_hardening.py`  | 8     | OWASP mitigations, OTel cost tags, token budget, no-rate-limit on governance, CF parity |
 
 ---
 
@@ -482,8 +486,9 @@ suggestions — violating them breaks the system's core guarantees.
 | 0015 | MockLLMProvider + SequentialMockLLMProvider for agent testing — deterministic responses replace real model calls; SequentialMockLLMProvider handles multi-turn flows (approve-required then approve-granted) | Accepted |
 | 0016 | OTel spans emitted from all supervisor nodes — observability without coupling to logging infrastructure; enables distributed tracing of task classification → formula → agent execution | Accepted |
 | 0017 | ContextForge as production MCP gateway (IBM `ghcr.io/ibm/mcp-context-forge`) — richer plugin ecosystem and multi-region federation vs MCPJungle free tier; GATEWAY_BACKEND feature flag enables zero-downtime migration and rollback | Accepted |
-| 0018 | Redis sliding-window rate limiter in governance — per-agent-sub per-minute counter; rate limit tests use unique JWT subs to avoid bucket collisions with other integration tests | Accepted |
+| 0018 | ~~Redis sliding-window rate limiter in governance~~ — superseded by ADR 0023; rate limiting delegated to gateway | Superseded |
 | 0019 | Token budget via HarnessState fields (`tokens_used`, `token_budget`) — checked in run_agent_node before calling agent; graph exits with budget_exceeded error; no invasive changes to agent internals | Accepted |
 | 0020 | Prometheus /metrics on governance + Grafana behind docker-compose monitoring profile — cost attribution per agent_role visible without external observability infra; not started by default to keep `docker compose up` lightweight | Accepted |
 | 0021 | LLM-primary task classification with structured JSON output (`{"task_type": ...}`) — keyword-first routing misclassified tasks with misleading surface keywords; keywords demoted to fallback for LLM outage/unparseable output, final default `review` | Accepted |
 | 0022 | `nomic-embed-text` (768 dims) as dedicated embedding model, separate from chat `OLLAMA_MODEL` — code LLMs produce 0.86–0.94 baseline similarity for all text, forcing a 0.95 cluster threshold and FakeEmbedder workaround; nomic-embed-text gives 0.82–0.93 for same-topic and 0.35–0.62 for different-topic, enabling a clean 0.80 threshold and real embeddings in all tests | Accepted |
+| 0023 | Governance refactored from forwarding proxy to policy+audit sidecar — ContextForge natively handles auth, RBAC, and rate limiting, making governance's forwarding and Redis rate limiter redundant; governance retains OPA policy check (`/check`) and async Dolt audit (`/audit`) because those aren't replaceable by any gateway without custom plugins; GatewayClient calls gateway directly and fires audit as a background task | Accepted |
