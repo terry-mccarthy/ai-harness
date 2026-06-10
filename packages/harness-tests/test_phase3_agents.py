@@ -191,7 +191,8 @@ async def test_architect_tool_calls_go_via_gateway():
     from harness_gateway.client import GatewayClient
 
     gw = GatewayClient(
-        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8090"),
+        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8080"),
+        governance_url=os.environ.get("GOVERNANCE_URL", "http://localhost:8090"),
         client_id="architect",
         client_secret=os.environ.get("ARCHITECT_SECRET", "architect-secret"),
     )
@@ -220,7 +221,8 @@ async def test_architect_denied_shell_exec():
     from harness_gateway.client import GatewayClient, ToolAccessDenied
 
     gw = GatewayClient(
-        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8090"),
+        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8080"),
+        governance_url=os.environ.get("GOVERNANCE_URL", "http://localhost:8090"),
         client_id="architect",
         client_secret=os.environ.get("ARCHITECT_SECRET", "architect-secret"),
     )
@@ -374,7 +376,8 @@ async def test_sre_shell_exec_blocked_without_approval():
     from harness_gateway.client import GatewayClient, ToolAccessDenied
 
     gw = GatewayClient(
-        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8090"),
+        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8080"),
+        governance_url=os.environ.get("GOVERNANCE_URL", "http://localhost:8090"),
         client_id="sre",
         client_secret=os.environ.get("SRE_SECRET", "sre-secret"),
     )
@@ -389,7 +392,8 @@ async def test_sre_shell_exec_allowed_with_approval():
     from harness_gateway.client import GatewayClient
 
     gw = GatewayClient(
-        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8090"),
+        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8080"),
+        governance_url=os.environ.get("GOVERNANCE_URL", "http://localhost:8090"),
         client_id="sre",
         client_secret=os.environ.get("SRE_SECRET", "sre-secret"),
         human_approval_token="approved-test-token",

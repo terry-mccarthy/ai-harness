@@ -1,8 +1,9 @@
 """Phase 1 Governance tests — all @pytest.mark.integration.
 
-Red phase: these tests are written before the implementation exists.
-They will fail until governance service, Dolt, architect/sre stubs, and OPA
-policy updates are all in place.
+Governance is now a policy+audit sidecar (no forwarding proxy):
+  - POST /oauth/token   — issues role-bearing JWTs
+  - POST /check         — OPA policy decision
+  - POST /audit         — async Dolt audit write
 """
 
 import os
@@ -20,7 +21,6 @@ DOLT_PORT = int(os.environ.get("DOLT_PORT", "3306"))
 
 
 def get_token(client_id: str, client_secret: str) -> str:
-    """Helper: fetch a bearer token from the governance /oauth/token endpoint."""
     resp = httpx.post(
         f"{GOVERNANCE_URL}/oauth/token",
         data={
@@ -33,13 +33,23 @@ def get_token(client_id: str, client_secret: str) -> str:
     return resp.json()["access_token"]
 
 
-def invoke_tool(token: str, tool_name: str, params: dict) -> httpx.Response:
-    """Helper: call POST /api/v0/tools/invoke on the governance service."""
+def check_policy(token: str, tool_name: str) -> httpx.Response:
+    """POST /check — returns 200 (allowed) or 403 (denied) or 401 (bad token)."""
     return httpx.post(
-        f"{GOVERNANCE_URL}/api/v0/tools/invoke",
-        json={"name": tool_name, **params},
+        f"{GOVERNANCE_URL}/check",
+        json={"tool_name": tool_name},
         headers={"Authorization": f"Bearer {token}"},
         timeout=30.0,
+    )
+
+
+def post_audit(token: str, tool_name: str) -> httpx.Response:
+    """POST /audit — records a tool call in Dolt (async, returns 202)."""
+    return httpx.post(
+        f"{GOVERNANCE_URL}/audit",
+        json={"tool_name": tool_name, "decision": "allow", "latency_ms": 50},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10.0,
     )
 
 
@@ -112,78 +122,74 @@ def test_sre_client_auth():
 
 
 # ---------------------------------------------------------------------------
-# Tool invocation policy tests
+# Policy check tests (POST /check)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
 def test_architect_allowed_tool():
-    """Architect token can call codebase_search via governance proxy."""
-    architect_secret = os.environ.get("ARCHITECT_SECRET", "architect-secret")
-    token = get_token("architect", architect_secret)
-    resp = invoke_tool(token, "architect_stub__codebase_search", {"query": "auth module"})
+    """Architect token gets allowed=true for codebase_search."""
+    token = get_token("architect", os.environ.get("ARCHITECT_SECRET", "architect-secret"))
+    resp = check_policy(token, "architect_stub__codebase_search")
     assert resp.status_code == 200
+    assert resp.json().get("allowed") is True
 
 
 @pytest.mark.integration
 def test_architect_denied_tool():
     """Architect token calling shell_exec returns 403."""
-    architect_secret = os.environ.get("ARCHITECT_SECRET", "architect-secret")
-    token = get_token("architect", architect_secret)
-    resp = invoke_tool(token, "sre_stub__shell_exec", {"command": "ls"})
+    token = get_token("architect", os.environ.get("ARCHITECT_SECRET", "architect-secret"))
+    resp = check_policy(token, "sre_stub__shell_exec")
     assert resp.status_code == 403
 
 
 @pytest.mark.integration
 def test_reviewer_allowed_tool():
-    """code-reviewer token can call git_diff via governance proxy, returns result."""
-    reviewer_secret = os.environ["CODE_REVIEWER_SECRET"]
-    token = get_token("code-reviewer", reviewer_secret)
-    resp = invoke_tool(token, "git_diff_stub__git_diff", {"diff_text": "test diff"})
+    """code-reviewer token gets allowed=true for git_diff."""
+    token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
+    resp = check_policy(token, "git_diff_stub__git_diff")
     assert resp.status_code == 200
-    data = resp.json()
-    assert data is not None
+    assert resp.json().get("allowed") is True
 
 
 @pytest.mark.integration
 def test_reviewer_denied_tool():
     """code-reviewer token calling adr_write returns 403."""
-    reviewer_secret = os.environ["CODE_REVIEWER_SECRET"]
-    token = get_token("code-reviewer", reviewer_secret)
-    resp = invoke_tool(token, "architect_stub__adr_write", {"title": "test", "content": "test"})
+    token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
+    resp = check_policy(token, "architect_stub__adr_write")
     assert resp.status_code == 403
 
 
 @pytest.mark.integration
 def test_sre_allowed_tool():
-    """sre token can call runbook_read via governance proxy, returns result."""
-    sre_secret = os.environ.get("SRE_SECRET", "sre-secret")
-    token = get_token("sre", sre_secret)
-    resp = invoke_tool(token, "sre_stub__runbook_read", {"runbook_name": "incident-response"})
+    """sre token gets allowed=true for runbook_read."""
+    token = get_token("sre", os.environ.get("SRE_SECRET", "sre-secret"))
+    resp = check_policy(token, "sre_stub__runbook_read")
     assert resp.status_code == 200
-    data = resp.json()
-    assert data is not None
+    assert resp.json().get("allowed") is True
 
 
 @pytest.mark.integration
 def test_unknown_token_rejected():
-    """Request with 'Bearer invalid-token' returns 401."""
-    resp = invoke_tool("invalid-token", "git_diff_stub__git_diff", {"diff_text": "test"})
+    """Request with 'Bearer invalid-token' returns 401 from /check."""
+    resp = check_policy("invalid-token", "git_diff_stub__git_diff")
     assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
-# Audit / Dolt tests
+# Audit / Dolt tests (POST /audit → Dolt)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
 def test_audit_row_written():
-    """After any tool call, a row exists in audit_log table (Dolt via MySQL)."""
-    # Make a tool call to ensure at least one audit row
-    reviewer_secret = os.environ["CODE_REVIEWER_SECRET"]
-    token = get_token("code-reviewer", reviewer_secret)
-    invoke_tool(token, "git_diff_stub__git_diff", {"diff_text": "audit test diff"})
+    """After POST /audit, a row exists in audit_log table (Dolt via MySQL)."""
+    token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
+    audit_resp = post_audit(token, "git_diff_stub__git_diff")
+    assert audit_resp.status_code == 202
+
+    # Brief wait for background write
+    time.sleep(1)
 
     conn = get_dolt_conn()
     try:
@@ -198,9 +204,9 @@ def test_audit_row_written():
 @pytest.mark.integration
 def test_audit_policy_rule_recorded():
     """audit_log row has policy_decision and policy_rule fields populated."""
-    reviewer_secret = os.environ["CODE_REVIEWER_SECRET"]
-    token = get_token("code-reviewer", reviewer_secret)
-    invoke_tool(token, "git_diff_stub__git_diff", {"diff_text": "policy rule test"})
+    token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
+    post_audit(token, "git_diff_stub__git_diff")
+    time.sleep(1)
 
     conn = get_dolt_conn()
     try:
@@ -220,10 +226,10 @@ def test_audit_policy_rule_recorded():
 
 @pytest.mark.integration
 def test_audit_dolt_commit_created():
-    """After audit INSERT, DOLT_LOG() shows a new commit with the tool name."""
-    reviewer_secret = os.environ["CODE_REVIEWER_SECRET"]
-    token = get_token("code-reviewer", reviewer_secret)
-    invoke_tool(token, "git_diff_stub__git_diff", {"diff_text": "dolt commit test"})
+    """After /audit, DOLT_LOG() shows a new commit with the tool name."""
+    token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
+    post_audit(token, "git_diff_stub__git_diff")
+    time.sleep(1)
 
     conn = get_dolt_conn()
     try:
@@ -231,7 +237,6 @@ def test_audit_dolt_commit_created():
             cur.execute("SELECT message FROM dolt_log LIMIT 5")
             rows = cur.fetchall()
         messages = [r[0] for r in rows]
-        # At least one commit message should mention "audit:"
         assert any("audit:" in msg for msg in messages), (
             f"No audit commit found in dolt_log. Messages: {messages}"
         )
@@ -242,9 +247,9 @@ def test_audit_dolt_commit_created():
 @pytest.mark.integration
 def test_audit_dolt_history_queryable():
     """SELECT * FROM dolt_diff_audit_log returns at least one row after a commit."""
-    reviewer_secret = os.environ["CODE_REVIEWER_SECRET"]
-    token = get_token("code-reviewer", reviewer_secret)
-    invoke_tool(token, "git_diff_stub__git_diff", {"diff_text": "history queryable test"})
+    token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
+    post_audit(token, "git_diff_stub__git_diff")
+    time.sleep(1)
 
     conn = get_dolt_conn()
     try:
@@ -304,7 +309,7 @@ def test_opa_deny_cross_role():
 
 @pytest.mark.integration
 def test_token_expiry():
-    """Forge a JWT with exp in the past; governance returns 401."""
+    """Forge a JWT with exp in the past; governance /check returns 401."""
     jwt_secret = os.environ.get("JWT_SECRET", "dev-jwt-secret-change-in-prod")
     expired = jwt.encode(
         {
@@ -316,5 +321,5 @@ def test_token_expiry():
         jwt_secret,
         algorithm="HS256",
     )
-    resp = invoke_tool(expired, "git_diff_stub__git_diff", {"diff_text": "expiry test"})
+    resp = check_policy(expired, "git_diff_stub__git_diff")
     assert resp.status_code == 401

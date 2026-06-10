@@ -396,7 +396,6 @@ dependencies = [
     { name = "pyjwt" },
     { name = "pymysql" },
     { name = "python-multipart" },
-    { name = "redis" },
     { name = "uvicorn" },
 ]
 
@@ -408,7 +407,6 @@ requires-dist = [
     { name = "pyjwt", specifier = ">=2.8" },
     { name = "pymysql", specifier = ">=1.1" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "redis", specifier = ">=5.0" },
     { name = "uvicorn", specifier = ">=0.27" },
 ]
 

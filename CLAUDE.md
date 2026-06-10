@@ -62,39 +62,42 @@ make requirements
 
 Never hand-edit a service `requirements.txt` — it is always regenerated from the lockfile.
 
-## Request flow (Phase 1)
+## Request flow (Phase 6+)
 
 ```
 Agent / GatewayClient
-    → POST /api/v0/tools/invoke   (governance :8090)
-        → validate JWT
-        → POST /v1/data/harness/allow   (OPA :8181)
-        → INSERT audit_log + CALL DOLT_COMMIT   (Dolt :3306)
-        → POST /api/v0/tools/invoke   (MCPJungle :8080)
-            → MCP server (architect-stub :9004 / sre-stub :9005 / etc.)
+    → POST /check          (governance :8090 — OPA policy decision)
+    → POST /api/v0/tools/invoke   (MCPJungle :8080 or CF :4444 — direct)
+        → MCP server (architect-stub :9004 / sre-stub :9005 / etc.)
+    → POST /audit          (governance :8090 — async Dolt write, fire-and-forget)
 ```
 
-Claude Code connects to MCPJungle at `:8080/mcp` directly — governance is for agent-to-agent calls only.
+Governance is no longer in the forwarding path. GatewayClient calls the gateway (MCPJungle or ContextForge) directly, with governance providing policy checks and audit as a sidecar.
+
+Claude Code connects to MCPJungle at `:8080/mcp` directly.
 
 ## Governance service (`:8090`)
 
 FastAPI app at `services/governance/server.py`. Three responsibilities:
 
 1. **OAuth 2.1 client credentials** — `POST /oauth/token` (form body). Three clients: `architect`, `code-reviewer`, `sre`. Issues HS256 JWTs with 15-min TTL, signed with `JWT_SECRET`.
-2. **OPA policy enforcement** — calls `POST /v1/data/harness/allow` with `{"input": {"agent_role": "...", "tool_name": "..."}}` before forwarding. Returns 403 if `result != true`.
-3. **Dolt audit** — `INSERT INTO audit_log` then `CALL DOLT_COMMIT('-Am', 'audit: <tool_name>')` after every call (allow or deny).
+2. **OPA policy check** — `POST /check` validates a token and calls OPA. Returns 200 `{"allowed": true, ...}` or 403.
+3. **Dolt audit** — `POST /audit` accepts an audit record and writes to Dolt asynchronously (202 response). `CALL DOLT_COMMIT` per write.
 
-Key env vars: `JWT_SECRET`, `MCPJUNGLE_INTERNAL_URL` (internal docker hostname), `OPA_URL`, `DOLT_HOST/PORT/USER/PASSWORD`.
+Rate limiting is delegated to the gateway (ContextForge natively). Governance does not rate-limit.
 
-## GatewayClient — OAuth token handling
+Key env vars: `JWT_SECRET`, `OPA_URL`, `DOLT_HOST/PORT/USER/PASSWORD`.
 
-`GatewayClient` in `packages/harness-gateway/harness_gateway/client.py` auto-fetches bearer tokens:
+## GatewayClient — split gateway + governance
 
-- `_get_token()` posts to `{base_url}/oauth/token` with `client_id` + `client_secret`
-- Token is cached until 30s before expiry
-- Returns `None` gracefully if governance returns 404 (e.g. running against raw MCPJungle)
-- `call_tool()` adds `Authorization: Bearer <token>` when a token is available
-- 401 responses raise `ToolAccessDenied`
+`GatewayClient` in `packages/harness-gateway/harness_gateway/client.py`:
+
+- `gateway_url` — direct tool invocation (MCPJungle `:8080` or CF `:4444`)
+- `governance_url` — policy check + audit sidecar (governance `:8090`); optional
+- When `governance_url` is set: calls `POST /check` before invoking, fires `POST /audit` after (async background task)
+- When `governance_url` is None: legacy proxy mode (gateway_url is the governance proxy)
+- `gateway_backend="contextforge"` enables CF's JSON-RPC call format + CF JWT auth
+- 401/403 responses raise `ToolAccessDenied`
 
 ## What MCPJungle actually does (free tier)
 
@@ -303,11 +306,9 @@ ContextForge (`ghcr.io/ibm/mcp-context-forge:latest`) runs on port 4444 as an al
 - **Tool name mapping**: `architect_stub__codebase_search` → `architect-stub-codebase-search` (replace `__` and `_` with `-`).
 - **Virtual server UUID**: discovered at runtime by `ContextForgeGatewayClient` via `GET /servers` matching by name. `toolCount=0` on gateway registration is normal — tools are discovered asynchronously.
 
-## Rate limiting (Phase 5)
+## Rate limiting (Phase 6+)
 
-Redis sliding-window counter keyed by `rl:{agent_sub}:{minute_bucket}`. `RATE_LIMIT_PER_MINUTE=20` in `.env` for the full test suite.
-
-**Test isolation**: `test_rate_limit_tool_calls` generates a fresh JWT with a unique `sub` UUID so it never shares a bucket with Phase 1–4 tests. Governance validates the JWT signature but does not check that `sub` is a registered client — any signed JWT with a valid `role` claim works.
+Rate limiting is now delegated to the gateway (ContextForge natively). Governance no longer rate-limits — the old Redis sliding-window counter was removed. `test_governance_no_rate_limit` verifies governance returns no 429s regardless of call volume.
 
 ## Token budget (Phase 5)
 
@@ -320,4 +321,4 @@ make monitoring-up   # starts prometheus:9090 and grafana:3000 (monitoring profi
 # Grafana: admin/admin — "AI Harness — Cost per Agent Role" dashboard is pre-provisioned
 ```
 
-Governance exposes `GET /metrics`. Metrics: `harness_tool_calls_total`, `harness_tool_call_latency_ms`, `harness_rate_limit_rejections_total`.
+Governance exposes `GET /metrics`. Metrics: `harness_tool_calls_total`, `harness_tool_call_latency_ms`. (`harness_rate_limit_rejections_total` was removed — rate limiting delegated to CF.)

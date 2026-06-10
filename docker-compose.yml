@@ -94,7 +94,8 @@ services:
       dockerfile: services/review_server/Dockerfile
     ports: ["9003:9003"]
     environment:
-      MCPJUNGLE_URL: http://governance:8090
+      MCPJUNGLE_URL: http://mcpjungle:8080
+      GOVERNANCE_URL: http://governance:8090
       OLLAMA_HOST: http://host.docker.internal:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:7b}
       OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-8192}
@@ -191,7 +192,6 @@ services:
     ports: ["8090:8090"]
     environment:
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-prod-xyz}
-      MCPJUNGLE_INTERNAL_URL: http://mcpjungle:8080
       OPA_URL: http://opa:8181
       CODE_REVIEWER_SECRET: ${CODE_REVIEWER_SECRET}
       ARCHITECT_SECRET: ${ARCHITECT_SECRET:-architect-secret}
@@ -201,21 +201,10 @@ services:
       DOLT_USER: root
       DOLT_PASSWORD: root
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      REDIS_URL: redis://redis:6379
-      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-60}
-      GATEWAY_BACKEND: ${GATEWAY_BACKEND:-mcpjungle}
-      CF_URL: http://contextforge:4444
-      CF_JWT_SECRET: ${CF_JWT_SECRET:-cf-dev-secret-key-at-least-32-bytes-long}
-      CF_ADMIN_EMAIL: ${CF_ADMIN_EMAIL:-admin@harness.local}
-      CF_SERVER_NAME: ${CF_SERVER_NAME:-harness_all}
     depends_on:
-      mcpjungle:
-        condition: service_healthy
       opa:
         condition: service_started
       dolt:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',8090)); s.close()\""]

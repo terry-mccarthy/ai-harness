@@ -88,6 +88,7 @@ async def review_diff(
     """
     gateway = GatewayClient(
         gateway_url=os.environ["MCPJUNGLE_URL"],
+        governance_url=os.environ.get("GOVERNANCE_URL"),
         client_id="code-reviewer",
         client_secret=os.environ.get("CODE_REVIEWER_SECRET", ""),
     )

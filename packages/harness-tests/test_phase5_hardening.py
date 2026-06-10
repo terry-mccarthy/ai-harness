@@ -300,45 +300,35 @@ async def test_token_budget_enforced():
 
 
 # ---------------------------------------------------------------------------
-# Slice 5 — Rate limiting: N+1 tool calls returns 429
+# Slice 5 — Rate limiting: governance no longer rate-limits (delegated to CF)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
-def test_rate_limit_tool_calls():
-    """An agent making more than RATE_LIMIT_PER_MINUTE tool calls in one
-    minute must receive HTTP 429 on the excess calls.
-
-    Uses a direct JWT with a unique sub so this test's bucket never collides
-    with other integration tests that share the same client_id.
-    """
+def test_governance_no_rate_limit():
+    """Governance /check must not rate-limit repeated calls — that concern
+    belongs to the gateway (ContextForge).  Repeated /check calls should
+    all return 200 or 403, never 429."""
     import jwt as pyjwt
 
     jwt_secret = os.environ.get("JWT_SECRET", "dev-jwt-secret-change-in-prod-xyz")
-    limit = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "5"))
-    unique_sub = f"test-ratelimit-{uuid.uuid4()}"
     now = int(time.time())
     token = pyjwt.encode(
-        {"sub": unique_sub, "role": "architect", "iat": now, "exp": now + 300},
+        {"sub": f"test-noratelimit-{uuid.uuid4()}", "role": "architect", "iat": now, "exp": now + 300},
         jwt_secret,
         algorithm="HS256",
     )
 
-    last_status = None
-    for i in range(limit + 1):
+    for i in range(10):
         resp = httpx.post(
-            f"{GOVERNANCE_URL}/api/v0/tools/invoke",
-            json={"name": "architect_stub__codebase_search", "query": f"rl-test-{i}"},
+            f"{GOVERNANCE_URL}/check",
+            json={"tool_name": "architect_stub__codebase_search"},
             headers={"Authorization": f"Bearer {token}"},
-            timeout=15.0,
+            timeout=10.0,
         )
-        last_status = resp.status_code
-        if resp.status_code == 429:
-            break
-
-    assert last_status == 429, (
-        f"Expected 429 after {limit + 1} calls, last status was {last_status}"
-    )
+        assert resp.status_code != 429, (
+            f"Governance unexpectedly rate-limited on call {i + 1}: {resp.status_code}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -376,27 +366,28 @@ def test_contextforge_tool_group_parity():
 
 
 @pytest.mark.integration
-def test_contextforge_audit_log_parity():
-    """When governance is in contextforge backend mode, audit rows are still
-    written to Dolt with the same schema as the MCPJungle backend."""
-    # Governance with CF backend writes audit rows through the same _write_audit
-    # path regardless of which upstream is used. This test calls governance
-    # configured with GATEWAY_BACKEND=contextforge and verifies audit parity.
-    gov_cf_url = os.environ.get("GOVERNANCE_CF_URL", f"{GOVERNANCE_URL}")
+def test_audit_endpoint_writes_dolt():
+    """POST /audit writes a row to Dolt regardless of which gateway backend is
+    used for the actual tool call — the audit path is now decoupled from
+    forwarding."""
+    import time as _time
+
     token = get_token("architect", ARCHITECT_SECRET)
-    before_ts = int(time.time() * 1000)
+    before_ts = int(_time.time() * 1000)
 
     resp = httpx.post(
-        f"{gov_cf_url}/api/v0/tools/invoke",
-        json={"name": "architect_stub__codebase_search", "query": "cf-parity-test"},
-        headers={
-            "Authorization": f"Bearer {token}",
-            "X-Gateway-Backend": "contextforge",
+        f"{GOVERNANCE_URL}/audit",
+        json={
+            "tool_name": "architect_stub__codebase_search",
+            "decision": "allow",
+            "latency_ms": 42,
         },
-        timeout=30.0,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10.0,
     )
-    # Accept 200 (CF worked) or 503 (CF not configured) — we only care about audit
-    assert resp.status_code in (200, 503, 502), f"Unexpected status {resp.status_code}"
+    assert resp.status_code == 202, f"Expected 202, got {resp.status_code}: {resp.text}"
+
+    _time.sleep(1)  # background task flush
 
     conn = get_dolt_conn()
     try:
@@ -407,37 +398,39 @@ def test_contextforge_audit_log_parity():
                 (before_ts,),
             )
             row = cur.fetchone()
-        assert row is not None, "No audit row written for ContextForge backend call"
+        assert row is not None, "No audit row written"
         tool_name, decision, agent_id = row
         assert tool_name == "architect_stub__codebase_search"
-        assert decision in ("allow", "deny")
+        assert decision == "allow"
         assert agent_id == "architect"
     finally:
         conn.close()
 
 
 # ---------------------------------------------------------------------------
-# Slice 6c — ContextForge: feature flag rollback to MCPJungle
+# Slice 6c — Policy check stays consistent across gateway backends
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
-def test_gateway_rollback():
-    """Flipping GATEWAY_BACKEND back to mcpjungle (the default) must leave all
-    Phase 1 tool calls working — rollback is safe and transparent."""
-    # Governance defaults to MCPJungle backend. Confirm Phase 1 tools still work.
+def test_policy_check_consistent():
+    """governance /check returns consistent allow/deny decisions regardless of
+    which downstream gateway (MCPJungle or CF) will service the call."""
     token = get_token("architect", ARCHITECT_SECRET)
 
-    resp = httpx.post(
-        f"{GOVERNANCE_URL}/api/v0/tools/invoke",
-        json={"name": "architect_stub__codebase_search", "query": "rollback-test"},
+    allowed_resp = httpx.post(
+        f"{GOVERNANCE_URL}/check",
+        json={"tool_name": "architect_stub__codebase_search"},
         headers={"Authorization": f"Bearer {token}"},
-        timeout=30.0,
+        timeout=10.0,
     )
-    assert resp.status_code == 200, (
-        f"MCPJungle rollback failed: {resp.status_code} — {resp.text}"
+    assert allowed_resp.status_code == 200
+    assert allowed_resp.json().get("allowed") is True
+
+    denied_resp = httpx.post(
+        f"{GOVERNANCE_URL}/check",
+        json={"tool_name": "sre_stub__shell_exec"},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10.0,
     )
-    data = resp.json()
-    assert "content" in data or "result" in data, (
-        f"Unexpected response shape after rollback: {data}"
-    )
+    assert denied_resp.status_code == 403

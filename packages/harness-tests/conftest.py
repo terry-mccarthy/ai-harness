@@ -11,13 +11,14 @@ from harness_gateway.client import GatewayClient
 from harness_agents.reviewer import CodeReviewerAgent
 
 GOVERNANCE_URL = os.environ.get("GOVERNANCE_URL", "http://localhost:8090")
+MCPJUNGLE_URL = os.environ.get("MCPJUNGLE_URL", "http://localhost:8080")
 
 
 @pytest.fixture
 def gateway_client():
-    url = os.environ.get("MCPJUNGLE_URL", GOVERNANCE_URL)
     return GatewayClient(
-        gateway_url=url,
+        gateway_url=MCPJUNGLE_URL,
+        governance_url=GOVERNANCE_URL,
         client_id="code-reviewer",
         client_secret=os.environ["CODE_REVIEWER_SECRET"],
     )
