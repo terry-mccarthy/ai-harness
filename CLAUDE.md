@@ -8,6 +8,7 @@ These rules apply to every phase. Follow them without being asked.
 Before declaring a phase done, update:
 - `README.md` — stack section, test count, config table, project layout
 - `CLAUDE.md` — any new gotchas, changed startup commands, updated flow description
+- `ARCHITECTURE.md` — the current architecture and ADRs. 
 - `PROGRESS.md` — tick off passing tests and DoD items, note any divergences from `spec-full.md`
 
 **2. Document gotchas immediately, not at end-of-phase.**
@@ -18,6 +19,8 @@ When the implementation departs from `spec-full.md` (deliberate skip, pragmatic 
 
 **4. Red before green.**
 Write the test file first. Run it, confirm it fails for the right reason, then implement. A test that was never red proves nothing.
+
+**5. Code health**
 
 ---
 
@@ -280,3 +283,39 @@ MCPJungle exposes itself as an MCP server at `http://localhost:8080/mcp`. Add to
 ```
 
 This gives Claude Code access to all registered tools, including `review_server__review_diff`.
+
+## ContextForge gateway (Phase 5)
+
+ContextForge (`ghcr.io/ibm/mcp-context-forge:latest`) runs on port 4444 as an alternative to MCPJungle.
+
+**Setup flow:**
+1. `docker compose up -d contextforge` — waits for health check
+2. `docker compose up setup-contextforge` — registers all stubs + creates `harness_all` virtual server
+3. Set `GATEWAY_BACKEND=contextforge` in governance to route through ContextForge
+
+**Key gotchas:**
+
+- **Transport must be `STREAMABLEHTTP` (uppercase)** when registering a gateway. `streamablehttp` (lowercase) returns 422. FastMCP stubs use POST-based streamable HTTP; ContextForge sends `GET /mcp` by default (SSE) which returns 400 from FastMCP.
+- **SSRF protection blocks Docker internal hostnames** by default. Must set `SSRF_ALLOW_PRIVATE_NETWORKS=true` and `SSRF_ALLOW_LOCALHOST=true` in the ContextForge container env.
+- **JWT format for ContextForge API calls** requires: `sub`, `preferred_username`, `iss=mcpgateway`, `aud=mcpgateway-api`, `jti` (UUID), `exp`. Signed with `CF_JWT_SECRET`. `create_jwt_token` in ContextForge is async.
+- **Tool name mapping**: `architect_stub__codebase_search` → `architect-stub-codebase-search` (replace `__` and `_` with `-`).
+- **Virtual server UUID**: discovered at runtime by `ContextForgeGatewayClient` via `GET /servers` matching by name. `toolCount=0` on gateway registration is normal — tools are discovered asynchronously.
+
+## Rate limiting (Phase 5)
+
+Redis sliding-window counter keyed by `rl:{agent_sub}:{minute_bucket}`. `RATE_LIMIT_PER_MINUTE=20` in `.env` for the full test suite.
+
+**Test isolation**: `test_rate_limit_tool_calls` generates a fresh JWT with a unique `sub` UUID so it never shares a bucket with Phase 1–4 tests. Governance validates the JWT signature but does not check that `sub` is a registered client — any signed JWT with a valid `role` claim works.
+
+## Token budget (Phase 5)
+
+`HarnessState` now has `tokens_used: int` and `token_budget: int | None`. Budget check fires in `run_agent_node` — if `tokens_used >= token_budget`, returns `error.code = "budget_exceeded"`. Existing tests pass because they don't set `token_budget` (`.get()` defaults to `None` = unlimited).
+
+## Monitoring stack (Phase 5)
+
+```bash
+make monitoring-up   # starts prometheus:9090 and grafana:3000 (monitoring profile)
+# Grafana: admin/admin — "AI Harness — Cost per Agent Role" dashboard is pre-provisioned
+```
+
+Governance exposes `GET /metrics`. Metrics: `harness_tool_calls_total`, `harness_tool_call_latency_ms`, `harness_rate_limit_rejections_total`.

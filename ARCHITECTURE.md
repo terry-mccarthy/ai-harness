@@ -142,17 +142,25 @@ Every tool call the agent makes produces:
 
 ```
 packages/
-  harness-gateway/   — GatewayClient: JWT auth + HTTP calls to governance
+  harness-gateway/   — GatewayClient + ContextForgeGatewayClient
   harness-agents/    — CodeReviewerAgent + AgentState TypedDict + output schema
   harness-memory/    — PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker
   harness-supervisor/ — LangGraph supervisor orchestration, graph nodes, approval tokens
-  harness-tests/     — pytest integration tests (69 tests across 4 test files)
+  harness-tests/     — pytest integration tests (77 tests across 5 test files + load test)
 
 services/
-  governance/        — OAuth 2.1 token issuance + OPA enforcement + Dolt audit
+  governance/        — OAuth 2.1 + OPA + Redis rate limiter + Dolt audit + /metrics
+  contextforge_setup/ — init script: registers MCP stubs with ContextForge, creates virtual server
+  grafana/           — provisioned cost-per-role dashboard
+  prometheus/        — scrape config for governance /metrics
   dolt/              — Dolt init: audit_log + formulas + formula_pours + seed data
   postgres/          — PostgreSQL init: enables pgvector extension
   review_server/     — FastMCP server wrapping CodeReviewerAgent
+
+security/
+  owasp-review.md    — OWASP Agentic AI Top 10 review
+
+docs/runbooks/       — 4 operational runbooks
 ```
 
 Dependencies: `harness-tests` → `harness-agents` → `harness-gateway`; `harness-memory`
@@ -449,6 +457,7 @@ suggestions — violating them breaks the system's core guarantees.
 | 2     | `test_phase2_memory.py`     | 27    | Checkpointer, memory store (write/read/search/TTL/Redis), consolidation, formula store |
 | 3     | `test_phase3_agents.py`     | 4     | Agent protocol compliance, tool calls via gateway, shell_exec gating    |
 | 4     | `test_phase4_supervisor.py` | 12    | LangGraph orchestration (classify/route/formula/human_gate/checkpoint), E2E task flows |
+| 5     | `test_phase5_hardening.py`  | 8     | OWASP mitigations, OTel cost tags, token budget, rate limiting, ContextForge parity     |
 
 ---
 
@@ -472,3 +481,7 @@ suggestions — violating them breaks the system's core guarantees.
 | 0014 | FakeEmbedder for unit tests — topic-based deterministic vectors replace real Ollama embeddings in clustering tests, eliminating flakiness from baseline similarity variance | Accepted |
 | 0015 | MockLLMProvider + SequentialMockLLMProvider for agent testing — deterministic responses replace real model calls; SequentialMockLLMProvider handles multi-turn flows (approve-required then approve-granted) | Accepted |
 | 0016 | OTel spans emitted from all supervisor nodes — observability without coupling to logging infrastructure; enables distributed tracing of task classification → formula → agent execution | Accepted |
+| 0017 | ContextForge as production MCP gateway (IBM `ghcr.io/ibm/mcp-context-forge`) — richer plugin ecosystem and multi-region federation vs MCPJungle free tier; GATEWAY_BACKEND feature flag enables zero-downtime migration and rollback | Accepted |
+| 0018 | Redis sliding-window rate limiter in governance — per-agent-sub per-minute counter; rate limit tests use unique JWT subs to avoid bucket collisions with other integration tests | Accepted |
+| 0019 | Token budget via HarnessState fields (`tokens_used`, `token_budget`) — checked in run_agent_node before calling agent; graph exits with budget_exceeded error; no invasive changes to agent internals | Accepted |
+| 0020 | Prometheus /metrics on governance + Grafana behind docker-compose monitoring profile — cost attribution per agent_role visible without external observability infra; not started by default to keep `docker compose up` lightweight | Accepted |

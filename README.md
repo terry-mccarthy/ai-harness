@@ -1,6 +1,6 @@
 # AI Harness
 
-A governed, self-learning agent harness. The current milestone exposes a code-review agent with structured findings; future phases add multi-agent orchestration and persistent memory. Every tool call routes through a governance layer: OAuth 2.1 auth, OPA policy enforcement, and a tamper-evident Dolt audit log.
+A governed, self-learning agent harness with production hardening. Every tool call routes through a governance layer: OAuth 2.1 auth, OPA policy enforcement, Redis rate limiting, and a tamper-evident Dolt audit log. Supports MCPJungle and ContextForge as MCP gateway backends with a feature-flag rollback.
 
 ## What it does
 
@@ -40,6 +40,8 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 - **architect-stub** — stub MCP server for architect-role tools (`codebase_search`, `adr_read`, `adr_write`, `diagram_gen`)
 - **sre-stub** — stub MCP server for SRE-role tools (`observability_query`, `runbook_read`, `log_search`, `shell_exec`)
 - **review-server** — FastMCP service wrapping the full code-reviewer agent; callable from Claude Code
+- **ContextForge** (`ghcr.io/ibm/mcp-context-forge`, `:4444`) — production MCP gateway; alternative to MCPJungle, enabled via `GATEWAY_BACKEND=contextforge`
+- **Prometheus + Grafana** — optional monitoring stack (`make monitoring-up`); governance exposes `/metrics` with tool-call counters, latency histograms, and rate-limit rejections; pre-built cost-per-role dashboard at `localhost:3000`
 
 ## Quick start
 
@@ -81,6 +83,11 @@ All options are in `.env` (copy from `.env.example`):
 | `DOLT_HOST` | `localhost` | Dolt MySQL endpoint host |
 | `DOLT_PORT` | `3306` | Dolt MySQL endpoint port |
 | `LOG_LEVEL` | `INFO` | Log verbosity |
+| `RATE_LIMIT_PER_MINUTE` | `20` | Max tool calls per agent per minute; excess returns 429 |
+| `GATEWAY_BACKEND` | `mcpjungle` | Active MCP backend: `mcpjungle` or `contextforge` |
+| `CF_JWT_SECRET` | `cf-dev-secret-…` | JWT signing secret for ContextForge API calls |
+| `CF_ADMIN_EMAIL` | `admin@harness.local` | Admin subject claim in ContextForge JWTs |
+| `CF_SERVER_NAME` | `harness_all` | ContextForge virtual server name aggregating all tools |
 
 To enable debug logging without restarting the whole stack:
 
@@ -88,7 +95,7 @@ To enable debug logging without restarting the whole stack:
 LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server governance
 ```
 
-## Tests (69 total: all green)
+## Tests (77 total: all green)
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -194,6 +201,19 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 | `test_full_review_task_e2e` | Review task → final_response via code_reviewer |
 | `test_full_incident_task_no_shell_e2e` | Incident task → final_response without human gate |
 
+### Phase 5 — Production Hardening (8 tests)
+
+| Test | What it proves |
+|---|---|
+| `test_owasp_memory_write_requires_auth` | `POST /memory/write` returns 401 without a Bearer token |
+| `test_owasp_prompt_injection_blocked` | Injected instruction in a tool response cannot alter agent tool calls |
+| `test_cost_otel_tag_present` | Agent OTel spans carry `agent_role` and `thread_id` attributes |
+| `test_token_budget_enforced` | Graph terminates with `budget_exceeded` when `tokens_used ≥ token_budget` |
+| `test_rate_limit_tool_calls` | N+1 tool calls in one minute returns 429 from governance |
+| `test_contextforge_tool_group_parity` | Phase 1 tools work through the ContextForge gateway |
+| `test_contextforge_audit_log_parity` | Dolt audit rows are written regardless of which backend is active |
+| `test_gateway_rollback` | MCPJungle backend (the default) passes Phase 1 tests after CF migration |
+
 ## Connect Claude Code
 
 MCPJungle exposes itself as an MCP server. Add to Claude Code settings:
@@ -217,24 +237,23 @@ Claude Code will see all registered tools including `review_server__review_diff`
 
 ```
 ├── packages/
-│   ├── harness-gateway/   # GatewayClient — fetches OAuth tokens, calls governance
-│   ├── harness-agents/    # CodeReviewerAgent, AgentState, output schema
+│   ├── harness-gateway/   # GatewayClient + ContextForgeGatewayClient
+│   ├── harness-agents/    # CodeReviewerAgent, ArchitectAgent, SREAgent, LLM providers
 │   ├── harness-memory/    # PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker
-│   │   ├── harness_memory/
-│   │   │   ├── protocols.py      # MemoryStore, FormulaStore, ConsolidationWorker protocols
-│   │   │   ├── models.py         # Formula, ConsolidationResult dataclasses
-│   │   │   ├── memory_store.py   # asyncpg + Redis + Ollama embeddings
-│   │   │   ├── formula_store.py  # pymysql + Dolt commit-per-change
-│   │   │   └── consolidation.py  # cluster episodic→semantic, formula quality scoring
-│   │   └── alembic/              # schema migrations for memory_items
-│   └── harness-tests/     # Integration tests (Phases 0–2)
+│   ├── harness-supervisor/# LangGraph supervisor graph, HarnessState, OTel spans
+│   └── harness-tests/     # Integration tests (Phases 0–5) + load test
 ├── services/
-│   ├── governance/        # OAuth + OPA enforcement + Dolt audit (port 8090)
+│   ├── governance/        # OAuth + OPA + rate limiting + Dolt audit + /metrics (port 8090)
+│   ├── contextforge_setup/# Init script: registers MCP stubs with ContextForge, creates virtual server
+│   ├── grafana/           # Provisioned cost-per-role dashboard
+│   ├── prometheus/        # Prometheus scrape config (governance /metrics)
 │   ├── dolt/              # Dolt init — audit_log, formulas, formula_pours, seed data
 │   ├── postgres/          # postgres init — enables pgvector extension
 │   └── review_server/     # review_diff MCP tool (wraps the agent)
 ├── stub_servers/          # git_diff, run_linter, architect, sre MCP servers
 ├── policies/              # OPA policy (harness.rego)
+├── security/              # owasp-review.md — OWASP Agentic AI Top 10 review
+├── docs/runbooks/         # 4 operational runbooks (agent-unresponsive, policy-rollback, cost-spike, bad-formula)
 ├── docker-compose.yml
 └── .env.example
 ```
