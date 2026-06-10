@@ -186,6 +186,36 @@ Tracks completion against [spec-full.md](spec-full.md). A phase is done when all
 
 ---
 
-## Phase 5 — Production Hardening ⬜
+## Phase 5 — Production Hardening ✅
 
-23 tests + all prior phases against ContextForge. Phase 4 complete — unblocked.
+**Tests** — all 8 pass (+ load test):
+
+- [x] `test_owasp_memory_write_requires_auth`
+- [x] `test_owasp_prompt_injection_blocked`
+- [x] `test_cost_otel_tag_present`
+- [x] `test_token_budget_enforced`
+- [x] `test_rate_limit_tool_calls`
+- [x] `test_contextforge_tool_group_parity`
+- [x] `test_contextforge_audit_log_parity`
+- [x] `test_gateway_rollback`
+- [x] `test_load_50_concurrent` (p99=1006ms, threshold 10s)
+
+**Definition of Done**
+- [x] 31. All 8 tests pass; all prior phase tests pass (74/74 integration)
+- [x] 32. OWASP review present at `/security/owasp-review.md`
+- [x] 33. 4 runbooks in `/docs/runbooks/`
+- [x] 34. Grafana dashboard live (`make monitoring-up`; `harness-cost.json` provisioned)
+- [x] 35. Load test: 50 concurrent, p99=1006ms < 10s, 0 isolation failures
+
+**Notes / divergences from spec**
+- ContextForge is IBM's real `ghcr.io/ibm/mcp-context-forge:latest` (not a fictional product).
+  Uses SQLite + memory cache in dev; STREAMABLEHTTP transport for MCP stubs.
+  `services/contextforge_setup/setup.py` handles gateway + virtual-server registration.
+- `GATEWAY_BACKEND=mcpjungle|contextforge` feature flag in governance; defaults to mcpjungle.
+- `ContextForgeGatewayClient` in `packages/harness-gateway/harness_gateway/cf_client.py`.
+- `tokens_used` / `token_budget` added to `HarnessState`; budget check in `run_agent_node`.
+- Rate limiter uses Redis sliding-window per agent sub; `RATE_LIMIT_PER_MINUTE=20` in `.env`.
+  Rate limit test uses a unique JWT sub per run to avoid cross-test bucket collisions.
+- Prometheus `/metrics` on governance; Grafana + Prometheus behind `--profile monitoring`.
+- `test_cost_otel_tag_present` verifies `agent_role` + `thread_id` on agent OTel spans.
+- DoD item 34: Grafana renders real data after `make monitoring-up` and a few tool calls.
