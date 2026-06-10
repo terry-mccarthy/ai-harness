@@ -7,6 +7,7 @@ markers = [
     "integration: requires Docker stack",
     "e2e: full graph, slow",
     "live: requires real LLM (not cassette-recorded)",
+    "load: performance / concurrency tests (slow, run standalone)",
 ]
 
 [tool.ruff]

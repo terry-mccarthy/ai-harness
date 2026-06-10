@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e review consolidate alembic-upgrade
+.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e test-load review consolidate alembic-upgrade monitoring-up
 
 stack-up:
 	docker compose up -d --wait
@@ -32,6 +32,12 @@ test-integration:
 test-e2e:
 	.venv/bin/pytest packages/harness-tests/ -v -m e2e || \
 	{ ec=$$?; [ $$ec -eq 5 ] && echo "(no e2e tests collected)" && exit 0 || exit $$ec; }
+
+test-load:
+	.venv/bin/pytest packages/harness-tests/test_phase5_load.py -v -s -m load
+
+monitoring-up:
+	docker compose --profile monitoring up -d
 
 test: test-integration
 

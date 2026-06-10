@@ -15,3 +15,5 @@ class HarnessState(TypedDict):
     error:                   dict | None
     thread_id:               str
     memory_context:          list | None
+    tokens_used:             int             # running LLM token total for this thread
+    token_budget:            int | None      # None = unlimited; graph halts when exceeded

@@ -82,7 +82,27 @@ async def run_agent_node(state: HarnessState, agent, formula=None) -> dict:
     """Run a specialist agent node, optionally guided by formula steps."""
     tracer = trace.get_tracer(__name__)
     span_name = getattr(agent, "name", "agent")
-    with tracer.start_as_current_span(span_name):
+    with tracer.start_as_current_span(span_name) as span:
+        agent_role = getattr(agent, "name", "unknown")
+        thread_id = state.get("thread_id", "")
+        span.set_attribute("agent_role", agent_role)
+        span.set_attribute("thread_id", thread_id)
+
+        # Token budget check — terminate gracefully before running if over budget
+        token_budget = state.get("token_budget")
+        tokens_used = state.get("tokens_used", 0)
+        if token_budget is not None and tokens_used >= token_budget:
+            logger.warning(
+                "token_budget exceeded: used=%d budget=%d thread=%s",
+                tokens_used, token_budget, thread_id,
+            )
+            return {
+                "error": {
+                    "code": "budget_exceeded",
+                    "reason": f"token budget exhausted (used={tokens_used}, budget={token_budget})",
+                }
+            }
+
         from harness_agents.types import AgentState
 
         # If formula is given, prime the gateway mock to call steps in order

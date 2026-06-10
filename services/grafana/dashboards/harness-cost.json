@@ -1,0 +1,70 @@
+{
+  "title": "AI Harness — Cost per Agent Role",
+  "uid": "harness-cost",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "title": "Tool calls per role (last 1h)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (agent_role) (increase(harness_tool_calls_total{decision=\"allow\"}[5m]))",
+          "legendFormat": "{{agent_role}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Tool call latency p99 (ms)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (agent_role, le) (rate(harness_tool_call_latency_ms_bucket[5m])))",
+          "legendFormat": "{{agent_role}} p99"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Rate limit rejections",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "sum(increase(harness_rate_limit_rejections_total[1h]))",
+          "legendFormat": "Rejections (1h)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Policy denies",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 8},
+      "targets": [
+        {
+          "expr": "sum by (agent_role) (increase(harness_tool_calls_total{decision=\"deny\"}[1h]))",
+          "legendFormat": "{{agent_role}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Gateway backend in use",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 8},
+      "targets": [
+        {
+          "expr": "count by (backend) (harness_tool_calls_total)",
+          "legendFormat": "{{backend}}"
+        }
+      ]
+    }
+  ]
+}
