@@ -154,8 +154,8 @@ Tracks completion against [spec-full.md](spec-full.md). A phase is done when all
 
 ## Phase 4 — Agent Orchestration ✅
 
-**Tests** — all 22 pass (10 unit/E2E, 12 integration):
-- [x] 3 classify tests (design/review/incident)
+**Tests** — all 27 pass (15 unit/E2E, 12 integration):
+- [x] 8 classify tests (design/review/incident, LLM-primary routing, keyword fallback, unparseable default, think-block stripping)
 - [x] 3 route tests (architect/reviewer/sre)
 - [x] 1 error_handler test
 - [x] 3 formula_lookup tests (hit/miss/outcome)
@@ -178,6 +178,13 @@ Tracks completion against [spec-full.md](spec-full.md). A phase is done when all
 - Unit/E2E tests use MockLLMProvider + InMemorySaver (69 tests in 58s total)
 - Integration tests use PostgreSQL checkpointer + real Dolt
 - human_approval_token: X-Human-Approval-Token header, governance validates before OPA
+
+**Post-Phase 5 improvement (2026-06-10)**
+- `classify_node` is now LLM-primary with a structured JSON contract (`{"task_type": ...}`),
+  replacing the keyword-first heuristic that misrouted tasks with misleading surface keywords
+  (e.g. "Review the alert that fired" → review instead of incident).
+  Keywords remain as a fallback when the LLM is unreachable or returns unparseable output;
+  final default is `review`. Added 5 classifier tests (Phase 4 file: 22 → 27 tests).
 
 **Phase 2 Bug Fixes (completed after Phase 3/4)**
 - Fixed `formula_store.update_quality()`: check `cursor.rowcount > 0` before commit

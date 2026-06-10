@@ -249,6 +249,14 @@ docker compose build dolt && docker compose up -d --no-deps dolt
 
 ## Agent orchestration (Phases 3–4)
 
+### Task classification — LLM-primary with keyword fallback
+
+`classify_node` asks the LLM for structured JSON (`{"task_type": "design|review|incident"}`) and parses it leniently (`<think>` blocks stripped, first `{...}` extracted). Fallback order: LLM JSON → keyword heuristic → `review`. Keywords are a *fallback only* — do not reintroduce them as the primary path; surface keywords misroute (e.g. "Review the alert that fired" is an incident). Mocks in tests must return the JSON contract, not a bare word.
+
+### Stale pytest processes can deadlock the suite
+
+A hung/abandoned `pytest -m integration` process holds Dolt + PostgreSQL connections and can make a fresh run hang indefinitely (observed at `test_otel_spans_emitted`, which opens a real `DoltFormulaStore` connection). If the suite stalls, check `pgrep -f pytest` for zombies before debugging anything else.
+
 ### OllamaProvider timeout
 
 `OllamaProvider` now enforces a **120-second timeout** on embeddings and LLM calls. If Ollama is memory-starved (e.g., 32b model loaded while running large test suite), requests will timeout after 120s rather than hanging forever. The timeout prevents indefinite waits but will fail fast on slow systems.

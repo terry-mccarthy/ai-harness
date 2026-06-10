@@ -95,7 +95,7 @@ To enable debug logging without restarting the whole stack:
 LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server governance
 ```
 
-## Tests (77 total: all green)
+## Tests (82 total: all green)
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -174,13 +174,18 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 | `test_architect_denied_shell_exec` | Architect role is blocked from `shell_exec` by OPA |
 | `test_sre_shell_exec_blocked_without_approval` | SRE `shell_exec` blocked without `X-Human-Approval-Token` header |
 
-### Phase 4 — Agent Orchestration (22 tests)
+### Phase 4 — Agent Orchestration (27 tests)
 
 | Test | What it proves |
 |---|---|
-| `test_classify_design_task` | Keyword classifier → `task_type='design'` |
-| `test_classify_review_task` | Keyword classifier → `task_type='review'` |
-| `test_classify_incident_task` | Keyword classifier → `task_type='incident'` |
+| `test_classify_design_task` | LLM classifier → `task_type='design'` |
+| `test_classify_review_task` | LLM classifier → `task_type='review'` |
+| `test_classify_incident_task` | LLM classifier → `task_type='incident'` |
+| `test_classify_llm_routes_ambiguous_task` | Task with no routing keywords is classified by the LLM |
+| `test_classify_llm_overrides_keyword_match` | LLM verdict wins over a misleading surface keyword |
+| `test_classify_falls_back_to_keywords_when_llm_unavailable` | LLM outage degrades to keyword heuristic |
+| `test_classify_unparseable_llm_output_defaults_to_review` | Garbage LLM output + no keywords → safe default `review` |
+| `test_classify_strips_think_blocks` | Thinking-model `<think>…</think>` output parsed correctly |
 | `test_route_to_architect` | task_type='design' → architect node |
 | `test_route_to_reviewer` | task_type='review' → code_reviewer node |
 | `test_route_to_sre` | task_type='incident' → sre node |

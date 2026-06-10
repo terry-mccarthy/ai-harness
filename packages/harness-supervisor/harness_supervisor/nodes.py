@@ -12,9 +12,14 @@ from .state import HarnessState
 
 logger = logging.getLogger(__name__)
 
+_TASK_TYPES = ("design", "review", "incident")
+
 _CLASSIFY_PROMPT = (
-    "Classify the following task as exactly one word: 'design', 'review', or 'incident'.\n"
-    "Respond with only that single word, lowercase, no punctuation.\n\n"
+    "Classify the task into exactly one category:\n"
+    "- design: architecture, ADRs, schemas, planning new systems or components\n"
+    "- review: code review, diffs, pull requests, linting\n"
+    "- incident: alerts, outages, latency spikes, production errors, degraded behaviour\n\n"
+    'Respond with JSON only, no other text: {{"task_type": "<design|review|incident>"}}\n\n'
     "Task: {task}"
 )
 
@@ -33,19 +38,32 @@ def _classify_by_keywords(task: str) -> str | None:
     return None
 
 
+def _parse_task_type(raw: str) -> str | None:
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    match = re.search(r"\{.*?\}", raw, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        value = json.loads(match.group(0)).get("task_type")
+    except json.JSONDecodeError:
+        return None
+    return value if value in _TASK_TYPES else None
+
+
 async def classify_node(state: HarnessState, llm_provider: LLMProvider) -> dict:
     tracer = trace.get_tracer(__name__)
     with tracer.start_as_current_span("classify"):
-        # Fast keyword path — avoids LLM call for clear-cut inputs
-        task_type = _classify_by_keywords(state["task"])
-        if task_type is None:
-            prompt = _CLASSIFY_PROMPT.format(task=state["task"])
+        try:
             response = await llm_provider.chat([
                 {"role": "system", "content": "You are a task classifier."},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": _CLASSIFY_PROMPT.format(task=state["task"])},
             ])
-            raw = response.content.strip().lower().split()[0]
-            task_type = raw if raw in ("design", "review", "incident") else "review"
+            task_type = _parse_task_type(response.content)
+        except Exception:
+            logger.warning("classify: LLM call failed, falling back to keywords", exc_info=True)
+            task_type = None
+        if task_type is None:
+            task_type = _classify_by_keywords(state["task"]) or "review"
         logger.info("classify: %s → %s", state["task"][:40], task_type)
         return {"task_type": task_type}
 

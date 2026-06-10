@@ -109,7 +109,7 @@ async def test_classify_design_task():
     from harness_supervisor.nodes import classify_node
     from harness_supervisor.state import HarnessState
 
-    llm = MockLLMProvider("design")
+    llm = MockLLMProvider(json.dumps({"task_type": "design"}))
     state: HarnessState = _base_state("Design the auth service")
     result = await classify_node(state, llm_provider=llm)
     assert result["task_type"] == "design"
@@ -120,7 +120,7 @@ async def test_classify_review_task():
     from harness_supervisor.nodes import classify_node
     from harness_supervisor.state import HarnessState
 
-    llm = MockLLMProvider("review")
+    llm = MockLLMProvider(json.dumps({"task_type": "review"}))
     state: HarnessState = _base_state("Review this PR diff")
     result = await classify_node(state, llm_provider=llm)
     assert result["task_type"] == "review"
@@ -131,8 +131,63 @@ async def test_classify_incident_task():
     from harness_supervisor.nodes import classify_node
     from harness_supervisor.state import HarnessState
 
-    llm = MockLLMProvider("incident")
+    llm = MockLLMProvider(json.dumps({"task_type": "incident"}))
     state: HarnessState = _base_state("Alert fired: DB latency spike")
+    result = await classify_node(state, llm_provider=llm)
+    assert result["task_type"] == "incident"
+
+
+async def test_classify_llm_routes_ambiguous_task():
+    """Task with no routing keywords is classified by the LLM, not defaulted."""
+    from harness_supervisor.nodes import classify_node
+
+    llm = MockLLMProvider(json.dumps({"task_type": "incident"}))
+    state = _base_state("Users say the checkout page hangs for several seconds")
+    result = await classify_node(state, llm_provider=llm)
+    assert result["task_type"] == "incident"
+
+
+async def test_classify_llm_overrides_keyword_match():
+    """LLM verdict wins over a misleading surface keyword."""
+    from harness_supervisor.nodes import classify_node
+
+    llm = MockLLMProvider(json.dumps({"task_type": "incident"}))
+    state = _base_state("Review the alert that fired in production and find the cause")
+    result = await classify_node(state, llm_provider=llm)
+    assert result["task_type"] == "incident"
+
+
+async def test_classify_falls_back_to_keywords_when_llm_unavailable():
+    """LLM failure does not break routing — keyword heuristic takes over."""
+    from harness_supervisor.nodes import classify_node
+
+    class FailingLLMProvider:
+        async def chat(self, messages):
+            raise ConnectionError("ollama unreachable")
+
+    state = _base_state("Design the auth service schema")
+    result = await classify_node(state, llm_provider=FailingLLMProvider())
+    assert result["task_type"] == "design"
+
+
+async def test_classify_unparseable_llm_output_defaults_to_review():
+    """Garbage LLM output + no keywords → safe default 'review'."""
+    from harness_supervisor.nodes import classify_node
+
+    llm = MockLLMProvider("I think this might be about deployment, hard to say!")
+    state = _base_state("Do the thing we discussed yesterday")
+    result = await classify_node(state, llm_provider=llm)
+    assert result["task_type"] == "review"
+
+
+async def test_classify_strips_think_blocks():
+    """Thinking-model output (<think>…</think> before JSON) is parsed correctly."""
+    from harness_supervisor.nodes import classify_node
+
+    llm = MockLLMProvider(
+        '<think>{"task_type": "review"}? No — an outage.</think>\n{"task_type": "incident"}'
+    )
+    state = _base_state("Customers cannot log in since this morning")
     result = await classify_node(state, llm_provider=llm)
     assert result["task_type"] == "incident"
 
