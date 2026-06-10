@@ -7,9 +7,10 @@ import numpy as np
 from .models import ConsolidationResult
 
 # Cosine similarity threshold for merging two episodic items.
-# Code-oriented LLMs produce high baseline similarity (~0.86–0.94) for all text;
-# this threshold sits above that baseline so only truly similar items merge.
-CLUSTER_THRESHOLD = 0.95
+# nomic-embed-text produces clean separation: same-topic pairs ~0.82–0.93,
+# different-topic pairs ~0.35–0.62.  0.80 catches near-duplicates while
+# keeping genuinely different items apart.
+CLUSTER_THRESHOLD = 0.80
 # Minimum pours before quality scoring takes effect
 MIN_POURS = 10
 PROVEN_THRESHOLD = 0.80

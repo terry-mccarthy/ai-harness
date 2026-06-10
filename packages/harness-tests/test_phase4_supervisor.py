@@ -509,9 +509,15 @@ async def test_checkpoint_survives_human_pause():
         gateway=_mock_gateway({"observability_query": {}, "log_search": {}, "runbook_read": {}}),
         pg_dsn=PG_DSN,
     )
-    state = await supervisor2.aget_state(config)
-    assert state is not None
-    assert state.values.get("requires_human_approval") is True
+    try:
+        state = await supervisor2.aget_state(config)
+        assert state is not None
+        assert state.values.get("requires_human_approval") is True
+    finally:
+        # Close both pools — unclosed AsyncConnectionPool background tasks
+        # linger on the event loop and block the next test's synchronous I/O.
+        await supervisor.checkpointer.conn.close()
+        await supervisor2.checkpointer.conn.close()
 
 
 # ---------------------------------------------------------------------------

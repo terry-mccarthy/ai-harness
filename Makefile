@@ -48,7 +48,7 @@ import asyncio, os; \
 from harness_memory.memory_store import PostgresMemoryStore; \
 from harness_memory.formula_store import DoltFormulaStore; \
 from harness_memory.consolidation import ConsolidationWorker; \
-store = PostgresMemoryStore(os.environ['PG_DSN'], os.environ.get('REDIS_URL','redis://localhost:6379'), os.environ.get('OLLAMA_MODEL','qwen2.5:7b'), os.environ.get('OLLAMA_HOST','http://localhost:11434')); \
+store = PostgresMemoryStore(os.environ['PG_DSN'], os.environ.get('REDIS_URL','redis://localhost:6379'), os.environ.get('EMBED_MODEL','nomic-embed-text'), os.environ.get('OLLAMA_HOST','http://localhost:11434')); \
 fstore = DoltFormulaStore(host=os.environ.get('DOLT_HOST','localhost'), port=int(os.environ.get('DOLT_PORT','3306')), user='root', password='root', database='harness'); \
 worker = ConsolidationWorker(store=store, formula_store=fstore); \
 result = asyncio.run(worker.run_pass('sre')); \

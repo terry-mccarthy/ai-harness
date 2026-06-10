@@ -18,7 +18,7 @@ pytestmark = pytest.mark.integration
 PG_DSN = os.environ.get("PG_DSN", "postgresql://harness:harness@localhost:5432/harness")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-EMBED_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 DOLT_CONN = dict(
     host=os.environ.get("DOLT_HOST", "localhost"),
     port=int(os.environ.get("DOLT_PORT", "3306")),
@@ -310,23 +310,22 @@ async def test_semantic_memory_written_by_consolidation(memory_store, consolidat
     assert ep1["consolidated"] is True
 
 
-async def test_consolidation_clusters_similar_episodes(memory_store_with_fake_embedder, consolidation_worker_with_fake_embedder):
-    """Two episodic items with high cosine similarity are merged into one semantic item."""
-    await memory_store_with_fake_embedder.write(
+async def test_consolidation_clusters_similar_episodes(memory_store, consolidation_worker):
+    """Two near-duplicate episodic items (cosine sim ~0.84) are merged into one semantic item."""
+    await memory_store.write(
         "sre", "sim1",
         {"text": "Database connection pool exhausted causing slow queries"},
         memory_type="episodic",
     )
-    await memory_store_with_fake_embedder.write(
+    await memory_store.write(
         "sre", "sim2",
         {"text": "DB connections running out, queries are timing out"},
         memory_type="episodic",
     )
 
-    result = await consolidation_worker_with_fake_embedder.run_pass("sre")
+    result = await consolidation_worker.run_pass("sre")
 
-    semantic_items = await memory_store_with_fake_embedder._list_by_type("sre", "semantic")
-    # Two similar items should produce exactly one semantic item
+    semantic_items = await memory_store._list_by_type("sre", "semantic")
     assert len(semantic_items) == 1
     assert result.semantic_items_created == 1
 

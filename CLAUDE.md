@@ -238,7 +238,7 @@ Build context must be `.` (repo root), not the service subdirectory, so the `pac
 - **Memory store** (`PostgresMemoryStore`): auto-detects embedding dimension at `setup()` by calling Ollama. If the model changes between runs, the table is dropped and recreated. Dimension depends on model: `qwen2.5-coder:32b` → 5120, `qwen2.5:7b` → 3584.
 - **Formula store** (`DoltFormulaStore`): uses synchronous pymysql (consistent with governance). Commit hash retrieved via `SELECT commit_hash FROM dolt_log LIMIT 1` — `@@dolt_repo_head` does not exist in Dolt v1.x.
 
-**Embedding cosine similarity baseline**: code-oriented LLMs produce high baseline cosine similarity (~0.86–0.94) for all short natural-language text. The consolidation cluster threshold is 0.95 so only near-duplicate items merge.
+**Embedding model**: `nomic-embed-text` (768 dims, controlled by `EMBED_MODEL` env var) is used for all vector operations — separate from `OLLAMA_MODEL` which is the chat/LLM model. `nomic-embed-text` gives clean semantic separation: same-topic pairs score ~0.82–0.93, different-topic pairs ~0.35–0.62. The consolidation cluster threshold is 0.80.
 
 **Formula test isolation**: test formulas use `agent_role="test_sre"` to avoid interference with seed formulas (`agent_role="sre"`).
 
@@ -264,12 +264,6 @@ A hung/abandoned `pytest -m integration` process holds Dolt + PostgreSQL connect
 ### Embedding dimension caching
 
 `PostgresMemoryStore` caches the detected embedding dimension as a class variable (`_embed_dim_cache: dict[str, int]`) keyed by model name. The first `setup()` call to detect dimension still calls Ollama (unavoidable), but subsequent stores reuse the cached value instead of calling Ollama again. This eliminates ~19 redundant embed calls per 27-test Phase 2 run (from ~8 min down to ~9 sec).
-
-### FakeEmbedder for deterministic clustering tests
-
-Phase 2 clustering tests use `FakeEmbedder` (not real Ollama embeddings) for determinism. The embedder classifies text by topic (database-connection, deployment, etc.) and generates a deterministic unit vector per topic. Same topic → same vector → guaranteed 1.0 cosine similarity → clustering works reliably. Real embeddings are unpredictable (0.86–0.94 baseline) and won't reliably hit the 0.95 threshold.
-
-**Fixture**: `memory_store_with_fake_embedder` patches `PostgresMemoryStore._embed` to use `FakeEmbedder.embed()`. Tests that need real embeddings can use the regular `memory_store` fixture.
 
 ### Human approval token scoping
 

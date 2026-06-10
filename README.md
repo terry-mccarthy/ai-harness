@@ -70,7 +70,8 @@ All options are in `.env` (copy from `.env.example`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `OLLAMA_MODEL` | `qwen2.5-coder` | Model used by the reviewer agent |
+| `OLLAMA_MODEL` | `qwen2.5-coder` | LLM used by agents for chat/reasoning |
+| `EMBED_MODEL` | `nomic-embed-text` | Dedicated embedding model for semantic memory search (768 dims) |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint |
 | `MCPJUNGLE_URL` | `http://localhost:8090` | Governance service URL (agent tool calls route here) |
 | `GOVERNANCE_URL` | `http://localhost:8090` | Governance service URL (tests use this directly) |

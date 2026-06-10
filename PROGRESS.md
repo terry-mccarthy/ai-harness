@@ -110,9 +110,9 @@ Tracks completion against [spec-full.md](spec-full.md). A phase is done when all
 - [x] 18. Consolidation pass produces semantic items and marks source episodes consolidated=True
 
 **Notes / divergences from spec**
-- Embedding model: uses Ollama `/api/embed` with the configured `OLLAMA_MODEL` (default: `qwen2.5-coder:32b`, 5120 dims). pgvector dimension auto-detected at startup; table is recreated if model changes.
+- Embedding model: `nomic-embed-text` (768 dims, `EMBED_MODEL` env var) — separate from `OLLAMA_MODEL` (chat). pgvector dimension auto-detected at startup; table is recreated if model changes.
 - Formula lookup: TF-IDF keyword matching (not vector similarity) — sufficient for the test suite and avoids a second embedding index.
-- Consolidation cluster threshold: 0.95 cosine similarity. Code-oriented LLMs produce high baseline similarity (~0.86–0.94) for all short texts; this threshold sits above that baseline.
+- Consolidation cluster threshold: 0.80 cosine similarity. nomic-embed-text gives 0.82–0.93 for same-topic pairs and 0.35–0.62 for different-topic pairs.
 - Formula test formulas use `agent_role="test_sre"` to avoid interference with seed formulas (`agent_role="sre"`).
 - DoD item 12 (Redis <5ms p99 load test) not formally measured; hot-read path verified by cache_hits counter in tests.
 
