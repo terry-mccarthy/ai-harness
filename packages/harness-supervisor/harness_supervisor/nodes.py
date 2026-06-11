@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import uuid
+from pathlib import Path
 
 from opentelemetry import trace
 
@@ -12,16 +13,11 @@ from .state import HarnessState
 
 logger = logging.getLogger(__name__)
 
-_TASK_TYPES = ("design", "review", "incident")
+_PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", Path(__file__).resolve().parents[3] / "prompts"))
+_CLASSIFY_SYSTEM = (_PROMPTS_DIR / "classify.md").read_text()
+_SYNTHESISE_SYSTEM = (_PROMPTS_DIR / "synthesise.md").read_text()
 
-_CLASSIFY_PROMPT = (
-    "Classify the task into exactly one category:\n"
-    "- design: architecture, ADRs, schemas, planning new systems or components\n"
-    "- review: code review, diffs, pull requests, linting\n"
-    "- incident: alerts, outages, latency spikes, production errors, degraded behaviour\n\n"
-    'Respond with JSON only, no other text: {{"task_type": "<design|review|incident>"}}\n\n'
-    "Task: {task}"
-)
+_TASK_TYPES = ("design", "review", "incident")
 
 _KEYWORDS: dict[str, tuple] = {
     "design":   ("design", "architect", "adr", "schema", "blueprint"),
@@ -55,8 +51,8 @@ async def classify_node(state: HarnessState, llm_provider: LLMProvider) -> dict:
     with tracer.start_as_current_span("classify"):
         try:
             response = await llm_provider.chat([
-                {"role": "system", "content": "You are a task classifier."},
-                {"role": "user", "content": _CLASSIFY_PROMPT.format(task=state["task"])},
+                {"role": "system", "content": _CLASSIFY_SYSTEM},
+                {"role": "user", "content": state["task"]},
             ])
             task_type = _parse_task_type(response.content)
         except Exception:
@@ -157,8 +153,24 @@ async def synthesise_node(state: HarnessState, formula_store=None, llm_provider=
     tracer = trace.get_tracer(__name__)
     with tracer.start_as_current_span("synthesise"):
         output = state.get("agent_output") or {}
-        summary = output.get("summary") or output.get("likely_cause") or output.get("decision") or str(output)
-        final_response = f"[{state.get('active_agent', 'agent').upper()}] {summary}"
+
+        if llm_provider:
+            user_msg = (
+                f"Agent: {state.get('active_agent', 'agent')}\n"
+                f"Task: {state['task']}\n\n"
+                f"Structured output:\n{json.dumps(output, indent=2)}"
+            )
+            try:
+                resp = await llm_provider.chat([
+                    {"role": "system", "content": _SYNTHESISE_SYSTEM},
+                    {"role": "user", "content": user_msg},
+                ])
+                final_response = resp.content.strip()
+            except Exception:
+                logger.warning("synthesise: LLM call failed, falling back to summary field", exc_info=True)
+                final_response = _fallback_summary(state, output)
+        else:
+            final_response = _fallback_summary(state, output)
 
         # Record formula outcome if a formula was poured
         if formula_store and state.get("formula_id") and state.get("formula_instance_id"):
@@ -168,6 +180,11 @@ async def synthesise_node(state: HarnessState, formula_store=None, llm_provider=
                         state["formula_id"], success)
 
         return {"final_response": final_response}
+
+
+def _fallback_summary(state: HarnessState, output: dict) -> str:
+    summary = output.get("summary") or output.get("likely_cause") or output.get("decision") or str(output)
+    return f"[{state.get('active_agent', 'agent').upper()}] {summary}"
 
 
 async def propose_formula_node(state: HarnessState, formula_store) -> dict:
