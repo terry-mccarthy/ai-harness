@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -8,6 +9,7 @@ import time
 import httpx
 import jwt
 import pymysql
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Header, Request, Response
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
@@ -16,7 +18,35 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-JWT_SECRET = os.environ["JWT_SECRET"]
+# ---------------------------------------------------------------------------
+# RSA keypair — load from file (preferred) or inline PEM env var
+# ---------------------------------------------------------------------------
+
+_TEST_KEY_FINGERPRINT = "sha256:f51572658f267e254a18caf6d2320581aacfbaee028a2a875a8a47af4630ffb5"
+
+_key_file = os.environ.get("JWT_PRIVATE_KEY_FILE")
+if _key_file:
+    with open(_key_file, "rb") as _f:
+        _jwt_private_key_pem = _f.read()
+else:
+    _jwt_private_key_pem = os.environ["JWT_PRIVATE_KEY"].encode()
+
+_key_fingerprint = "sha256:" + hashlib.sha256(_jwt_private_key_pem).hexdigest()
+if _key_fingerprint == _TEST_KEY_FINGERPRINT and os.environ.get("ENV") != "test":
+    raise RuntimeError(
+        "Governance is configured with the committed test key. "
+        "Set ENV=test or supply a production key via JWT_PRIVATE_KEY_FILE."
+    )
+
+_private_key = load_pem_private_key(_jwt_private_key_pem, password=None)
+_public_key = _private_key.public_key()
+
+
+def _b64url(n: int) -> str:
+    byte_len = (n.bit_length() + 7) // 8
+    return base64.urlsafe_b64encode(n.to_bytes(byte_len, "big")).rstrip(b"=").decode()
+
+
 OPA_URL = os.environ.get("OPA_URL", "http://opa:8181")
 DOLT_HOST = os.environ.get("DOLT_HOST", "dolt")
 DOLT_PORT = int(os.environ.get("DOLT_PORT", "3306"))
@@ -61,7 +91,7 @@ def _decode_jwt(authorization: str | None) -> dict:
         raise HTTPException(401, "missing_token")
     raw_token = authorization[7:]
     try:
-        return jwt.decode(raw_token, JWT_SECRET, algorithms=["HS256"])
+        return jwt.decode(raw_token, _public_key, algorithms=["RS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "token_expired")
     except jwt.InvalidTokenError:
@@ -151,7 +181,7 @@ async def token(request: Request):
         "iat": now,
         "exp": now + TOKEN_TTL,
     }
-    access_token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    access_token = jwt.encode(payload, _private_key, algorithm="RS256")
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -230,6 +260,26 @@ async def audit(
         latency_ms,
     )
     return {}
+
+
+# ---------------------------------------------------------------------------
+# JWKS — public key for downstream verifiers
+# ---------------------------------------------------------------------------
+
+
+@app.get("/jwks")
+async def jwks():
+    pub = _public_key.public_numbers()
+    return {
+        "keys": [{
+            "kty": "RSA",
+            "use": "sig",
+            "alg": "RS256",
+            "kid": "1",
+            "n": _b64url(pub.n),
+            "e": _b64url(pub.e),
+        }]
+    }
 
 
 # ---------------------------------------------------------------------------

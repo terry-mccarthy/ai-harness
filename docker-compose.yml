@@ -190,8 +190,11 @@ services:
     build:
       context: ./services/governance
     ports: ["8090:8090"]
+    volumes:
+      - "./test-fixtures/jwt-test-key.pem:/run/secrets/jwt_private_key:ro"
     environment:
-      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-prod-xyz}
+      JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
+      ENV: test
       OPA_URL: http://opa:8181
       CODE_REVIEWER_SECRET: ${CODE_REVIEWER_SECRET}
       ARCHITECT_SECRET: ${ARCHITECT_SECRET:-architect-secret}

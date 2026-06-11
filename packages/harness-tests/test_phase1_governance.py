@@ -309,8 +309,10 @@ def test_opa_deny_cross_role():
 
 @pytest.mark.integration
 def test_token_expiry():
-    """Forge a JWT with exp in the past; governance /check returns 401."""
-    jwt_secret = os.environ.get("JWT_SECRET", "dev-jwt-secret-change-in-prod")
+    """Forge a JWT with exp in the past using the test private key; governance /check returns 401."""
+    import pathlib
+    key_path = pathlib.Path(__file__).parent.parent.parent / "test-fixtures" / "jwt-test-key.pem"
+    private_key = key_path.read_bytes()
     expired = jwt.encode(
         {
             "sub": "code-reviewer",
@@ -318,8 +320,8 @@ def test_token_expiry():
             "iat": int(time.time()) - 1000,
             "exp": int(time.time()) - 100,
         },
-        jwt_secret,
-        algorithm="HS256",
+        private_key,
+        algorithm="RS256",
     )
     resp = check_policy(expired, "git_diff_stub__git_diff")
     assert resp.status_code == 401
