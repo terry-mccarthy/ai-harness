@@ -1,0 +1,22 @@
+diff --git a/app/git_ops.py b/app/git_ops.py
+index 555eee..666fff 100644
+--- a/app/git_ops.py
++++ b/app/git_ops.py
+@@ -5,10 +5,10 @@ import subprocess
+
+ def get_branch_log(branch: str) -> str:
+-    result = subprocess.run(
+-        ["git", "log", "--oneline", "-20", branch],
+-        capture_output=True, text=True, check=True
+-    )
++    result = subprocess.run(
++        f"git log --oneline -20 {branch}",
++        shell=True, capture_output=True, text=True
++    )
+     return result.stdout
+
+ def run_tests(test_path: str) -> str:
+-    result = subprocess.run(["pytest", test_path, "-v"], capture_output=True, text=True)
++    cmd = "pytest " + test_path + " -v"
++    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+     return result.stdout

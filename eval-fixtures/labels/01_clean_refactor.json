@@ -1,0 +1,6 @@
+{
+  "description": "Clean refactoring — no security issues",
+  "verdict": "pass",
+  "must_flag": [],
+  "must_not_flag": ["sql injection", "shell injection", "credential"]
+}

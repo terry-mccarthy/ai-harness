@@ -1,0 +1,26 @@
+diff --git a/app/files.py b/app/files.py
+index 999iii..aaajjj 100644
+--- a/app/files.py
++++ b/app/files.py
+@@ -5,13 +5,11 @@ import os
+
+ BASE_DIR = "/var/app/uploads"
+
+-def read_user_file(filename: str) -> str:
+-    safe_name = os.path.basename(filename)
+-    safe_path = os.path.join(BASE_DIR, safe_name)
+-    if not safe_path.startswith(BASE_DIR):
+-        raise ValueError("invalid path")
+-    with open(safe_path) as f:
++def read_user_file(filename: str) -> str:
++    with open(f"/var/app/uploads/{filename}") as f:
+         return f.read()
+
+-def write_user_file(filename: str, content: str) -> None:
+-    safe_name = os.path.basename(filename)
+-    safe_path = os.path.join(BASE_DIR, safe_name)
+-    with open(safe_path, "w") as f:
++def write_user_file(filename: str, content: str) -> None:
++    path = "/var/app/uploads/" + filename
++    with open(path, "w") as f:
+         f.write(content)

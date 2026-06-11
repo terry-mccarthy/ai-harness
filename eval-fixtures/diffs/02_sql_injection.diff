@@ -1,0 +1,16 @@
+diff --git a/app/db.py b/app/db.py
+index 111aaa..222bbb 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -8,9 +8,9 @@ import sqlite3
+
+ def get_user(conn, username: str):
+-    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
++    cursor.execute(f"SELECT * FROM users WHERE username = '{username}'")
+     return cursor.fetchone()
+
+ def get_orders(conn, user_id: int, status: str):
+-    cursor.execute("SELECT * FROM orders WHERE user_id = ? AND status = ?", (user_id, status))
++    query = "SELECT * FROM orders WHERE user_id = " + str(user_id) + " AND status = '" + status + "'"
++    cursor.execute(query)
+     return cursor.fetchall()

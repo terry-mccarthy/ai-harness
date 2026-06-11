@@ -1,0 +1,8 @@
+{
+  "description": "Shell injection via shell=True with user-controlled input in subprocess calls",
+  "verdict": "fail",
+  "must_flag": [
+    {"pattern": "shell injection|command injection|shell=True|shell expansion", "min_severity": "CRITICAL"}
+  ],
+  "must_not_flag": []
+}

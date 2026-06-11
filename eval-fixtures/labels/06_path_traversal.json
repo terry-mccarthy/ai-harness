@@ -1,0 +1,8 @@
+{
+  "description": "Path traversal — sanitization removed, user-controlled filename used directly in open()",
+  "verdict": "fail",
+  "must_flag": [
+    {"pattern": "path traversal|directory traversal|basename|sanitiz|user.controlled", "min_severity": "CRITICAL"}
+  ],
+  "must_not_flag": []
+}

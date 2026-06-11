@@ -1,0 +1,8 @@
+{
+  "description": "SQL injection via f-string and string concatenation in queries",
+  "verdict": "fail",
+  "must_flag": [
+    {"pattern": "sql injection|sql query|string concatenation|parameterized", "min_severity": "CRITICAL"}
+  ],
+  "must_not_flag": []
+}

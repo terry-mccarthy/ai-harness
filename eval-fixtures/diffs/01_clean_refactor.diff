@@ -1,0 +1,29 @@
+diff --git a/app/utils.py b/app/utils.py
+index a1b2c3d..d4e5f6a 100644
+--- a/app/utils.py
++++ b/app/utils.py
+@@ -1,14 +1,10 @@
+-def get_user_display_name(user):
+-    first = user.get('first_name', '')
+-    last = user.get('last_name', '')
+-    if first and last:
+-        return first + ' ' + last
+-    elif first:
+-        return first
+-    elif last:
+-        return last
+-    return user.get('email', 'Unknown')
++def get_user_display_name(user: dict) -> str:
++    first = user.get("first_name", "")
++    last = user.get("last_name", "")
++    parts = [p for p in (first, last) if p]
++    return " ".join(parts) or user.get("email", "Unknown")
+
+
+ def format_timestamp(ts: float) -> str:
+@@ -16,8 +12,8 @@ def format_timestamp(ts: float) -> str:
+     from datetime import datetime, timezone
+-    dt = datetime.utcfromtimestamp(ts)
+-    return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
++    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
++    return dt.isoformat()

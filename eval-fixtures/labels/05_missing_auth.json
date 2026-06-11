@@ -1,0 +1,8 @@
+{
+  "description": "Auth and role decorators removed from admin endpoints",
+  "verdict": "fail",
+  "must_flag": [
+    {"pattern": "auth|authentication|authorization|unauthenticated|access control|role|enforce", "min_severity": "CRITICAL"}
+  ],
+  "must_not_flag": []
+}
