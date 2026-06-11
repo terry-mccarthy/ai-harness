@@ -28,7 +28,7 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 
 ## Stack
 
-- **Governance** — FastAPI service (`:8090`) that issues JWTs, enforces OPA policy, and writes tamper-evident audit rows to Dolt before forwarding to MCPJungle
+- **Governance** — FastAPI service (`:8090`) that issues RS256 JWTs, enforces OPA policy, and writes tamper-evident audit rows to Dolt; exposes `GET /jwks` for public key distribution
 - **MCPJungle** — MCP proxy that routes tool calls and exposes itself as an MCP server
 - **OPA** — policy engine; `policies/harness.rego` maps agent roles to allowed tools; enforced on every request
 - **Dolt** — git-versioned MySQL-compatible database; audit rows and formula versions are auto-committed so both logs are append-only and diffable
@@ -50,7 +50,8 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 ```bash
 # 1. Configure
 cp .env.example .env
-# edit .env — set CODE_REVIEWER_SECRET, JWT_SECRET, ARCHITECT_SECRET, SRE_SECRET
+# edit .env — set CODE_REVIEWER_SECRET, ARCHITECT_SECRET, SRE_SECRET
+# JWT_PRIVATE_KEY_FILE defaults to test-fixtures/jwt-test-key.pem (dev only; set ENV=test)
 
 # 2. Build and start the stack
 docker compose build git-diff-stub linter-stub architect-stub sre-stub review-server governance dolt
@@ -75,7 +76,7 @@ All options are in `.env` (copy from `.env.example`):
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint |
 | `MCPJUNGLE_URL` | `http://localhost:8090` | Governance service URL (agent tool calls route here) |
 | `GOVERNANCE_URL` | `http://localhost:8090` | Governance service URL (tests use this directly) |
-| `JWT_SECRET` | `dev-jwt-secret-change-in-prod` | HS256 signing key for JWTs — change in production |
+| `JWT_PRIVATE_KEY_FILE` | `test-fixtures/jwt-test-key.pem` | Path to PEM-encoded RSA private key for RS256 JWT signing. Set `ENV=test` when using the committed test key. In production, supply a real key and omit `ENV=test`. |
 | `CODE_REVIEWER_SECRET` | — | Client secret for the `code-reviewer` OAuth client |
 | `ARCHITECT_SECRET` | `architect-secret` | Client secret for the `architect` OAuth client |
 | `SRE_SECRET` | `sre-secret` | Client secret for the `sre` OAuth client |
@@ -84,7 +85,7 @@ All options are in `.env` (copy from `.env.example`):
 | `DOLT_HOST` | `localhost` | Dolt MySQL endpoint host |
 | `DOLT_PORT` | `3306` | Dolt MySQL endpoint port |
 | `LOG_LEVEL` | `INFO` | Log verbosity |
-| `RATE_LIMIT_PER_MINUTE` | `20` | Max tool calls per agent per minute; excess returns 429 |
+| `RATE_LIMIT_PER_MINUTE` | `20` | Rate limit delegated to ContextForge gateway; this value is kept for CF configuration |
 | `GATEWAY_BACKEND` | `mcpjungle` | Active MCP backend: `mcpjungle` or `contextforge` |
 | `CF_JWT_SECRET` | `cf-dev-secret-…` | JWT signing secret for ContextForge API calls |
 | `CF_ADMIN_EMAIL` | `admin@harness.local` | Admin subject claim in ContextForge JWTs |
@@ -96,7 +97,9 @@ To enable debug logging without restarting the whole stack:
 LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server governance
 ```
 
-## Tests (82 total: all green)
+## Tests
+
+### Integration suite (74 tests: all green) — `make test-integration`
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -220,6 +223,20 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 | `test_contextforge_audit_log_parity` | Dolt audit rows are written regardless of which backend is active |
 | `test_gateway_rollback` | MCPJungle backend (the default) passes Phase 1 tests after CF migration |
 
+### Eval suite (7 tests) — `pytest -m eval -v -s`
+
+Scores the `CodeReviewerAgent` against 6 labeled diffs with known security bugs (SQL injection, hardcoded secrets, shell injection, missing auth, path traversal, clean refactor). Uses a mock gateway — no Docker stack needed, only Ollama.
+
+| Test | What it proves |
+|---|---|
+| `test_reviewer_fixture[01_clean_refactor]` | No false-positive CRITICALs on a clean refactor |
+| `test_reviewer_fixture[02_sql_injection]` | Catches SQL injection (f-string + string concat in queries) |
+| `test_reviewer_fixture[03_hardcoded_secret]` | Catches hardcoded AWS credentials and database password |
+| `test_reviewer_fixture[04_shell_injection]` | Catches `shell=True` with user-controlled input |
+| `test_reviewer_fixture[05_missing_auth]` | Catches auth/role decorators removed from admin endpoints |
+| `test_reviewer_fixture[06_path_traversal]` | Catches user-controlled filename used directly in `open()` |
+| `test_reviewer_aggregate_score` | Asserts verdict accuracy ≥ 80% and recall ≥ 60% across all fixtures |
+
 ## Connect Claude Code
 
 MCPJungle exposes itself as an MCP server. Add to Claude Code settings:
@@ -247,9 +264,9 @@ Claude Code will see all registered tools including `review_server__review_diff`
 │   ├── harness-agents/    # CodeReviewerAgent, ArchitectAgent, SREAgent, LLM providers
 │   ├── harness-memory/    # PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker
 │   ├── harness-supervisor/# LangGraph supervisor graph, HarnessState, OTel spans
-│   └── harness-tests/     # Integration tests (Phases 0–5) + load test
+│   └── harness-tests/     # Integration tests (Phases 0–5) + load test + eval suite
 ├── services/
-│   ├── governance/        # OAuth + OPA + rate limiting + Dolt audit + /metrics (port 8090)
+│   ├── governance/        # OAuth (RS256) + OPA + Dolt audit + /metrics + /jwks (port 8090)
 │   ├── contextforge_setup/# Init script: registers MCP stubs with ContextForge, creates virtual server
 │   ├── grafana/           # Provisioned cost-per-role dashboard
 │   ├── prometheus/        # Prometheus scrape config (governance /metrics)
@@ -257,6 +274,9 @@ Claude Code will see all registered tools including `review_server__review_diff`
 │   ├── postgres/          # postgres init — enables pgvector extension
 │   └── review_server/     # review_diff MCP tool (wraps the agent)
 ├── stub_servers/          # git_diff, run_linter, architect, sre MCP servers
+├── prompts/               # LLM system prompts (classify.md, synthesise.md, code_reviewer.md, architect.md, sre.md)
+├── eval-fixtures/         # Labeled diffs for reviewer quality benchmarking (diffs/ + labels/)
+├── test-fixtures/         # Committed test RSA key (jwt-test-key.pem) — dev/CI only
 ├── policies/              # OPA policy (harness.rego)
 ├── security/              # owasp-review.md — OWASP Agentic AI Top 10 review
 ├── docs/runbooks/         # 4 operational runbooks (agent-unresponsive, policy-rollback, cost-spike, bad-formula)

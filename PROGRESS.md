@@ -226,3 +226,36 @@ Tracks completion against [spec-full.md](spec-full.md). A phase is done when all
 - Prometheus `/metrics` on governance; Grafana + Prometheus behind `--profile monitoring`.
 - `test_cost_otel_tag_present` verifies `agent_role` + `thread_id` on agent OTel spans.
 - DoD item 34: Grafana renders real data after `make monitoring-up` and a few tool calls.
+
+---
+
+## Post-Phase 5 Security & Quality Improvements (2026-06-11)
+
+### RS256 JWT migration
+
+Governance JWT signing migrated from HS256 shared secret to RS256 asymmetric keypair (ADR 0024).
+
+- `JWT_SECRET` env var removed; replaced by `JWT_PRIVATE_KEY_FILE` (path to PEM private key)
+- Governance signs with the private key; downstream verifiers use the public key from `GET /jwks`
+- Test private key committed at `test-fixtures/jwt-test-key.pem` with a startup fingerprint tripwire — governance refuses to start with this key unless `ENV=test`
+- `test_token_expiry` updated to forge expired JWTs using the test private key (RS256)
+- 74/74 integration tests pass unchanged
+
+### Prompt externalization
+
+All LLM system prompts are now loaded from `prompts/*.md` (ADR 0025).
+
+- `classify.md` was written but orphaned; `nodes.py` had an inline `_CLASSIFY_PROMPT` that had diverged from it — fixed, inline string removed
+- `synthesise.md` was written but unused; `synthesise_node` now makes a real LLM call using it when `llm_provider` is supplied, with a string-format fallback for `llm_provider=None` (test path)
+- `classify_node` system message upgraded from `"You are a task classifier."` to the full `classify.md` content (includes output format, confidence, reasoning)
+
+### Reviewer eval suite
+
+Agent quality benchmarking added — separate from the integration suite (ADR 0026).
+
+- `eval-fixtures/diffs/` — 6 synthetic git diffs: 1 clean refactor, 5 with known security bugs
+- `eval-fixtures/labels/` — ground truth: expected verdict + must-flag patterns per fixture
+- `packages/harness-tests/test_eval_reviewer.py` — `@pytest.mark.eval` tests; mock gateway, real Ollama
+- Pass bars: verdict accuracy ≥ 80%, average recall ≥ 60%
+- First run (7b model): **100% verdict accuracy, 80% recall** — above both thresholds
+- Run with: `pytest -m eval -v -s`

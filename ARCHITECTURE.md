@@ -100,7 +100,7 @@ review-server  :9003  (FastMCP)
   │  POST /check  (Bearer <JWT>, tool_name)
   ▼
 governance  :8090  (FastAPI)          — policy + audit sidecar [HARD]
-  ├── validate JWT  (HS256, 15-min TTL)
+  ├── validate JWT  (RS256, 15-min TTL)
   └── POST /v1/data/harness/allow  →  OPA  :8181  → 200 allowed / 403 denied
   │
   │  (on allow) POST /api/v0/tools/invoke  (direct, no auth)
@@ -176,9 +176,10 @@ is standalone (no dependency on other harness packages). See
 
 `services/governance/server.py` — policy + audit sidecar (not a forwarding proxy). Three endpoints:
 
-1. **`POST /oauth/token`** — client credentials grant. Three clients: `architect`, `code-reviewer`, `sre`. Issues HS256 JWTs with `sub`, `role`, 15-min TTL, signed with `JWT_SECRET`.
-2. **`POST /check`** — validates Bearer JWT, calls OPA `POST /v1/data/harness/allow`; returns `{"allowed": true, "role": ..., "agent_id": ..., "rule": ...}` on allow, 403 on deny. Also gates `shell_exec` behind `X-Human-Approval-Token`.
-3. **`POST /audit`** — accepts an audit record from GatewayClient and writes to Dolt async (202 response, background task). Emits Prometheus counters/histograms.
+1. **`POST /oauth/token`** — client credentials grant. Three clients: `architect`, `code-reviewer`, `sre`. Issues **RS256 JWTs** with `sub`, `role`, 15-min TTL, signed with a private RSA key loaded from `JWT_PRIVATE_KEY_FILE`. Verifier uses the derived public key — downstream services cannot mint tokens.
+2. **`GET /jwks`** — returns the RSA public key as a JWK set for downstream verifiers.
+3. **`POST /check`** — validates Bearer JWT, calls OPA `POST /v1/data/harness/allow`; returns `{"allowed": true, "role": ..., "agent_id": ..., "rule": ...}` on allow, 403 on deny. Also gates `shell_exec` behind `X-Human-Approval-Token`.
+4. **`POST /audit`** — accepts an audit record from GatewayClient and writes to Dolt async (202 response, background task). Emits Prometheus counters/histograms.
 
 Governance no longer forwards tool calls. Rate limiting is delegated to the gateway (ContextForge).
 
@@ -452,16 +453,26 @@ suggestions — violating them breaks the system's core guarantees.
 
 ---
 
-## Test Coverage (74 Tests)
+## Test Coverage
+
+### Integration suite (74 tests) — `make test-integration`
 
 | Phase | File                        | Tests | What they cover                                                          |
 |-------|-----------------------------|-------|--------------------------------------------------------------------------|
 | 0     | `test_thin_slice.py`        | 9     | Reviewer agent contract, gateway audit log, tool access denial, MCP reachability |
-| 1     | `test_phase1_governance.py` | 17    | Auth, OPA policy check (`/check`), Dolt audit (`/audit`), token expiry  |
+| 1     | `test_phase1_governance.py` | 17    | Auth (RS256 JWT), OPA policy check (`/check`), Dolt audit (`/audit`), token expiry |
 | 2     | `test_phase2_memory.py`     | 27    | Checkpointer, memory store (write/read/search/TTL/Redis), consolidation, formula store |
 | 3     | `test_phase3_agents.py`     | 4     | Agent protocol compliance, tool calls via gateway, shell_exec gating    |
 | 4     | `test_phase4_supervisor.py` | 12    | LangGraph orchestration (classify/route/formula/human_gate/checkpoint), E2E task flows |
 | 5     | `test_phase5_hardening.py`  | 8     | OWASP mitigations, OTel cost tags, token budget, no-rate-limit on governance, CF parity |
+
+### Eval suite (7 tests) — `pytest -m eval -v -s`
+
+| File                       | Tests | What they cover |
+|----------------------------|-------|-----------------|
+| `test_eval_reviewer.py`    | 7     | CodeReviewerAgent quality: 6 per-fixture tests (verdict + recall) + 1 aggregate score report |
+
+Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. They are slow (~2 min for 7b) and are not part of `make test-integration`.
 
 ---
 
@@ -492,3 +503,6 @@ suggestions — violating them breaks the system's core guarantees.
 | 0021 | LLM-primary task classification with structured JSON output (`{"task_type": ...}`) — keyword-first routing misclassified tasks with misleading surface keywords; keywords demoted to fallback for LLM outage/unparseable output, final default `review` | Accepted |
 | 0022 | `nomic-embed-text` (768 dims) as dedicated embedding model, separate from chat `OLLAMA_MODEL` — code LLMs produce 0.86–0.94 baseline similarity for all text, forcing a 0.95 cluster threshold and FakeEmbedder workaround; nomic-embed-text gives 0.82–0.93 for same-topic and 0.35–0.62 for different-topic, enabling a clean 0.80 threshold and real embeddings in all tests | Accepted |
 | 0023 | Governance refactored from forwarding proxy to policy+audit sidecar — ContextForge natively handles auth, RBAC, and rate limiting, making governance's forwarding and Redis rate limiter redundant; governance retains OPA policy check (`/check`) and async Dolt audit (`/audit`) because those aren't replaceable by any gateway without custom plugins; GatewayClient calls gateway directly and fires audit as a background task | Accepted |
+| 0024 | Governance JWT signing migrated from HS256 shared secret to RS256 asymmetric keypair — with HS256, any service that holds `JWT_SECRET` to verify tokens can also mint them (violates least privilege); RS256 gives governance a private key that never leaves the service and a public key exposed at `GET /jwks` for verifiers; the test key is committed under `test-fixtures/` with a startup fingerprint tripwire (`ENV != "test"` → refuses to start) so it is mechanically un-deployable to production | Accepted |
+| 0025 | All LLM system prompts externalized to `prompts/*.md` — `classify.md` and `synthesise.md` were written but orphaned (nodes.py had an inline `_CLASSIFY_PROMPT` that diverged); consolidated so every prompt is a file: editable without code changes, diffable in git, and loadable by the eval suite | Accepted |
+| 0026 | Eval suite (`eval-fixtures/` + `pytest -m eval`) for reviewer quality benchmarking — integration tests prove the harness works; eval proves the agent is good; 6 labeled diffs (clean + SQL injection, hardcoded secrets, shell injection, missing auth, path traversal); scored on verdict accuracy (≥80%) and recall of must-flag patterns (≥60%); mock gateway bypasses Docker stack so evals run against Ollama only | Accepted |

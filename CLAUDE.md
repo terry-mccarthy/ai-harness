@@ -80,13 +80,16 @@ Claude Code connects to MCPJungle at `:8080/mcp` directly.
 
 FastAPI app at `services/governance/server.py`. Three responsibilities:
 
-1. **OAuth 2.1 client credentials** — `POST /oauth/token` (form body). Three clients: `architect`, `code-reviewer`, `sre`. Issues HS256 JWTs with 15-min TTL, signed with `JWT_SECRET`.
+1. **OAuth 2.1 client credentials** — `POST /oauth/token` (form body). Three clients: `architect`, `code-reviewer`, `sre`. Issues **RS256 JWTs** with 15-min TTL, signed with a private RSA key loaded from `JWT_PRIVATE_KEY_FILE`.
 2. **OPA policy check** — `POST /check` validates a token and calls OPA. Returns 200 `{"allowed": true, ...}` or 403.
 3. **Dolt audit** — `POST /audit` accepts an audit record and writes to Dolt asynchronously (202 response). `CALL DOLT_COMMIT` per write.
+4. **JWKS** — `GET /jwks` returns the RSA public key as a JWK set; downstream verifiers fetch from here.
 
 Rate limiting is delegated to the gateway (ContextForge natively). Governance does not rate-limit.
 
-Key env vars: `JWT_SECRET`, `OPA_URL`, `DOLT_HOST/PORT/USER/PASSWORD`.
+Key env vars: `JWT_PRIVATE_KEY_FILE` (path to PEM private key), `OPA_URL`, `DOLT_HOST/PORT/USER/PASSWORD`.
+
+**Test key tripwire:** `test-fixtures/jwt-test-key.pem` is committed for local dev. Governance refuses to start with this key unless `ENV=test` is set — fingerprint-checked at startup. Never set `ENV=test` in a production deployment.
 
 ## GatewayClient — split gateway + governance
 
@@ -322,3 +325,37 @@ make monitoring-up   # starts prometheus:9090 and grafana:3000 (monitoring profi
 ```
 
 Governance exposes `GET /metrics`. Metrics: `harness_tool_calls_total`, `harness_tool_call_latency_ms`. (`harness_rate_limit_rejections_total` was removed — rate limiting delegated to CF.)
+
+## Prompt files
+
+All LLM system prompts live in `prompts/` and are loaded at import time:
+
+| File | Loaded by | Used for |
+|---|---|---|
+| `prompts/classify.md` | `harness_supervisor/nodes.py` | Task classification (system message) |
+| `prompts/synthesise.md` | `harness_supervisor/nodes.py` | Final-response synthesis (system message, LLM call) |
+| `prompts/code_reviewer.md` | `harness_agents/reviewer.py` | Code review system prompt |
+| `prompts/architect.md` | `harness_agents/architect.py` | Architect agent system prompt |
+| `prompts/sre.md` | `harness_agents/sre.py` | SRE agent system prompt |
+
+Override the prompts directory: set `PROMPTS_DIR=/path/to/prompts` before starting any service.
+
+`synthesise_node` makes a real LLM call when `llm_provider` is supplied (graph wiring); falls back to a string-format summary when `llm_provider=None` (test-only path).
+
+## Reviewer eval suite
+
+`eval-fixtures/` contains labeled diffs for benchmarking the `CodeReviewerAgent` against known security bugs without a running Docker stack:
+
+```bash
+pytest -m eval -v -s   # runs against live Ollama; slow (~2 min for 7b model)
+```
+
+**Fixture format:**
+- `eval-fixtures/diffs/<name>.diff` — synthetic git diff
+- `eval-fixtures/labels/<name>.json` — `{"verdict": "pass|fail", "must_flag": [{"pattern": "...", "min_severity": "CRITICAL"}]}`
+
+**Pass bars:** verdict accuracy ≥ 80%, average recall ≥ 60% across all fixtures.
+
+**Adding fixtures:** write a `.diff` + matching `.json` in `eval-fixtures/`. The parametrized test picks them up automatically. When the model uses different phrasing than your pattern (e.g. "role enforcement" instead of "authorization"), update the label pattern — the fixture labels are as much under test as the model.
+
+Eval tests use a `_MockGateway` that returns the fixture diff for `git_diff` and empty findings for `run_linter`, bypassing the live stack entirely.
