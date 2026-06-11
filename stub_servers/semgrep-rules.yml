@@ -1,0 +1,67 @@
+rules:
+  - id: print-call
+    pattern: print(...)
+    message: "print() may expose sensitive data to logs"
+    severity: WARNING
+    languages: [python]
+
+  - id: hardcoded-credential
+    patterns:
+      - pattern: $VAR = "..."
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i).*(password|passwd|secret|access_key|api_key|private_key|credential).*
+    message: "Hardcoded credential detected in $VAR"
+    severity: ERROR
+    languages: [python]
+
+  - id: credential-in-url-var
+    patterns:
+      - pattern: $VAR = "..."
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)(url|dsn|connection_string|conn_str)
+    message: "Connection string in $VAR may contain embedded credentials — use env vars instead"
+    severity: WARNING
+    languages: [python]
+
+  - id: subprocess-shell-true
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.call(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+          - pattern: subprocess.check_output(..., shell=True, ...)
+    message: "subprocess called with shell=True — command injection risk if input is user-controlled"
+    severity: ERROR
+    languages: [python]
+
+  - id: sql-fstring-query
+    patterns:
+      - pattern-either:
+          - pattern: $CURSOR.execute(f"...", ...)
+          - pattern: $CURSOR.execute(f"...")
+    message: "SQL query built with f-string — use parameterized queries instead"
+    severity: ERROR
+    languages: [python]
+
+  - id: open-fstring-path
+    patterns:
+      - pattern-either:
+          - pattern: open(f"...", ...)
+          - pattern: open(f"...")
+    message: "open() with f-string path — possible path traversal if input is user-controlled"
+    severity: WARNING
+    languages: [python]
+
+  - id: eval-call
+    pattern: eval(...)
+    message: "eval() executes arbitrary code — avoid or strictly validate input"
+    severity: ERROR
+    languages: [python, javascript, typescript]
+
+  - id: os-system-call
+    pattern: os.system(...)
+    message: "os.system() is vulnerable to shell injection"
+    severity: WARNING
+    languages: [python]

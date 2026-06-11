@@ -36,7 +36,7 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 - **Redis 7** — hot-read cache for the memory store; frequently accessed items served in-process without hitting PostgreSQL
 - **Ollama** (`qwen2.5-coder:32b` default) — local LLM for reviews and vector embeddings; no API key needed
 - **git-diff-stub** — runs real `git diff` on a baked-in sample repo
-- **linter-stub** — pattern-matching linter (swappable for a real one)
+- **linter-stub** — semgrep-based linter (`semgrep-rules.yml`); catches SQL f-string injection, hardcoded credentials, `subprocess shell=True`, `open()` f-string paths, and `eval()`
 - **architect-stub** — stub MCP server for architect-role tools (`codebase_search`, `adr_read`, `adr_write`, `diagram_gen`)
 - **sre-stub** — stub MCP server for SRE-role tools (`observability_query`, `runbook_read`, `log_search`, `shell_exec`)
 - **review-server** — FastMCP service wrapping the full code-reviewer agent; callable from Claude Code

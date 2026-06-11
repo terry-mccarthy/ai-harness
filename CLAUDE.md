@@ -359,3 +359,9 @@ pytest -m eval -v -s   # runs against live Ollama; slow (~2 min for 7b model)
 **Adding fixtures:** write a `.diff` + matching `.json` in `eval-fixtures/`. The parametrized test picks them up automatically. When the model uses different phrasing than your pattern (e.g. "role enforcement" instead of "authorization"), update the label pattern — the fixture labels are as much under test as the model.
 
 Eval tests use a `_MockGateway` that returns the fixture diff for `git_diff` and empty findings for `run_linter`, bypassing the live stack entirely.
+
+## Linter stub (semgrep)
+
+`stub_servers/linter_server.py` runs semgrep against the added lines extracted from the diff. Rules are in `stub_servers/semgrep-rules.yml` — edit this file to add or tune rules, then `docker compose cp` to test without a full rebuild.
+
+**metavariable-regex gotcha:** semgrep's `metavariable-regex` is anchored (`re.match`), not substring (`re.search`). To match a variable name that *contains* a keyword (e.g. `AWS_SECRET_ACCESS_KEY`), the regex must be `(?i).*secret.*` — not `(?i)secret`. Without the `.*` prefix, compound names silently miss.

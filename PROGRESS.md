@@ -259,3 +259,13 @@ Agent quality benchmarking added — separate from the integration suite (ADR 00
 - Pass bars: verdict accuracy ≥ 80%, average recall ≥ 60%
 - First run (7b model): **100% verdict accuracy, 80% recall** — above both thresholds
 - Run with: `pytest -m eval -v -s`
+
+### Semgrep linter replacement
+
+Replaced the naive pattern-matching `linter_server.py` with a real semgrep scan.
+
+- `stub_servers/semgrep-rules.yml` — 8 bundled rules: `print-call`, `hardcoded-credential`, `credential-in-url-var`, `subprocess-shell-true`, `sql-fstring-query`, `open-fstring-path`, `eval-call`, `os-system-call`
+- `stub_servers/Dockerfile.stub` — adds `pip install semgrep` layer
+- `packages/harness-tests/test_unit_linter.py` — 11 unit tests covering diff parsing and semgrep output mapping (subprocess mocked; no semgrep binary needed locally)
+- Validated against all 6 eval fixtures: clean diff returns no warnings; SQL injection, hardcoded secrets, shell injection, and path traversal all flagged correctly
+- Gotcha: semgrep `metavariable-regex` uses anchored match — must use `(?i).*keyword.*` not `(?i)keyword` to match compound variable names like `AWS_SECRET_ACCESS_KEY`

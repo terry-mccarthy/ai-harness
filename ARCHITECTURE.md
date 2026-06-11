@@ -133,7 +133,7 @@ Every tool call the agent makes produces:
 | `dolt`           | local build                    | 3306 | Git-versioned audit log + formula store                      |
 | `governance`     | local build                    | 8090 | OAuth token issuance (`/oauth/token`), OPA policy check (`/check`), async Dolt audit (`/audit`) |
 | `git-diff-stub`  | local build                    | 9001 | Real `git diff` MCP server (baked sample repo)               |
-| `linter-stub`    | local build                    | 9002 | Pattern-matching `run_linter` MCP server                     |
+| `linter-stub`    | local build                    | 9002 | Semgrep-based `run_linter` MCP server (`semgrep-rules.yml`)  |
 | `architect-stub` | local build                    | 9004 | Stub MCP server for architect-role tools                     |
 | `sre-stub`       | local build                    | 9005 | Stub MCP server for SRE-role tools                           |
 | `review-server`  | local build                    | 9003 | `review_diff` MCP tool — runs full code-reviewer agent       |
@@ -394,6 +394,41 @@ The tool accepts:
 
 - `diff_text` (string) — passthrough mode; echoed back unchanged (used by `CodeReviewerAgent`)
 - `repo_path` + `base`/`head` refs — runs real `git diff` against the baked repo
+
+---
+
+## run_linter Tool
+
+The `linter-stub` container runs [semgrep](https://semgrep.dev/) against the added lines extracted
+from a unified diff. Rules live in `stub_servers/semgrep-rules.yml` and are baked into the image at
+build time.
+
+**Diff parsing:** `_parse_diff` extracts `+` lines per file from the diff, writes each file to a
+temp directory with the correct extension, then invokes `semgrep scan --config semgrep-rules.yml --json`.
+This means semgrep sees the language correctly (e.g. `.py`, `.js`) without needing a full repo clone.
+
+**Rules covered:**
+
+| Rule ID | Severity | What it catches |
+|---|---|---|
+| `print-call` | WARNING | `print()` statements — potential log leakage |
+| `hardcoded-credential` | CRITICAL | Variable assignments where the name matches `password`, `secret`, `access_key`, etc. |
+| `credential-in-url-var` | WARNING | Connection string variables (`url`, `dsn`, `conn_str`) — may embed credentials |
+| `subprocess-shell-true` | CRITICAL | `subprocess.run/call/Popen(..., shell=True, ...)` — command injection risk |
+| `sql-fstring-query` | CRITICAL | `cursor.execute(f"...")` — SQL injection via f-string |
+| `open-fstring-path` | WARNING | `open(f"...")` — possible path traversal |
+| `eval-call` | CRITICAL | `eval(...)` in Python, JS, TS |
+| `os-system-call` | WARNING | `os.system(...)` — shell injection risk |
+
+**Severity mapping:** semgrep `ERROR` → `CRITICAL`, `WARNING` → `WARNING`, `INFO` → `INFO`.
+
+**Output shape:** `{"warnings": [...], "error_count": <int>}` where `error_count` is the number of
+CRITICAL findings. The `CodeReviewerAgent` passes this as advisory context to the LLM.
+
+**Gotcha — metavariable-regex is anchored:** semgrep's `metavariable-regex` uses `re.match()`
+semantics (anchored at start), not `re.search()`. Patterns like `(?i)secret` will not match
+`AWS_SECRET_ACCESS_KEY`. Use `(?i).*secret.*` to match variable names that contain the keyword
+anywhere.
 
 ---
 
