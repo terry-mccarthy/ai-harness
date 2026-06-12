@@ -6,3 +6,6 @@ __pycache__/
 *.egg-info/
 .env
 .DS_Store
+AGENT-ORCHESTRATION-SPEC.md
+docs/agents/issue-tracker.md
+

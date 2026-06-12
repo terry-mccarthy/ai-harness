@@ -269,3 +269,130 @@ Replaced the naive pattern-matching `linter_server.py` with a real semgrep scan.
 - `packages/harness-tests/test_unit_linter.py` — 11 unit tests covering diff parsing and semgrep output mapping (subprocess mocked; no semgrep binary needed locally)
 - Validated against all 6 eval fixtures: clean diff returns no warnings; SQL injection, hardcoded secrets, shell injection, and path traversal all flagged correctly
 - Gotcha: semgrep `metavariable-regex` uses anchored match — must use `(?i).*keyword.*` not `(?i)keyword` to match compound variable names like `AWS_SECRET_ACCESS_KEY`
+
+---
+
+## Phase 6 — Agent Orchestration (issues 01–07)
+
+### Issue 01 — Dolt: tasks + agent_messages migration ✅
+
+**Tests** — 9 pass:
+
+- [x] `test_tasks_table_exists`
+- [x] `test_agent_messages_table_exists`
+- [x] `test_tasks_schema_columns`
+- [x] `test_agent_messages_schema_columns`
+- [x] `test_tasks_indexes_exist`
+- [x] `test_agent_messages_inbox_index_exists`
+- [x] `test_harness_user_can_insert_tasks`
+- [x] `test_harness_user_cannot_delete_tasks`
+- [x] `test_existing_tables_unaffected`
+
+**Definition of Done (issue 01)**
+- [x] `tasks` and `agent_messages` tables created in `services/dolt/init.sh`
+- [x] `idx_claimable`, `uq_idem`, `idx_inbox` indexes present
+- [x] `harness` user has SELECT/INSERT/UPDATE on tasks; SELECT/INSERT on agent_messages; no DELETE
+- [x] Existing 74 integration tests pass unchanged (83/83 total)
+
+### Issue 02 — OPA + agent_list ✅
+
+**Tests** — 11 pass:
+- [x] `test_opa_supervisor_can_invoke_code_reviewer`
+- [x] `test_opa_supervisor_can_invoke_architect`
+- [x] `test_opa_supervisor_can_invoke_sre`
+- [x] `test_opa_architect_can_invoke_code_reviewer`
+- [x] `test_opa_code_reviewer_cannot_invoke_sre`
+- [x] `test_opa_sre_cannot_invoke_anyone`
+- [x] `test_opa_claim_allowed_matching_role`
+- [x] `test_opa_claim_denied_wrong_role`
+- [x] `test_agent_list_supervisor_sees_all`
+- [x] `test_agent_list_code_reviewer_sees_empty`
+- [x] `test_agent_list_requires_auth`
+
+**Definition of Done (issue 02)**
+- [x] `harness.rego` defines `invoke_allowed` and `claim_allowed` rules
+- [x] `GET /agents` returns only agents OPA permits the caller to invoke
+- [x] code-reviewer JWT sees empty agent list
+
+### Issue 03 — Blackboard: task_post + task_claim ✅
+
+**Tests** — 8 pass:
+- [x] `test_task_post_creates_pending_row`
+- [x] `test_task_post_creates_dolt_commit`
+- [x] `test_task_post_requires_auth`
+- [x] `test_task_claim_returns_null_when_empty`
+- [x] `test_task_claim_returns_task`
+- [x] `test_task_claim_priority_ordering`
+- [x] `test_task_claim_role_isolation`
+- [x] `test_task_claim_atomic_no_double_grab`
+
+**Definition of Done (issue 03)**
+- [x] `POST /tasks` creates pending row + Dolt commit
+- [x] `POST /tasks/claim` atomic SELECT+UPDATE loop; 0 double-grabs with 10 concurrent workers
+- [x] Lease reaper (on-claim sweep) resets stale claimed tasks to pending
+- [x] Role isolation: sre cannot claim architect tasks
+
+### Issue 04 — agent_invoke ✅
+
+**Tests** — 6 pass:
+- [x] `test_agent_invoke_allowed`
+- [x] `test_agent_invoke_requires_auth`
+- [x] `test_agent_invoke_denied_is_403_and_audited`
+- [x] `test_invoke_uses_target_credentials`
+- [x] `test_invoke_rejects_malformed_payload`
+- [x] `test_invoke_unknown_target_returns_404`
+
+**Definition of Done (issue 04)**
+- [x] `POST /agent/invoke` enforces OPA topology policy
+- [x] Denied invocations write audit row synchronously before 403
+- [x] Target agent runs under its own credentials (not caller's)
+- [x] Payload validated against agent input_schema before OPA/network calls
+
+### Issue 05 — task_complete + lease reaper ✅
+
+**Tests** — 5 pass:
+- [x] `test_task_complete_transitions_to_done`
+- [x] `test_task_complete_creates_dolt_commit`
+- [x] `test_task_complete_idempotent`
+- [x] `test_task_complete_requires_auth`
+- [x] `test_lease_expiry_returns_task_to_pool`
+
+**Definition of Done (issue 05)**
+- [x] `POST /tasks/complete` transitions to done, stores result, writes Dolt commit
+- [x] Idempotency: duplicate `idempotency_key` returns original result without double-write
+- [x] Stale claimed tasks return to pending pool via on-claim reaper sweep
+
+### Issue 06 — Supervisor demo ✅
+
+**Tests** — 4 pass:
+- [x] `test_supervisor_chain_reviewer_to_architect`
+- [x] `test_supervisor_schema_mismatch_raises_422`
+- [x] `test_supervisor_no_token_forwarding`
+- [x] `test_reviewer_cannot_chain_to_sre`
+
+**Definition of Done (issue 06)**
+- [x] Chained architect → code-reviewer invocation audited under correct agent_role
+- [x] Schema mismatch fails loudly (422) before any OPA/network call
+- [x] No credential forwarding: architect token never reaches review tools
+
+### Issue 07 — Correlation ID threading ✅
+
+**Tests** — 4 pass:
+- [x] `test_audit_log_has_correlation_id_column`
+- [x] `test_correlation_id_threads_chain`
+- [x] `test_correlation_id_in_denied_invocation`
+- [x] `test_single_step_audit_row_null_correlation`
+
+**Definition of Done (issue 07)**
+- [x] `audit_log` has nullable `correlation_id VARCHAR(36)` column
+- [x] `X-Correlation-Id` header threaded through `/agent/invoke` and `/audit`
+- [x] Multi-step chains share correlation_id across all audit rows (allow and deny)
+- [x] Single-step plain `/audit` calls produce null correlation_id (backwards-compatible)
+
+**Phase 6 summary: 121/121 integration tests pass (47 new + 74 prior phases)**
+
+**Notes / divergences**
+- `correlation_id` column added via live ALTER TABLE (not rebuild) — `init.sh` updated for fresh installs
+- `task_complete` uses claimer identity check (`claimed_by = sub`) to prevent cross-worker completion
+- Priority-9999 pattern used in tests to isolate specific tasks in a shared queue (avoids test interference)
+- Agent registry in governance: code-reviewer requires `repo` in payload; architect/sre have no required fields

@@ -365,3 +365,17 @@ Eval tests use a `_MockGateway` that returns the fixture diff for `git_diff` and
 `stub_servers/linter_server.py` runs semgrep against the added lines extracted from the diff. Rules are in `stub_servers/semgrep-rules.yml` — edit this file to add or tune rules, then `docker compose cp` to test without a full rebuild.
 
 **metavariable-regex gotcha:** semgrep's `metavariable-regex` is anchored (`re.match`), not substring (`re.search`). To match a variable name that *contains* a keyword (e.g. `AWS_SECRET_ACCESS_KEY`), the regex must be `(?i).*secret.*` — not `(?i)secret`. Without the `.*` prefix, compound names silently miss.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as local markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

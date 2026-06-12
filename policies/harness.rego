@@ -16,3 +16,25 @@ allow if {
     input.agent_role == "sre"
     input.tool_name in {"observability_query", "runbook_read", "log_search", "shell_exec"}
 }
+
+# ---------------------------------------------------------------------------
+# Inter-agent invocation topology
+# ---------------------------------------------------------------------------
+
+allowed_targets := {
+    "supervisor":    ["code-reviewer", "architect", "sre"],
+    "architect":     ["code-reviewer"],
+    "code_reviewer": [],
+    "sre":           [],
+}
+
+invoke_allowed[target] if {
+    input.action == "invoke"
+    target = allowed_targets[input.role][_]
+}
+
+# Task claim: a principal may only claim tasks that match their own role
+claim_allowed if {
+    input.action == "claim"
+    input.required_role == input.role
+}

@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
     policy_decision VARCHAR(8)   NOT NULL,
     policy_rule     VARCHAR(128),
     timestamp_ms    BIGINT       NOT NULL,
-    latency_ms      INT
+    latency_ms      INT,
+    correlation_id  VARCHAR(36)  NULL
 );
 
 CREATE TABLE IF NOT EXISTS formulas (
@@ -48,6 +49,34 @@ CREATE TABLE IF NOT EXISTS formula_pours (
     formula_id  VARCHAR(64) NOT NULL,
     success     BOOLEAN     NOT NULL,
     poured_at   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id              CHAR(36)     PRIMARY KEY,
+    required_role   VARCHAR(64)  NOT NULL,
+    artifact_type   VARCHAR(64)  NOT NULL,
+    payload         JSON         NOT NULL,
+    priority        INT          NOT NULL DEFAULT 0,
+    status          ENUM('pending','claimed','done','failed') NOT NULL DEFAULT 'pending',
+    claimed_by      VARCHAR(128) NULL,
+    lease_expires   DATETIME     NULL,
+    result          JSON         NULL,
+    idempotency_key VARCHAR(256) NULL,
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                 ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_claimable (status, required_role, priority),
+    UNIQUE KEY uq_idem (idempotency_key)
+);
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id            CHAR(36)    PRIMARY KEY,
+    from_role     VARCHAR(64) NOT NULL,
+    to_role       VARCHAR(64) NOT NULL,
+    artifact_type VARCHAR(64) NOT NULL,
+    payload       JSON        NOT NULL,
+    created_at    DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_inbox (to_role, created_at)
 );
 SQL
 
@@ -112,6 +141,8 @@ GRANT SELECT ON harness.dolt_log TO 'harness'@'%';
 GRANT SELECT ON harness.dolt_diff_audit_log TO 'harness'@'%';
 GRANT SELECT, INSERT, UPDATE ON harness.formulas TO 'harness'@'%';
 GRANT SELECT, INSERT ON harness.formula_pours TO 'harness'@'%';
+GRANT SELECT, INSERT, UPDATE ON harness.tasks TO 'harness'@'%';
+GRANT SELECT, INSERT ON harness.agent_messages TO 'harness'@'%';
 SQL
 
 echo "Dolt init complete."

@@ -123,7 +123,10 @@ def get_dolt_conn():
     )
 
 
-def _write_audit(agent_id, tool_name, server_id, req_hash, resp_hash, decision, rule, latency_ms):
+def _write_audit(
+    agent_id, tool_name, server_id, req_hash, resp_hash,
+    decision, rule, latency_ms, correlation_id=None,
+):
     conn = None
     try:
         conn = get_dolt_conn()
@@ -131,8 +134,8 @@ def _write_audit(agent_id, tool_name, server_id, req_hash, resp_hash, decision, 
             cur.execute(
                 """INSERT INTO audit_log
                    (agent_id, tool_name, server_id, request_hash, response_hash,
-                    policy_decision, policy_rule, timestamp_ms, latency_ms)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    policy_decision, policy_rule, timestamp_ms, latency_ms, correlation_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (
                     agent_id,
                     tool_name,
@@ -143,6 +146,7 @@ def _write_audit(agent_id, tool_name, server_id, req_hash, resp_hash, decision, 
                     rule,
                     int(time.time() * 1000),
                     latency_ms,
+                    correlation_id,
                 ),
             )
             cur.execute(
@@ -232,6 +236,7 @@ async def audit(
     request: Request,
     background_tasks: BackgroundTasks,
     authorization: str | None = Header(default=None),
+    x_correlation_id: str | None = Header(default=None),
 ):
     """Accept an audit record from GatewayClient and write it to Dolt async."""
     claims = _decode_jwt(authorization)
@@ -243,6 +248,7 @@ async def audit(
     resp_hash = body.get("resp_hash", "")
     decision = body.get("decision", "allow")
     latency_ms = int(body.get("latency_ms", 0))
+    correlation_id = x_correlation_id or body.get("correlation_id")
 
     _tool_calls_total.labels(agent_role=claims["role"], decision=decision).inc()
     if latency_ms:
@@ -258,6 +264,7 @@ async def audit(
         decision,
         rule,
         latency_ms,
+        correlation_id,
     )
     return {}
 
@@ -290,6 +297,356 @@ async def jwks():
 @app.get("/metrics")
 async def metrics():
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+# ---------------------------------------------------------------------------
+# Agent registry and discovery
+# ---------------------------------------------------------------------------
+
+MCPJUNGLE_URL = os.environ.get("MCPJUNGLE_URL", "http://mcpjungle:8080")
+
+# Agent registry: known agents with their credentials, entry tools, and input schemas
+_AGENT_REGISTRY: dict[str, dict] = {
+    "code-reviewer": {
+        "client_id": "code-reviewer",
+        "secret_env": "CODE_REVIEWER_SECRET",
+        "role": "code_reviewer",
+        "entry_tool": "review_server__review_diff",
+        "input_schema": {
+            "type": "object",
+            "required": ["repo"],
+            "properties": {
+                "repo": {"type": "string"},
+                "base_ref": {"type": "string"},
+                "head_ref": {"type": "string"},
+                "diff_text": {"type": "string"},
+            },
+        },
+    },
+    "architect": {
+        "client_id": "architect",
+        "secret_env": "ARCHITECT_SECRET",
+        "role": "architect",
+        "entry_tool": "architect_stub__codebase_search",
+        "input_schema": {
+            "type": "object",
+            "required": [],
+            "properties": {
+                "query": {"type": "string"},
+                "decision": {"type": "string"},
+            },
+        },
+    },
+    "sre": {
+        "client_id": "sre",
+        "secret_env": "SRE_SECRET",
+        "role": "sre",
+        "entry_tool": "sre_stub__observability_query",
+        "input_schema": {
+            "type": "object",
+            "required": [],
+            "properties": {
+                "query": {"type": "string"},
+                "alert": {"type": "string"},
+            },
+        },
+    },
+}
+
+_KNOWN_AGENTS = list(_AGENT_REGISTRY.keys())
+
+
+async def _check_opa_invoke(role: str, target: str) -> bool:
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{OPA_URL}/v1/data/harness/invoke_allowed",
+                json={"input": {"role": role, "action": "invoke", "target": target}},
+                timeout=5.0,
+            )
+        result = resp.json().get("result", [])
+        return target in result
+    except Exception as e:
+        logger.error("OPA invoke check failed: %s", e)
+        return False
+
+
+def _validate_payload(schema: dict, payload: dict) -> list[str]:
+    """Return list of validation errors, or empty list if valid."""
+    errors = []
+    required = schema.get("required", [])
+    for field in required:
+        if field not in payload:
+            errors.append(f"missing required field: {field}")
+    return errors
+
+
+async def _call_mcpjungle(tool_name: str, params: dict) -> dict:
+    body = {"name": tool_name, **params}
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{MCPJUNGLE_URL}/api/v0/tools/invoke",
+            json=body,
+            timeout=60.0,
+        )
+    data = resp.json()
+    # Unwrap MCPJungle content wrapper
+    content = data.get("content", [])
+    if content and isinstance(content, list) and content[0].get("type") == "text":
+        try:
+            return json.loads(content[0]["text"])
+        except (json.JSONDecodeError, KeyError):
+            return {"text": content[0].get("text", "")}
+    return data
+
+
+@app.post("/tasks/complete")
+async def task_complete(
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    """Idempotently close a claimed task with a result."""
+    claims = _decode_jwt(authorization)
+    body = await request.json()
+    task_id = body.get("task_id")
+    result = body.get("result", {})
+    idem_key = body.get("idempotency_key")
+
+    if not task_id:
+        raise HTTPException(422, "task_id is required")
+
+    conn = get_dolt_conn()
+    try:
+        # Check for existing completion via idempotency_key
+        if idem_key:
+            with conn.cursor(pymysql.cursors.DictCursor) as cur:
+                cur.execute(
+                    "SELECT result FROM tasks WHERE idempotency_key = %s AND status = 'done'",
+                    (idem_key,),
+                )
+                existing = cur.fetchone()
+            if existing:
+                stored = existing["result"]
+                if isinstance(stored, str):
+                    stored = json.loads(stored)
+                return {"status": "done", "result": stored}
+
+        result_json = json.dumps(result)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE tasks SET status='done', result=%s, idempotency_key=%s "
+                "WHERE id=%s AND status='claimed' AND claimed_by=%s",
+                (result_json, idem_key, task_id, claims["sub"]),
+            )
+            affected = cur.rowcount
+
+        if affected == 0:
+            # Could be: task not found, wrong status, or wrong claimer
+            raise HTTPException(403, "task not claimable by this worker or already done")
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "CALL DOLT_COMMIT('-Am', %s)",
+                (f"task_complete: {task_id[:8]} by {claims['sub']}",),
+            )
+    finally:
+        conn.close()
+
+    return {"status": "done"}
+
+
+@app.post("/agent/invoke")
+async def agent_invoke(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None),
+    x_correlation_id: str | None = Header(default=None),
+):
+    """Synchronous governed handoff: validate OPA, mint target creds, forward."""
+    claims = _decode_jwt(authorization)
+    caller_role = claims["role"]
+    body = await request.json()
+    correlation_id = x_correlation_id
+    target = body.get("target", "")
+    artifact_type = body.get("artifact_type", "")
+    payload = body.get("payload", {})
+
+    # Unknown target
+    if target not in _AGENT_REGISTRY:
+        raise HTTPException(404, f"unknown target: {target}")
+
+    agent_spec = _AGENT_REGISTRY[target]
+
+    # Payload schema validation (before any OPA/network call)
+    errors = _validate_payload(agent_spec["input_schema"], payload)
+    if errors:
+        raise HTTPException(422, {"errors": errors})
+
+    # OPA invoke check
+    invoke_ok = await _check_opa_invoke(caller_role, target)
+    if not invoke_ok:
+        # Denied — write audit row synchronously (HTTPException cancels background tasks)
+        _write_audit(
+            claims["sub"],
+            f"agent_invoke:{target}",
+            target,
+            "",
+            "",
+            "deny",
+            f"invoke_denied[{caller_role}->{target}]",
+            0,
+            correlation_id,
+        )
+        raise HTTPException(403, "invoke_denied_by_policy")
+
+    # Mint target's own token (do NOT forward caller's token)
+    secret = os.environ.get(agent_spec["secret_env"], f"{agent_spec['client_id']}-secret")
+    now = int(time.time())
+    target_token_payload = {
+        "sub": agent_spec["client_id"],
+        "role": agent_spec["role"],
+        "iat": now,
+        "exp": now + TOKEN_TTL,
+    }
+    target_token = jwt.encode(target_token_payload, _private_key, algorithm="RS256")
+
+    # Call MCPJungle entry tool using target's identity
+    result = await _call_mcpjungle(agent_spec["entry_tool"], payload)
+
+    # Write audit as the target agent
+    background_tasks.add_task(
+        _write_audit,
+        agent_spec["client_id"],
+        f"agent_invoke:{agent_spec['entry_tool']}",
+        agent_spec["entry_tool"],
+        "",
+        "",
+        "allow",
+        f"invoke_allowed[{caller_role}->{target}]",
+        0,
+        correlation_id,
+    )
+
+    return result
+
+
+@app.get("/agents")
+async def agent_list(authorization: str | None = Header(default=None)):
+    """Return the list of agents the calling role is permitted to invoke."""
+    claims = _decode_jwt(authorization)
+    role = claims["role"]
+    permitted = []
+    for name in _KNOWN_AGENTS:
+        if await _check_opa_invoke(role, name):
+            permitted.append({"name": name})
+    return permitted
+
+
+# ---------------------------------------------------------------------------
+# Blackboard: task_post + task_claim
+# ---------------------------------------------------------------------------
+
+import datetime
+
+
+@app.post("/tasks")
+async def task_post(
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    """Create a pending task on the blackboard."""
+    _decode_jwt(authorization)
+    body = await request.json()
+    required_role = body.get("required_role")
+    artifact_type = body.get("artifact_type")
+    payload = body.get("payload", {})
+    priority = int(body.get("priority", 0))
+
+    if not required_role or not artifact_type:
+        raise HTTPException(422, "required_role and artifact_type are required")
+
+    task_id = str(__import__("uuid").uuid4())
+    conn = get_dolt_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tasks (id, required_role, artifact_type, payload, priority, status) "
+                "VALUES (%s, %s, %s, %s, %s, 'pending')",
+                (task_id, required_role, artifact_type, json.dumps(payload), priority),
+            )
+            cur.execute(
+                "CALL DOLT_COMMIT('-Am', %s)",
+                (f"task_post: {artifact_type} for {required_role} [{task_id[:8]}]",),
+            )
+    finally:
+        conn.close()
+
+    return {"task_id": task_id, "status": "pending"}
+
+
+@app.post("/tasks/claim")
+async def task_claim(
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    """Atomically claim the highest-priority pending task for the caller's role."""
+    claims = _decode_jwt(authorization)
+    role = claims["role"]
+    body = await request.json()
+    lease_seconds = int(body.get("lease_seconds", 120))
+    lease_expires = datetime.datetime.utcnow() + datetime.timedelta(seconds=lease_seconds)
+    worker_id = claims["sub"]
+
+    conn = get_dolt_conn()
+    try:
+        # Reap stale leases first (on-claim sweep)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE tasks SET status='pending', claimed_by=NULL, lease_expires=NULL "
+                "WHERE status='claimed' AND lease_expires < %s",
+                (datetime.datetime.utcnow(),),
+            )
+
+        # Atomic select-then-update loop
+        for _ in range(5):
+            with conn.cursor(pymysql.cursors.DictCursor) as cur:
+                cur.execute(
+                    "SELECT id FROM tasks "
+                    "WHERE status='pending' AND required_role=%s "
+                    "ORDER BY priority DESC, created_at ASC LIMIT 1",
+                    (role,),
+                )
+                row = cur.fetchone()
+
+            if row is None:
+                return {"task_id": None}
+
+            candidate_id = row["id"]
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE tasks SET status='claimed', claimed_by=%s, lease_expires=%s "
+                    "WHERE id=%s AND status='pending'",
+                    (worker_id, lease_expires, candidate_id),
+                )
+                affected = cur.rowcount
+
+            if affected == 1:
+                # Win — fetch payload and commit
+                with conn.cursor(pymysql.cursors.DictCursor) as cur:
+                    cur.execute("SELECT payload FROM tasks WHERE id=%s", (candidate_id,))
+                    task_row = cur.fetchone()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "CALL DOLT_COMMIT('-Am', %s)",
+                        (f"task_claim: {candidate_id[:8]} by {worker_id}",),
+                    )
+                payload = json.loads(task_row["payload"]) if isinstance(task_row["payload"], str) else task_row["payload"]
+                return {"task_id": candidate_id, "payload": payload}
+            # else: lost the race — retry
+
+        return {"task_id": None}
+    finally:
+        conn.close()
 
 
 @app.post("/memory/write")
