@@ -488,3 +488,22 @@ Replaced the naive pattern-matching `linter_server.py` with a real semgrep scan.
 **Notes**
 - Empty default in compose means auth is off locally unless the var is explicitly set
 - The MCP `review_diff` tool path is unaffected — it uses governance JWT auth unchanged
+
+---
+
+## Gemini Review Findings — Hardening
+
+Addressed three remaining findings from the Gemini code review:
+
+**Tests** — 5 new across existing test files (total: git_diff 14, review_http 13):
+- [x] `test_fetch_github_pr_diff_http_error_raises_value_error`
+- [x] `test_fetch_github_pr_diff_url_error_raises_value_error`
+- [x] `test_git_diff_invalid_github_repo_format_raises`
+- [x] `test_git_diff_valid_github_repo_format_accepted`
+- [x] `test_http_review_500_does_not_leak_internal_detail`
+
+**Definition of Done**
+- [x] `_fetch_github_pr_diff` catches `HTTPError` and `URLError`; re-raises as `ValueError` with status code / reason
+- [x] `github_repo` validated against `^owner/repo$` regex before API call; invalid format raises `ValueError`
+- [x] `POST /review` 500 response returns generic message; raw exception never sent to caller
+- [x] Code health 9.9/10

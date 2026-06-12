@@ -157,9 +157,9 @@ async def http_review(request: Request) -> JSONResponse:
     try:
         findings = await _run_review(diff_text, task, provider)
         return JSONResponse(findings)
-    except Exception as exc:
+    except Exception:
         logging.exception("review failed")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse({"error": "review failed — see server logs"}, status_code=500)
 
 
 if __name__ == "__main__":

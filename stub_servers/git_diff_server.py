@@ -1,6 +1,8 @@
 import logging
 import os
+import re
 import subprocess
+import urllib.error
 import urllib.request
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -17,6 +19,7 @@ mcp = FastMCP(
 )
 
 _GITHUB_API = "https://api.github.com/repos"
+_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 def _fetch_github_pr_diff(github_repo: str, pr_number: int, token: str | None) -> str:
@@ -31,8 +34,13 @@ def _fetch_github_pr_diff(github_repo: str, pr_number: int, token: str | None) -
     )
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req) as resp:
-        return resp.read().decode()
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.read().decode()
+    except urllib.error.HTTPError as e:
+        raise ValueError(f"GitHub API error {e.code} for {github_repo}#{pr_number}: {e.reason}") from e
+    except urllib.error.URLError as e:
+        raise ValueError(f"network error fetching {github_repo}#{pr_number}: {e.reason}") from e
 
 
 @mcp.tool()
@@ -55,6 +63,8 @@ def git_diff(
     if pr_number is not None:
         if not github_repo:
             raise ValueError("github_repo is required when pr_number is provided")
+        if not _REPO_RE.match(github_repo):
+            raise ValueError(f"github_repo must be in owner/repo format, got: {github_repo!r}")
         token = os.environ.get("GITHUB_TOKEN")
         diff = _fetch_github_pr_diff(github_repo, pr_number, token=token)
         return {"diff": diff, "source": "github"}

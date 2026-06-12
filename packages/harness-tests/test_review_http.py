@@ -121,6 +121,34 @@ async def test_http_review_missing_diff_text_returns_422():
     assert resp.status_code == 422
 
 
+async def test_http_review_500_does_not_leak_internal_detail():
+    """500 body must not echo raw exception messages — use a generic message."""
+    import server as review_server
+
+    mock_gateway = MagicMock()
+    mock_gateway.call_tool = AsyncMock(return_value={"result": "ok"})
+
+    class _ErrorLLM:
+        async def chat(self, messages):
+            from harness_agents.llm import LLMResponse
+            return LLMResponse(content="not-json")
+
+    app = review_server.mcp.streamable_http_app()
+    with (
+        patch.object(review_server, "_build_llm_provider", return_value=_ErrorLLM()),
+        patch("server.GatewayClient", return_value=mock_gateway),
+        patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}),
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/review", json={"diff_text": _SAMPLE_DIFF})
+
+    assert resp.status_code == 500
+    body = resp.json()
+    # Must not expose stack traces, internal paths, or raw exception text
+    assert "max retries" not in body.get("error", "").lower()
+    assert body.get("error") != ""   # some message is present
+
+
 async def test_http_review_agent_error_returns_500():
     """When the agent can't produce valid JSON after all retries, return 500."""
     import server as review_server

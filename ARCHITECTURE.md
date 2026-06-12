@@ -393,7 +393,7 @@ against a real diff without an external repo.
 The tool accepts three modes (evaluated in priority order):
 
 - `diff_text` (string) — passthrough; echoed back unchanged. Highest priority — always used if non-empty.
-- `pr_number` + `github_repo` — fetches the PR unified diff from the GitHub API using `Accept: application/vnd.github.v3.diff`. Reads `GITHUB_TOKEN` from env (optional; omit for public repos). Enables fully autonomous agent reviews of any GitHub PR.
+- `pr_number` + `github_repo` — fetches the PR unified diff from the GitHub API using `Accept: application/vnd.github.v3.diff`. Reads `GITHUB_TOKEN` from env (optional; omit for public repos). `github_repo` is validated against `owner/repo` format before the request is made. `HTTPError` and `URLError` are caught and re-raised as `ValueError` with informative messages.
 - `repo_path` + `base`/`head` refs — runs real `git diff` against the Docker-internal baked repo.
 
 `GITHUB_TOKEN` is passed through from the host via `docker-compose.yml` (`${GITHUB_TOKEN:-}`).
@@ -418,6 +418,9 @@ same `_run_review()` function; there is no duplication of agent logic.
 endpoint is open (dev/local mode — safe when port 9003 is only exposed on localhost). When set,
 requests must carry `Authorization: Bearer <key>`; missing or wrong token → 401. The check lives
 in `_check_api_key()` and is separate from the MCP governance path.
+
+**Error responses:** 500 responses return a generic `"review failed — see server logs"` message;
+the full exception is logged server-side. Raw exception text is never sent to the caller.
 
 ---
 

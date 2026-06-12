@@ -118,3 +118,47 @@ def test_git_diff_diff_text_takes_precedence_over_github():
         result = git_diff_server.git_diff(diff_text="already-have-it", pr_number=1, github_repo="x/y")
     mock_fetch.assert_not_called()
     assert result["source"] == "passthrough"
+
+
+# ---------------------------------------------------------------------------
+# _fetch_github_pr_diff — error handling
+# ---------------------------------------------------------------------------
+
+def test_fetch_github_pr_diff_http_error_raises_value_error():
+    """HTTPError (e.g. 404 private repo, 401 bad token) is wrapped in ValueError."""
+    import urllib.error
+    http_err = urllib.error.HTTPError(
+        url="https://api.github.com/repos/x/y/pulls/1",
+        code=404,
+        msg="Not Found",
+        hdrs=None,  # type: ignore[arg-type]
+        fp=None,
+    )
+    with patch("git_diff_server.urllib.request.urlopen", side_effect=http_err):
+        with pytest.raises(ValueError, match="404"):
+            git_diff_server._fetch_github_pr_diff("x/y", 1, token=None)
+
+
+def test_fetch_github_pr_diff_url_error_raises_value_error():
+    """URLError (network failure) is wrapped in ValueError."""
+    import urllib.error
+    with patch("git_diff_server.urllib.request.urlopen",
+               side_effect=urllib.error.URLError("Name or service not known")):
+        with pytest.raises(ValueError, match="network"):
+            git_diff_server._fetch_github_pr_diff("x/y", 1, token=None)
+
+
+# ---------------------------------------------------------------------------
+# github_repo format validation
+# ---------------------------------------------------------------------------
+
+def test_git_diff_invalid_github_repo_format_raises():
+    """github_repo must be 'owner/repo'; bare names or paths are rejected."""
+    with pytest.raises(ValueError, match="owner/repo"):
+        git_diff_server.git_diff(pr_number=1, github_repo="notavalidrepo")
+
+
+def test_git_diff_valid_github_repo_format_accepted():
+    with patch("git_diff_server._fetch_github_pr_diff", return_value=SAMPLE_PR_DIFF):
+        result = git_diff_server.git_diff(pr_number=1, github_repo="owner/repo")
+    assert result["source"] == "github"
