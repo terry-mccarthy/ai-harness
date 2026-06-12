@@ -206,6 +206,37 @@ docker compose up -d --no-deps review-server
 - `qwen2.5-coder:32b` — ~60–90s, catches most issues  
 - `qwen3.6:27b` — ~2–5 min, best reasoning (thinking mode)
 
+## OpenRouter provider
+
+Set `LLM_PROVIDER=openrouter` to route all LLM calls through [OpenRouter](https://openrouter.ai), which proxies dozens of hosted models — useful when local Ollama context limits are too small for large diffs.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `OPENROUTER_API_KEY` | *(required)* | Get from openrouter.ai/keys |
+| `OPENROUTER_MODEL` | `anthropic/claude-3.5-sonnet` | Any slug from openrouter.ai/models |
+| `LLM_TEMPERATURE` | `0.1` | Shared with other providers |
+| `LLM_MAX_TOKENS` | `1024` | Output token cap — raise for large diffs |
+
+Recommended large-context models via OpenRouter:
+- `anthropic/claude-3.5-sonnet` — 200K context, strong reasoning
+- `google/gemini-2.0-flash-001` — 1M context, very fast
+- `openai/gpt-4o` — 128K context, reliable JSON output
+
+```bash
+# .env
+LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-or-...
+OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
+LLM_MAX_TOKENS=2048
+```
+
+After changing `.env`, restart the container (no rebuild needed):
+```bash
+docker compose up -d --no-deps review-server
+```
+
+**Implementation note:** `OpenRouterProvider` uses the `openai` Python SDK with `base_url="https://openrouter.ai/api/v1"` — OpenRouter is OpenAI API-compatible. The class is in `packages/harness-agents/harness_agents/llm.py`.
+
 ## Ollama from inside Docker
 
 The `review-server` container needs to reach Ollama on the host. Docker Desktop exposes this via `host.docker.internal`:

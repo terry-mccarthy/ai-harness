@@ -47,7 +47,7 @@ def _env_int(key: str, default: int) -> int:
 
 def _build_llm_provider(provider_name: str):
     """Factory: return a concrete LLMProvider for the given provider name."""
-    from harness_agents.llm import OllamaProvider, GeminiProvider
+    from harness_agents.llm import OllamaProvider, GeminiProvider, OpenRouterProvider
 
     if provider_name == "gemini":
         return GeminiProvider(
@@ -55,6 +55,16 @@ def _build_llm_provider(provider_name: str):
             api_key=os.environ.get("GEMINI_API_KEY"),
             temperature=_env_float("LLM_TEMPERATURE", 0.1),
             max_output_tokens=_env_int("LLM_MAX_TOKENS", 1024),
+        )
+    if provider_name == "openrouter":
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY env var is required for the openrouter provider")
+        return OpenRouterProvider(
+            api_key=api_key,
+            model=os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+            temperature=_env_float("LLM_TEMPERATURE", 0.1),
+            max_tokens=_env_int("LLM_MAX_TOKENS", 1024),
         )
     return OllamaProvider(
         host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
@@ -103,7 +113,7 @@ async def review_diff(
 
     Args:
         diff_text: The unified diff string to review.
-        provider: Optional LLM provider override (``"ollama"`` or ``"gemini"``).
+        provider: Optional LLM provider override (``"ollama"``, ``"gemini"``, or ``"openrouter"``).
             Falls back to the ``LLM_PROVIDER`` environment variable.
         task: High-level review instruction passed to the agent.
     """
@@ -132,7 +142,7 @@ async def http_review(request: Request) -> JSONResponse:
     Body (JSON):
         diff_text (str, required): unified diff to review
         task      (str, optional): review instruction
-        provider  (str, optional): ``"ollama"`` or ``"gemini"``
+        provider  (str, optional): ``"ollama"``, ``"gemini"``, or ``"openrouter"``
 
     Auth: set REVIEW_API_KEY in env to require 'Authorization: Bearer <key>'.
     When REVIEW_API_KEY is unset the endpoint is open (dev/local mode).
