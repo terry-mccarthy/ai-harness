@@ -237,6 +237,20 @@ Scores the `CodeReviewerAgent` against 6 labeled diffs with known security bugs 
 | `test_reviewer_fixture[06_path_traversal]` | Catches user-controlled filename used directly in `open()` |
 | `test_reviewer_aggregate_score` | Asserts verdict accuracy ≥ 80% and recall ≥ 60% across all fixtures |
 
+### Token usage unit tests (9 tests) — `pytest packages/harness-tests/test_token_usage.py`
+
+| Test | What it proves |
+|---|---|
+| `test_llm_response_has_token_fields` | `LLMResponse` carries `prompt_tokens` and `completion_tokens` |
+| `test_llm_response_defaults_to_zero` | Fields default to 0 when not supplied |
+| `test_ollama_provider_captures_token_counts` | `OllamaProvider` maps `prompt_eval_count`/`eval_count` to response |
+| `test_ollama_provider_none_counts_become_zero` | `None` eval counts (cached Ollama response) default to 0 |
+| `test_agent_state_accepts_token_fields` | `AgentState` TypedDict accepts `token_usage` and `token_budget` |
+| `test_reviewer_accumulates_token_usage` | Reviewer returns accumulated token counts in result state |
+| `test_reviewer_accumulates_across_retries` | Token counts sum across all retry iterations |
+| `test_reviewer_budget_exceeded_on_retry` | Reviewer aborts with `token_budget_exceeded` when completion tokens exceed budget after a failed parse |
+| `test_reviewer_no_budget_runs_to_completion` | `token_budget=None` never triggers budget check |
+
 ## Connect Claude Code
 
 MCPJungle exposes itself as an MCP server. Add to Claude Code settings:

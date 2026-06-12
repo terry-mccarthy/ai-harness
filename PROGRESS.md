@@ -396,3 +396,33 @@ Replaced the naive pattern-matching `linter_server.py` with a real semgrep scan.
 - `task_complete` uses claimer identity check (`claimed_by = sub`) to prevent cross-worker completion
 - Priority-9999 pattern used in tests to isolate specific tasks in a shared queue (avoids test interference)
 - Agent registry in governance: code-reviewer requires `repo` in payload; architect/sre have no required fields
+
+---
+
+## Agent-level Token Usage Measurement
+
+**Tests** — 9 pass (`test_token_usage.py`, unit tests — no Docker stack needed):
+- [x] `test_llm_response_has_token_fields`
+- [x] `test_llm_response_defaults_to_zero`
+- [x] `test_ollama_provider_captures_token_counts`
+- [x] `test_ollama_provider_none_counts_become_zero`
+- [x] `test_agent_state_accepts_token_fields`
+- [x] `test_reviewer_accumulates_token_usage`
+- [x] `test_reviewer_accumulates_across_retries`
+- [x] `test_reviewer_budget_exceeded_on_retry`
+- [x] `test_reviewer_no_budget_runs_to_completion`
+
+**Definition of Done**
+- [x] `LLMResponse` carries `prompt_tokens` and `completion_tokens` (defaults 0)
+- [x] `OllamaProvider` maps `prompt_eval_count`/`eval_count` from Ollama API response
+- [x] `GeminiProvider` maps `usage_metadata.prompt_token_count`/`candidates_token_count`
+- [x] `AgentState` has `token_usage: dict` and `token_budget: int | None`
+- [x] `CodeReviewerAgent` accumulates token counts across retry iterations
+- [x] Budget check fires after a failed parse attempt; aborts with `token_budget_exceeded` error
+- [x] `token_budget=None` means unlimited (no check)
+- [x] `GeminiProvider._build_contents` extracted to reduce CCN; health score 7.9 → 9.7
+
+**Notes / divergences**
+- Budget enforcement is retry-gated: a successful first response is never cancelled by the budget check, only runaway retries are stopped
+- `AgentState` switched to `total=False` (all keys optional) for backwards compatibility — existing tests construct partial state dicts without the new fields
+- `HarnessState.tokens_used` (supervisor-level) is separate; agent-level `token_usage` is not yet propagated back to `HarnessState` — that's a follow-up

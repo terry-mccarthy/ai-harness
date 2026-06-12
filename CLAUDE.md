@@ -317,6 +317,14 @@ Rate limiting is now delegated to the gateway (ContextForge natively). Governanc
 
 `HarnessState` now has `tokens_used: int` and `token_budget: int | None`. Budget check fires in `run_agent_node` — if `tokens_used >= token_budget`, returns `error.code = "budget_exceeded"`. Existing tests pass because they don't set `token_budget` (`.get()` defaults to `None` = unlimited).
 
+## Agent-level token tracking
+
+`LLMResponse` has `prompt_tokens: int = 0` and `completion_tokens: int = 0`. Both `OllamaProvider` (from `prompt_eval_count`/`eval_count`) and `GeminiProvider` (from `usage_metadata`) populate them. `None` values from the API default to 0.
+
+`AgentState` has `token_usage: dict` (`{"prompt_tokens": int, "completion_tokens": int}`) and `token_budget: int | None`. `CodeReviewerAgent` accumulates counts each iteration and checks the budget **after a failed parse attempt** — successful responses are never cancelled. Error code: `token_budget_exceeded`.
+
+`AgentState` uses `total=False` so existing code constructing partial state dicts does not need updating.
+
 ## Monitoring stack (Phase 5)
 
 ```bash
