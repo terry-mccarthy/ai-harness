@@ -414,6 +414,11 @@ Intended for CI pipelines, pre-commit hooks, and webhooks — any caller that ca
 request but is not running an MCP client. Both the MCP tool and the HTTP endpoint share the
 same `_run_review()` function; there is no duplication of agent logic.
 
+**Auth:** `REVIEW_API_KEY` env var enables bearer-token auth on this endpoint. When unset the
+endpoint is open (dev/local mode — safe when port 9003 is only exposed on localhost). When set,
+requests must carry `Authorization: Bearer <key>`; missing or wrong token → 401. The check lives
+in `_check_api_key()` and is separate from the MCP governance path.
+
 ---
 
 ## run_linter Tool

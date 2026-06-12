@@ -110,6 +110,21 @@ async def review_diff(
     return await _run_review(diff_text, task, provider)
 
 
+def _check_api_key(request: Request) -> bool:
+    """Return True if the request is authorised.
+
+    When REVIEW_API_KEY is unset the endpoint is open (dev/local mode).
+    When set, the request must carry 'Authorization: Bearer <key>'.
+    """
+    required = os.environ.get("REVIEW_API_KEY")
+    if not required:
+        return True
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return False
+    return header[len("Bearer "):] == required
+
+
 @mcp.custom_route("/review", methods=["POST"])
 async def http_review(request: Request) -> JSONResponse:
     """Plain HTTP endpoint for CI pipelines, pre-commit hooks, and webhooks.
@@ -119,8 +134,14 @@ async def http_review(request: Request) -> JSONResponse:
         task      (str, optional): review instruction
         provider  (str, optional): ``"ollama"`` or ``"gemini"``
 
+    Auth: set REVIEW_API_KEY in env to require 'Authorization: Bearer <key>'.
+    When REVIEW_API_KEY is unset the endpoint is open (dev/local mode).
+
     Returns the same structured findings as the MCP ``review_diff`` tool.
     """
+    if not _check_api_key(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
     try:
         body = await request.json()
     except Exception:

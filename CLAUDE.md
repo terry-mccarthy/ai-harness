@@ -312,7 +312,9 @@ curl -s http://localhost:9003/review \
 ```
 
 Body: `{"diff_text": "...", "task": "...", "provider": "ollama|gemini"}` (`task` and `provider` optional).
-Returns same schema as `review_diff` MCP tool. Errors: 422 for missing `diff_text`, 500 for agent failure.
+Returns same schema as `review_diff` MCP tool. Errors: 401 for bad/missing key, 422 for missing `diff_text`, 500 for agent failure.
+
+**Auth:** set `REVIEW_API_KEY` in env to require `Authorization: Bearer <key>`. When unset, the endpoint is open (dev/local mode). The empty default in `docker-compose.yml` (`${REVIEW_API_KEY:-}`) means auth is off by default locally — set the var before deploying publicly.
 
 ## ContextForge gateway (Phase 5)
 

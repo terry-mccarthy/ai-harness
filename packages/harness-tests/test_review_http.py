@@ -26,11 +26,13 @@ _SAMPLE_DIFF = "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-
 
 
 @asynccontextmanager
-async def _review_client(llm_response: str = _VALID_REVIEW):
+async def _review_client(llm_response: str = _VALID_REVIEW, api_key: str | None = None):
     """Yield an httpx AsyncClient wired to the review server ASGI app.
 
     GatewayClient and LLMProvider are replaced with in-process mocks for the
     duration of the context, so no Docker stack is required.
+
+    Pass api_key to simulate REVIEW_API_KEY being set in the environment.
     """
     import server as review_server
 
@@ -44,10 +46,14 @@ async def _review_client(llm_response: str = _VALID_REVIEW):
 
     app = review_server.mcp.streamable_http_app()
 
+    env = {"MCPJUNGLE_URL": "http://mock-jungle:8080"}
+    if api_key is not None:
+        env["REVIEW_API_KEY"] = api_key
+
     with (
         patch.object(review_server, "_build_llm_provider", return_value=_MockLLM()),
         patch("server.GatewayClient", return_value=mock_gateway),
-        patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}),
+        patch.dict("os.environ", env, clear=False),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             yield client
@@ -138,3 +144,54 @@ async def test_http_review_agent_error_returns_500():
             resp = await client.post("/review", json={"diff_text": _SAMPLE_DIFF})
 
     assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Slice 5 — API key authentication
+# ---------------------------------------------------------------------------
+
+async def test_http_review_no_key_set_allows_all():
+    """When REVIEW_API_KEY is unset any request is allowed (dev/local mode)."""
+    async with _review_client(api_key=None) as client:
+        resp = await client.post("/review", json={"diff_text": _SAMPLE_DIFF})
+    assert resp.status_code == 200
+
+
+async def test_http_review_correct_key_allows_request():
+    """Correct bearer token passes auth check."""
+    async with _review_client(api_key="secret-token") as client:
+        resp = await client.post(
+            "/review",
+            json={"diff_text": _SAMPLE_DIFF},
+            headers={"Authorization": "Bearer secret-token"},
+        )
+    assert resp.status_code == 200
+
+
+async def test_http_review_wrong_key_returns_401():
+    """Wrong bearer token is rejected with 401."""
+    async with _review_client(api_key="secret-token") as client:
+        resp = await client.post(
+            "/review",
+            json={"diff_text": _SAMPLE_DIFF},
+            headers={"Authorization": "Bearer wrong-token"},
+        )
+    assert resp.status_code == 401
+
+
+async def test_http_review_missing_header_returns_401():
+    """No Authorization header when key is required returns 401."""
+    async with _review_client(api_key="secret-token") as client:
+        resp = await client.post("/review", json={"diff_text": _SAMPLE_DIFF})
+    assert resp.status_code == 401
+
+
+async def test_http_review_malformed_header_returns_401():
+    """Authorization header present but not 'Bearer <token>' format returns 401."""
+    async with _review_client(api_key="secret-token") as client:
+        resp = await client.post(
+            "/review",
+            json={"diff_text": _SAMPLE_DIFF},
+            headers={"Authorization": "secret-token"},  # missing "Bearer " prefix
+        )
+    assert resp.status_code == 401

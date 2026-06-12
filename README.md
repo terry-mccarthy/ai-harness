@@ -39,7 +39,7 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 - **linter-stub** — semgrep-based linter (`semgrep-rules.yml`); catches SQL f-string injection, hardcoded credentials, `subprocess shell=True`, `open()` f-string paths, and `eval()`
 - **architect-stub** — stub MCP server for architect-role tools (`codebase_search`, `adr_read`, `adr_write`, `diagram_gen`)
 - **sre-stub** — stub MCP server for SRE-role tools (`observability_query`, `runbook_read`, `log_search`, `shell_exec`)
-- **review-server** — FastMCP service wrapping the full code-reviewer agent; callable from Claude Code via MCP and from CI pipelines via `POST /review` (plain HTTP)
+- **review-server** — FastMCP service wrapping the full code-reviewer agent; callable from Claude Code via MCP and from CI pipelines via `POST /review` (plain HTTP, optional bearer-token auth via `REVIEW_API_KEY`)
 - **ContextForge** (`ghcr.io/ibm/mcp-context-forge`, `:4444`) — production MCP gateway; alternative to MCPJungle, enabled via `GATEWAY_BACKEND=contextforge`
 - **Prometheus + Grafana** — optional monitoring stack (`make monitoring-up`); governance exposes `/metrics` with tool-call counters, latency histograms, and rate-limit rejections; pre-built cost-per-role dashboard at `localhost:3000`
 
@@ -276,6 +276,11 @@ Scores the `CodeReviewerAgent` against 6 labeled diffs with known security bugs 
 | `test_http_review_accepts_provider_override` | Optional `provider` field accepted without error |
 | `test_http_review_missing_diff_text_returns_422` | Missing `diff_text` → 422 Unprocessable Entity |
 | `test_http_review_agent_error_returns_500` | Agent failure (max retries exceeded) → 500 |
+| `test_http_review_no_key_set_allows_all` | `REVIEW_API_KEY` unset → all requests allowed (dev mode) |
+| `test_http_review_correct_key_allows_request` | Correct bearer token → 200 |
+| `test_http_review_wrong_key_returns_401` | Wrong bearer token → 401 |
+| `test_http_review_missing_header_returns_401` | No `Authorization` header when key required → 401 |
+| `test_http_review_malformed_header_returns_401` | Header present but missing `Bearer ` prefix → 401 |
 
 ## Connect Claude Code
 

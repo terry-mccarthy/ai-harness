@@ -109,6 +109,7 @@ services:
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1024}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      REVIEW_API_KEY: ${REVIEW_API_KEY:-}
     depends_on:
       mcpjungle:
         condition: service_healthy

@@ -466,3 +466,25 @@ Replaced the naive pattern-matching `linter_server.py` with a real semgrep scan.
 - GitHub mode is unauthenticated when `GITHUB_TOKEN` is absent — works for public repos, will 404 on private
 - `docker-compose.yml` updated: `GITHUB_TOKEN: ${GITHUB_TOKEN:-}` passes host token into container
 - `_run_review()` extraction also reduced `review_diff` MCP handler to a one-liner, bringing `server.py` avgCCN from 3.8 → 2.4
+
+---
+
+## POST /review Bearer-Token Auth
+
+**Tests** — 5 new (added to `test_review_http.py`, total now 12):
+- [x] `test_http_review_no_key_set_allows_all`
+- [x] `test_http_review_correct_key_allows_request`
+- [x] `test_http_review_wrong_key_returns_401`
+- [x] `test_http_review_missing_header_returns_401`
+- [x] `test_http_review_malformed_header_returns_401`
+
+**Definition of Done**
+- [x] `REVIEW_API_KEY` unset → endpoint open (dev/local mode, no behaviour change)
+- [x] `REVIEW_API_KEY` set → `Authorization: Bearer <key>` required; wrong/missing → 401
+- [x] Auth check extracted to `_check_api_key()` — separate from MCP governance path
+- [x] `REVIEW_API_KEY: ${REVIEW_API_KEY:-}` wired through `docker-compose.yml`
+- [x] Code health 10/10
+
+**Notes**
+- Empty default in compose means auth is off locally unless the var is explicitly set
+- The MCP `review_diff` tool path is unaffected — it uses governance JWT auth unchanged
