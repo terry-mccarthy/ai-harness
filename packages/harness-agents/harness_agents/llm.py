@@ -1,5 +1,9 @@
+import re
 from typing import Protocol, List, Dict
 from dataclasses import dataclass
+
+# OpenAI o-series reasoning models reject the temperature parameter outright.
+_O_SERIES_RE = re.compile(r"openai/o\d", re.IGNORECASE)
 
 @dataclass
 class LLMResponse:
@@ -124,12 +128,19 @@ class OpenRouterProvider:
         self.max_tokens = max_tokens
 
     async def chat(self, messages: List[Dict[str, str]]) -> LLMResponse:
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,  # type: ignore[arg-type]
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
+        kwargs: dict = {
+            "model": self.model,
+            "messages": messages,  # type: ignore[arg-type]
+            "max_tokens": self.max_tokens,
+        }
+        if not _O_SERIES_RE.search(self.model):
+            kwargs["temperature"] = self.temperature
+        response = await self.client.chat.completions.create(**kwargs)
+        if not response.choices:
+            raise ValueError(
+                f"OpenRouter returned empty choices for model {self.model!r} "
+                "(content filter or upstream error)"
+            )
         content = response.choices[0].message.content or ""
         usage = response.usage
         return LLMResponse(

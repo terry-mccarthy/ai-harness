@@ -507,3 +507,22 @@ Addressed three remaining findings from the Gemini code review:
 - [x] `github_repo` validated against `^owner/repo$` regex before API call; invalid format raises `ValueError`
 - [x] `POST /review` 500 response returns generic message; raw exception never sent to caller
 - [x] Code health 9.9/10
+
+---
+
+## OpenRouter Provider + Security Hardening
+
+Added `OpenRouterProvider` (PR #1) and addressed six findings from a multi-angle code review.
+
+**No new tests** — all fixes verified by the existing 121-test integration suite (all pass).
+
+**Definition of Done**
+- [x] `OpenRouterProvider` added to `harness_agents/llm.py`; wired into `_build_llm_provider` in `server.py`
+- [x] `LLM_PROVIDER=openrouter` routes all LLM calls through OpenRouter's OpenAI-compatible API
+- [x] `temperature` omitted for `openai/o\d` models (o1, o3-mini, o4-mini) which reject the parameter
+- [x] Empty `choices` list (content filter, upstream rate limit) raises `ValueError` before `choices[0]` IndexError
+- [x] Provider errors (`openai.APIError` subclasses, empty choices) caught in `_retry_until_valid`; returned as structured `{"code": "provider_error"}` state rather than propagating as uncaught exceptions
+- [x] `OPENROUTER_API_KEY` `.strip()`-ed before empty check — whitespace-only value caught at build time not at review time
+- [x] Unknown provider names raise `ValueError` with supported list; silent fallthrough to Ollama removed
+- [x] `http_review` returns 400 (not 500) for `ValueError` — config errors are now distinguishable from infrastructure failures
+- [x] Code health 9.7/10

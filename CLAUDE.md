@@ -237,6 +237,12 @@ docker compose up -d --no-deps review-server
 
 **Implementation note:** `OpenRouterProvider` uses the `openai` Python SDK with `base_url="https://openrouter.ai/api/v1"` — OpenRouter is OpenAI API-compatible. The class is in `packages/harness-agents/harness_agents/llm.py`.
 
+**o-series reasoning models:** `temperature` is silently omitted for models matching `openai/o\d` (e.g. `openai/o1`, `openai/o4-mini`) — these models reject the parameter with a 400 error. All other models receive temperature normally.
+
+**Error handling:** provider errors (auth failure, rate limit, empty choices from content filter) are caught in the reviewer's retry loop and returned as structured `{"code": "provider_error", "reason": "..."}` agent errors — same shape as all other agent errors. The retry loop does not retry provider errors.
+
+**`OPENROUTER_API_KEY` validation:** the key is `.strip()`-ed before the empty check, so a whitespace-only value is caught at startup rather than producing a 401 at review time. Unknown provider names raise `ValueError` with the supported list (`ollama`, `gemini`, `openrouter`) — previously they silently fell through to Ollama.
+
 ## Ollama from inside Docker
 
 The `review-server` container needs to reach Ollama on the host. Docker Desktop exposes this via `host.docker.internal`:
@@ -342,8 +348,8 @@ curl -s http://localhost:9003/review \
   -d "{\"diff_text\": $(echo "$DIFF" | jq -Rs .)}" | jq .
 ```
 
-Body: `{"diff_text": "...", "task": "...", "provider": "ollama|gemini"}` (`task` and `provider` optional).
-Returns same schema as `review_diff` MCP tool. Errors: 401 for bad/missing key, 422 for missing `diff_text`, 500 for agent failure.
+Body: `{"diff_text": "...", "task": "...", "provider": "ollama|gemini|openrouter"}` (`task` and `provider` optional).
+Returns same schema as `review_diff` MCP tool. Errors: 401 for bad/missing key, 422 for missing `diff_text`, 400 for bad provider name or missing `OPENROUTER_API_KEY`, 500 for agent failure.
 
 **Auth:** set `REVIEW_API_KEY` in env to require `Authorization: Bearer <key>`. When unset, the endpoint is open (dev/local mode). The empty default in `docker-compose.yml` (`${REVIEW_API_KEY:-}`) means auth is off by default locally — set the var before deploying publicly.
 

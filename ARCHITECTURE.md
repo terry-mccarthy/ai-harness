@@ -358,7 +358,8 @@ Triggered manually: `make consolidate`
 - Builds a prompt from both results, calls Ollama (`qwen2.5-coder:7b`)
 - Validates the model response against `REVIEWER_OUTPUT_SCHEMA` (jsonschema)
 - Retries up to 3× on schema failure, feeding the error back to the model
-- Strips markdown fences if the model ignores the raw JSON instruction
+- Strips `<think>...</think>` blocks (qwen3 and other reasoning models) and markdown fences
+- Provider errors (auth failure, rate limit, empty choices from content filter) are caught in the retry loop and returned as structured `{"code": "provider_error", "reason": "..."}` state — no retry attempted for provider errors
 
 ---
 
@@ -406,7 +407,7 @@ In addition to the MCP `review_diff` tool, the review server exposes a plain HTT
 POST /review
 Content-Type: application/json
 
-{ "diff_text": "...", "task": "...", "provider": "ollama|gemini" }
+{ "diff_text": "...", "task": "...", "provider": "ollama|gemini|openrouter" }
 ```
 
 Returns the same structured findings (`verdict`, `findings`, `summary`) as the MCP tool.
@@ -419,8 +420,12 @@ endpoint is open (dev/local mode — safe when port 9003 is only exposed on loca
 requests must carry `Authorization: Bearer <key>`; missing or wrong token → 401. The check lives
 in `_check_api_key()` and is separate from the MCP governance path.
 
-**Error responses:** 500 responses return a generic `"review failed — see server logs"` message;
-the full exception is logged server-side. Raw exception text is never sent to the caller.
+**Error responses:**
+- 400 — `ValueError` from provider configuration (unknown provider name, missing/blank `OPENROUTER_API_KEY`, structured agent `provider_error`). Message is included in the response body.
+- 422 — missing `diff_text` or invalid JSON body.
+- 500 — unexpected agent or infrastructure failure. Returns generic `"review failed — see server logs"`; raw exception is never sent to the caller.
+
+Unknown provider names raise `ValueError` with the supported list rather than silently falling through to Ollama.
 
 ---
 

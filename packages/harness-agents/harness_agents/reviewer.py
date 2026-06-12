@@ -41,7 +41,10 @@ class CodeReviewerAgent:
     async def _retry_until_valid(self, messages: list, token_usage: dict, token_budget: int | None):
         """Run the LLM retry loop. Returns (parsed_output, token_usage, error_dict | None)."""
         for attempt in range(MAX_ITERATIONS):
-            response = await self.llm.chat(messages=messages)
+            try:
+                response = await self.llm.chat(messages=messages)
+            except Exception as e:
+                return None, token_usage, {"code": "provider_error", "reason": str(e)}
             raw = _clean_raw(response.content)
             logger.debug("attempt %d cleaned response:\n%s", attempt + 1, raw)
 
