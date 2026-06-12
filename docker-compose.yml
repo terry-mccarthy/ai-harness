@@ -50,6 +50,7 @@ services:
     ports: ["9001:9001"]
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9001)); s.close()\""]
       interval: 5s

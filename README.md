@@ -35,11 +35,11 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 - **PostgreSQL** (`pgvector/pgvector:pg16`) — MCPJungle state, LangGraph checkpoints, and vector memory store; pgvector extension enables semantic search
 - **Redis 7** — hot-read cache for the memory store; frequently accessed items served in-process without hitting PostgreSQL
 - **Ollama** (`qwen2.5-coder:32b` default) — local LLM for reviews and vector embeddings; no API key needed
-- **git-diff-stub** — runs real `git diff` on a baked-in sample repo
+- **git-diff-stub** — real `git diff` on the baked sample repo, or fetches a PR diff from the GitHub API (`pr_number` + `github_repo`; reads `GITHUB_TOKEN` from env)
 - **linter-stub** — semgrep-based linter (`semgrep-rules.yml`); catches SQL f-string injection, hardcoded credentials, `subprocess shell=True`, `open()` f-string paths, and `eval()`
 - **architect-stub** — stub MCP server for architect-role tools (`codebase_search`, `adr_read`, `adr_write`, `diagram_gen`)
 - **sre-stub** — stub MCP server for SRE-role tools (`observability_query`, `runbook_read`, `log_search`, `shell_exec`)
-- **review-server** — FastMCP service wrapping the full code-reviewer agent; callable from Claude Code
+- **review-server** — FastMCP service wrapping the full code-reviewer agent; callable from Claude Code via MCP and from CI pipelines via `POST /review` (plain HTTP)
 - **ContextForge** (`ghcr.io/ibm/mcp-context-forge`, `:4444`) — production MCP gateway; alternative to MCPJungle, enabled via `GATEWAY_BACKEND=contextforge`
 - **Prometheus + Grafana** — optional monitoring stack (`make monitoring-up`); governance exposes `/metrics` with tool-call counters, latency histograms, and rate-limit rejections; pre-built cost-per-role dashboard at `localhost:3000`
 
@@ -250,6 +250,32 @@ Scores the `CodeReviewerAgent` against 6 labeled diffs with known security bugs 
 | `test_reviewer_accumulates_across_retries` | Token counts sum across all retry iterations |
 | `test_reviewer_budget_exceeded_on_retry` | Reviewer aborts with `token_budget_exceeded` when completion tokens exceed budget after a failed parse |
 | `test_reviewer_no_budget_runs_to_completion` | `token_budget=None` never triggers budget check |
+
+### git_diff GitHub mode (9 tests) — `pytest packages/harness-tests/test_git_diff_github.py`
+
+| Test | What it proves |
+|---|---|
+| `test_fetch_github_pr_diff_calls_correct_url` | API call targets the correct GitHub pulls endpoint |
+| `test_fetch_github_pr_diff_sets_diff_accept_header` | `Accept: application/vnd.github.v3.diff` header is set |
+| `test_fetch_github_pr_diff_includes_auth_header_when_token_given` | `Authorization: Bearer <token>` added when token present |
+| `test_fetch_github_pr_diff_omits_auth_header_when_no_token` | No auth header when token is absent (public repos) |
+| `test_fetch_github_pr_diff_returns_decoded_body` | Response body decoded to string and returned |
+| `test_git_diff_github_mode_returns_pr_diff` | Tool routes to GitHub mode and returns `source: github` |
+| `test_git_diff_github_mode_passes_env_token` | `GITHUB_TOKEN` env var forwarded to API call |
+| `test_git_diff_github_mode_missing_repo_raises` | `pr_number` without `github_repo` raises `ValueError` |
+| `test_git_diff_diff_text_takes_precedence_over_github` | Pre-supplied `diff_text` short-circuits GitHub fetch |
+
+### review server HTTP endpoint (7 tests) — `pytest packages/harness-tests/test_review_http.py`
+
+| Test | What it proves |
+|---|---|
+| `test_http_review_endpoint_exists` | `POST /review` returns 200 for a valid diff |
+| `test_http_review_returns_verdict_and_findings` | Response has `verdict`, `findings`, `summary` keys |
+| `test_http_review_verdict_pass_on_clean_diff` | Clean diff → `verdict: pass` |
+| `test_http_review_accepts_custom_task` | Optional `task` field accepted without error |
+| `test_http_review_accepts_provider_override` | Optional `provider` field accepted without error |
+| `test_http_review_missing_diff_text_returns_422` | Missing `diff_text` → 422 Unprocessable Entity |
+| `test_http_review_agent_error_returns_500` | Agent failure (max retries exceeded) → 500 |
 
 ## Connect Claude Code
 

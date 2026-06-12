@@ -292,6 +292,28 @@ MCPJungle exposes itself as an MCP server at `http://localhost:8080/mcp`. Add to
 
 This gives Claude Code access to all registered tools, including `review_server__review_diff`.
 
+## git_diff tool modes
+
+Three input modes, evaluated in priority order:
+
+1. `diff_text` (non-empty string) — passthrough; echoed back immediately. Used by agents that already have the diff.
+2. `pr_number` + `github_repo` — fetches the unified diff from `GET https://api.github.com/repos/{github_repo}/pulls/{pr_number}` with `Accept: application/vnd.github.v3.diff`. Token read from `GITHUB_TOKEN` env var (optional; omit for public repos). Works from inside Docker — no filesystem access needed.
+3. `repo_path` + `base`/`head` — runs `git diff` against the Docker-internal baked sample repo at `/app/sample-repo`.
+
+## review_server HTTP endpoint
+
+`POST http://localhost:9003/review` — plain JSON endpoint for CI pipelines, pre-commit hooks, and webhooks.
+
+```bash
+DIFF=$(git diff origin/main...HEAD)
+curl -s http://localhost:9003/review \
+  -H "Content-Type: application/json" \
+  -d "{\"diff_text\": $(echo "$DIFF" | jq -Rs .)}" | jq .
+```
+
+Body: `{"diff_text": "...", "task": "...", "provider": "ollama|gemini"}` (`task` and `provider` optional).
+Returns same schema as `review_diff` MCP tool. Errors: 422 for missing `diff_text`, 500 for agent failure.
+
 ## ContextForge gateway (Phase 5)
 
 ContextForge (`ghcr.io/ibm/mcp-context-forge:latest`) runs on port 4444 as an alternative to MCPJungle.

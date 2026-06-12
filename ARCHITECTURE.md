@@ -390,10 +390,29 @@ The `git-diff-stub` container bakes in a sample repo at `/app/sample-repo` with 
 the second adds a password-logging `print` statement. This lets the full review pipeline run
 against a real diff without an external repo.
 
-The tool accepts:
+The tool accepts three modes (evaluated in priority order):
 
-- `diff_text` (string) — passthrough mode; echoed back unchanged (used by `CodeReviewerAgent`)
-- `repo_path` + `base`/`head` refs — runs real `git diff` against the baked repo
+- `diff_text` (string) — passthrough; echoed back unchanged. Highest priority — always used if non-empty.
+- `pr_number` + `github_repo` — fetches the PR unified diff from the GitHub API using `Accept: application/vnd.github.v3.diff`. Reads `GITHUB_TOKEN` from env (optional; omit for public repos). Enables fully autonomous agent reviews of any GitHub PR.
+- `repo_path` + `base`/`head` refs — runs real `git diff` against the Docker-internal baked repo.
+
+`GITHUB_TOKEN` is passed through from the host via `docker-compose.yml` (`${GITHUB_TOKEN:-}`).
+
+## review_server HTTP Endpoint
+
+In addition to the MCP `review_diff` tool, the review server exposes a plain HTTP endpoint:
+
+```
+POST /review
+Content-Type: application/json
+
+{ "diff_text": "...", "task": "...", "provider": "ollama|gemini" }
+```
+
+Returns the same structured findings (`verdict`, `findings`, `summary`) as the MCP tool.
+Intended for CI pipelines, pre-commit hooks, and webhooks — any caller that can make an HTTP
+request but is not running an MCP client. Both the MCP tool and the HTTP endpoint share the
+same `_run_review()` function; there is no duplication of agent logic.
 
 ---
 
@@ -542,3 +561,4 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0025 | All LLM system prompts externalized to `prompts/*.md` — `classify.md` and `synthesise.md` were written but orphaned (nodes.py had an inline `_CLASSIFY_PROMPT` that diverged); consolidated so every prompt is a file: editable without code changes, diffable in git, and loadable by the eval suite | Accepted |
 | 0026 | Eval suite (`eval-fixtures/` + `pytest -m eval`) for reviewer quality benchmarking — integration tests prove the harness works; eval proves the agent is good; 6 labeled diffs (clean + SQL injection, hardcoded secrets, shell injection, missing auth, path traversal); scored on verdict accuracy (≥80%) and recall of must-flag patterns (≥60%); mock gateway bypasses Docker stack so evals run against Ollama only | Accepted |
 | 0027 | Agent-level token tracking in `LLMResponse` + `AgentState` — `HarnessState.tokens_used` tracks graph-level totals but providers were discarding per-call counts; enriching `LLMResponse` with `prompt_tokens`/`completion_tokens` and accumulating in the reviewer retry loop gives per-agent measurement and enables a fine-grained `token_budget` that aborts runaway retries without cancelling a successful first response | Accepted |
+| 0028 | `POST /review` plain HTTP endpoint on review-server alongside the MCP tool — MCP is the right interface for LLM agent callers (tool-use protocol, schema enforcement, audit trail); plain HTTP is the right interface for CI pipelines, pre-commit hooks, webhooks, and IDE extensions that can't run an MCP client; both share `_run_review()` with no logic duplication; `git_diff` tool gains a GitHub API mode (`pr_number` + `github_repo`) so autonomous agents can fetch any PR diff without filesystem access | Accepted |

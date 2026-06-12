@@ -426,3 +426,43 @@ Replaced the naive pattern-matching `linter_server.py` with a real semgrep scan.
 - Budget enforcement is retry-gated: a successful first response is never cancelled by the budget check, only runaway retries are stopped
 - `AgentState` switched to `total=False` (all keys optional) for backwards compatibility — existing tests construct partial state dicts without the new fields
 - `HarnessState.tokens_used` (supervisor-level) is separate; agent-level `token_usage` is not yet propagated back to `HarnessState` — that's a follow-up
+
+---
+
+## git_diff GitHub Mode + review_server HTTP Endpoint
+
+**Tests** — 16 pass (unit tests — no Docker stack needed):
+
+`test_git_diff_github.py` (9 tests):
+- [x] `test_fetch_github_pr_diff_calls_correct_url`
+- [x] `test_fetch_github_pr_diff_sets_diff_accept_header`
+- [x] `test_fetch_github_pr_diff_includes_auth_header_when_token_given`
+- [x] `test_fetch_github_pr_diff_omits_auth_header_when_no_token`
+- [x] `test_fetch_github_pr_diff_returns_decoded_body`
+- [x] `test_git_diff_github_mode_returns_pr_diff`
+- [x] `test_git_diff_github_mode_passes_env_token`
+- [x] `test_git_diff_github_mode_missing_repo_raises`
+- [x] `test_git_diff_diff_text_takes_precedence_over_github`
+
+`test_review_http.py` (7 tests):
+- [x] `test_http_review_endpoint_exists`
+- [x] `test_http_review_returns_verdict_and_findings`
+- [x] `test_http_review_verdict_pass_on_clean_diff`
+- [x] `test_http_review_accepts_custom_task`
+- [x] `test_http_review_accepts_provider_override`
+- [x] `test_http_review_missing_diff_text_returns_422`
+- [x] `test_http_review_agent_error_returns_500`
+
+**Definition of Done**
+- [x] `git_diff` tool accepts `pr_number` + `github_repo`; fetches unified diff from GitHub API
+- [x] `GITHUB_TOKEN` env var forwarded into container via `docker-compose.yml`
+- [x] `diff_text` passthrough takes precedence over GitHub mode (no regression)
+- [x] `review_server` exposes `POST /review` plain HTTP endpoint
+- [x] MCP tool and HTTP endpoint share `_run_review()` — no logic duplication
+- [x] Missing `diff_text` → 422; agent failure → 500
+- [x] Code health 10/10 on both changed files
+
+**Notes / divergences**
+- GitHub mode is unauthenticated when `GITHUB_TOKEN` is absent — works for public repos, will 404 on private
+- `docker-compose.yml` updated: `GITHUB_TOKEN: ${GITHUB_TOKEN:-}` passes host token into container
+- `_run_review()` extraction also reduced `review_diff` MCP handler to a one-liner, bringing `server.py` avgCCN from 3.8 → 2.4

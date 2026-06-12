@@ -2,9 +2,11 @@ import logging
 import os
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
-from mcp.server.transport_security import TransportSecuritySettings
 
 from harness_gateway.client import GatewayClient
 from harness_agents.reviewer import CodeReviewerAgent
@@ -15,6 +17,15 @@ mcp = FastMCP(
     host="0.0.0.0",
     port=9003,
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
+
+_DEFAULT_TASK = (
+    "Review this diff for: "
+    "(1) security vulnerabilities — credential leaks, injection flaws, path traversal, missing auth enforcement, insecure defaults; "
+    "(2) code quality — error handling gaps, dead code, resource leaks, incorrect types, silent failures; "
+    "(3) architectural concerns — hardcoded values, tight coupling, shared mutable state, missing abstractions. "
+    "Report every finding with file, line, severity (CRITICAL/WARNING/INFO), and a specific fix suggestion. "
+    "Verdict is 'fail' if any CRITICAL finding exists."
 )
 
 
@@ -35,16 +46,7 @@ def _env_int(key: str, default: int) -> int:
 
 
 def _build_llm_provider(provider_name: str):
-    """Factory: instantiate the correct LLMProvider strategy from a provider name.
-
-    Args:
-        provider_name: ``"ollama"`` or ``"gemini"``.  Any other value falls
-            back to Ollama.
-
-    Returns:
-        A concrete :class:`~harness_agents.llm.LLMProvider` instance configured
-        from the relevant environment variables.
-    """
+    """Factory: return a concrete LLMProvider for the given provider name."""
     from harness_agents.llm import OllamaProvider, GeminiProvider
 
     if provider_name == "gemini":
@@ -63,28 +65,10 @@ def _build_llm_provider(provider_name: str):
     )
 
 
-@mcp.tool()
-async def review_diff(
-    diff_text: str,
-    provider: str | None = None,
-    task: str = (
-        "Review this diff for: "
-        "(1) security vulnerabilities — credential leaks, injection flaws, path traversal, missing auth enforcement, insecure defaults; "
-        "(2) code quality — error handling gaps, dead code, resource leaks, incorrect types, silent failures; "
-        "(3) architectural concerns — hardcoded values, tight coupling, shared mutable state, missing abstractions. "
-        "Report every finding with file, line, severity (CRITICAL/WARNING/INFO), and a specific fix suggestion. "
-        "Verdict is 'fail' if any CRITICAL finding exists."
-    ),
-) -> dict:
-    """Run the governed code-reviewer agent and return structured findings.
+async def _run_review(diff_text: str, task: str, provider: str | None) -> dict:
+    """Run the CodeReviewerAgent and return structured findings.
 
-    Args:
-        diff_text: The unified diff string to review.
-        provider: Optional LLM provider override for this request.  Accepted
-            values are ``"ollama"`` and ``"gemini"``.  When omitted the server
-            falls back to the ``LLM_PROVIDER`` environment variable (default:
-            ``"ollama"``).
-        task: High-level review instruction passed to the agent.
+    Raises ValueError if the agent returns an error.
     """
     gateway = GatewayClient(
         gateway_url=os.environ["MCPJUNGLE_URL"],
@@ -92,15 +76,9 @@ async def review_diff(
         client_id="code-reviewer",
         client_secret=os.environ.get("CODE_REVIEWER_SECRET", ""),
     )
-
-    # Resolve provider: per-call arg > env var > default
     resolved_provider = (provider or os.environ.get("LLM_PROVIDER", "ollama")).lower()
     llm_provider = _build_llm_provider(resolved_provider)
-
-    agent = CodeReviewerAgent(
-        gateway=gateway,
-        llm_provider=llm_provider,
-    )
+    agent = CodeReviewerAgent(gateway=gateway, llm_provider=llm_provider)
     state = AgentState(
         task=task,
         diff=diff_text,
@@ -113,6 +91,54 @@ async def review_diff(
     if result.get("error"):
         raise ValueError(result["error"]["reason"])
     return result["agent_output"]
+
+
+@mcp.tool()
+async def review_diff(
+    diff_text: str,
+    provider: str | None = None,
+    task: str = _DEFAULT_TASK,
+) -> dict:
+    """Run the governed code-reviewer agent and return structured findings.
+
+    Args:
+        diff_text: The unified diff string to review.
+        provider: Optional LLM provider override (``"ollama"`` or ``"gemini"``).
+            Falls back to the ``LLM_PROVIDER`` environment variable.
+        task: High-level review instruction passed to the agent.
+    """
+    return await _run_review(diff_text, task, provider)
+
+
+@mcp.custom_route("/review", methods=["POST"])
+async def http_review(request: Request) -> JSONResponse:
+    """Plain HTTP endpoint for CI pipelines, pre-commit hooks, and webhooks.
+
+    Body (JSON):
+        diff_text (str, required): unified diff to review
+        task      (str, optional): review instruction
+        provider  (str, optional): ``"ollama"`` or ``"gemini"``
+
+    Returns the same structured findings as the MCP ``review_diff`` tool.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=422)
+
+    diff_text = body.get("diff_text")
+    if not diff_text:
+        return JSONResponse({"error": "diff_text is required"}, status_code=422)
+
+    task = body.get("task", _DEFAULT_TASK)
+    provider = body.get("provider")
+
+    try:
+        findings = await _run_review(diff_text, task, provider)
+        return JSONResponse(findings)
+    except Exception as exc:
+        logging.exception("review failed")
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 if __name__ == "__main__":
