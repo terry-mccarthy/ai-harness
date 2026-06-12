@@ -38,11 +38,45 @@ class CodeReviewerAgent:
         self.llm = llm_provider
         self.memory = memory_store
 
+    async def _retry_until_valid(self, messages: list, token_usage: dict, token_budget: int | None):
+        """Run the LLM retry loop. Returns (parsed_output, token_usage, error_dict | None)."""
+        for attempt in range(MAX_ITERATIONS):
+            response = await self.llm.chat(messages=messages)
+            raw = _clean_raw(response.content)
+            logger.debug("attempt %d cleaned response:\n%s", attempt + 1, raw)
+
+            token_usage["prompt_tokens"] += response.prompt_tokens
+            token_usage["completion_tokens"] += response.completion_tokens
+
+            try:
+                parsed = json.loads(raw)
+                jsonschema.validate(parsed, REVIEWER_OUTPUT_SCHEMA)
+                return parsed, token_usage, None
+            except (json.JSONDecodeError, jsonschema.ValidationError) as e:
+                logger.warning("attempt %d: invalid output: %s", attempt + 1, e)
+
+                if token_budget is not None and token_usage["completion_tokens"] >= token_budget:
+                    logger.warning(
+                        "token_budget_exceeded: completion_tokens=%d budget=%d",
+                        token_usage["completion_tokens"], token_budget,
+                    )
+                    return None, token_usage, {
+                        "code": "token_budget_exceeded",
+                        "reason": f"completion tokens {token_usage['completion_tokens']} exceeded budget {token_budget}",
+                    }
+
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({
+                    "role": "user",
+                    "content": f"Your previous response was invalid: {e}\nTry again. Raw JSON only.",
+                })
+
+        return None, token_usage, {"code": "invalid_output", "reason": "max retries exceeded"}
+
     async def run(self, state: AgentState) -> AgentState:
         diff_text = state["diff"]
         task = state["task"]
 
-        # Read repo conventions and past finding patterns from memory
         conventions = []
         if self.memory:
             conventions = await self.memory.search(self.memory_namespace, "repo conventions coding style", top_k=3)
@@ -74,26 +108,11 @@ Return your structured review as raw JSON."""
         ]
         logger.debug("llm user_message:\n%s", user_message)
 
-        raw_output = None
-        for attempt in range(MAX_ITERATIONS):
-            response = await self.llm.chat(messages=messages)
-            raw = _clean_raw(response.content)
-            logger.debug("attempt %d cleaned response:\n%s", attempt + 1, raw)
+        token_usage = dict(state.get("token_usage") or {"prompt_tokens": 0, "completion_tokens": 0})
+        token_budget = state.get("token_budget")
 
-            try:
-                parsed = json.loads(raw)
-                jsonschema.validate(parsed, REVIEWER_OUTPUT_SCHEMA)
-                raw_output = parsed
-                break
-            except (json.JSONDecodeError, jsonschema.ValidationError) as e:
-                logger.warning("attempt %d: invalid output: %s", attempt + 1, e)
-                messages.append({"role": "assistant", "content": raw})
-                messages.append({
-                    "role": "user",
-                    "content": f"Your previous response was invalid: {e}\nTry again. Raw JSON only.",
-                })
+        raw_output, token_usage, error = await self._retry_until_valid(messages, token_usage, token_budget)
 
-        if raw_output is None:
-            return {**state, "error": {"code": "invalid_output", "reason": "max retries exceeded"}}
-
-        return {**state, "agent_output": raw_output}
+        if error:
+            return {**state, "token_usage": token_usage, "error": error}
+        return {**state, "agent_output": raw_output, "token_usage": token_usage}

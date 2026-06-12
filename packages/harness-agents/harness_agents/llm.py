@@ -4,6 +4,8 @@ from dataclasses import dataclass
 @dataclass
 class LLMResponse:
     content: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 class LLMProvider(Protocol):
     async def chat(self, messages: List[Dict[str, str]]) -> LLMResponse:
@@ -34,7 +36,11 @@ class OllamaProvider:
             messages=messages,
             options=self._options,
         )
-        return LLMResponse(content=response.message.content)
+        return LLMResponse(
+            content=response.message.content,
+            prompt_tokens=response.prompt_eval_count or 0,
+            completion_tokens=response.eval_count or 0,
+        )
 
 class GeminiProvider:
     def __init__(
@@ -50,28 +56,24 @@ class GeminiProvider:
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
 
+    def _build_contents(self, messages: List[Dict[str, str]], types):
+        """Split a message list into Gemini contents and an optional system instruction."""
+        contents = []
+        system_instruction = None
+        for msg in messages:
+            role, text = msg["role"], msg["content"]
+            if role == "system":
+                system_instruction = text
+            elif role == "user":
+                contents.append(types.Content(role="user", parts=[types.Part.from_text(text=text)]))
+            elif role == "assistant":
+                contents.append(types.Content(role="model", parts=[types.Part.from_text(text=text)]))
+        return contents, system_instruction
+
     async def chat(self, messages: List[Dict[str, str]]) -> LLMResponse:
         from google.genai import types
 
-        contents = []
-        system_instruction = None
-
-        for msg in messages:
-            role = msg["role"]
-            text = msg["content"]
-            
-            if role == "system":
-                # System instructions are passed separately in the config
-                system_instruction = text
-            elif role == "user":
-                contents.append(
-                    types.Content(role="user", parts=[types.Part.from_text(text=text)])
-                )
-            elif role == "assistant":
-                contents.append(
-                    types.Content(role="model", parts=[types.Part.from_text(text=text)])
-                )
-
+        contents, system_instruction = self._build_contents(messages, types)
         config = types.GenerateContentConfig(
             temperature=self.temperature,
             max_output_tokens=self.max_output_tokens,
@@ -84,4 +86,9 @@ class GeminiProvider:
             contents=contents,
             config=config,
         )
-        return LLMResponse(content=response.text)
+        usage = response.usage_metadata
+        return LLMResponse(
+            content=response.text,
+            prompt_tokens=(usage.prompt_token_count or 0) if usage else 0,
+            completion_tokens=(usage.candidates_token_count or 0) if usage else 0,
+        )

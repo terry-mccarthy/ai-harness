@@ -1,7 +1,7 @@
 from typing import TypedDict
 
 
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     task: str
     diff: str
     thread_id: str
@@ -10,6 +10,8 @@ class AgentState(TypedDict):
     error: dict | None
     human_approval_token: str | None
     memory_context: list | None
+    token_usage: dict           # {"prompt_tokens": int, "completion_tokens": int}
+    token_budget: int | None    # None = unlimited; agent aborts retries when exceeded
 
 
 ARCHITECT_OUTPUT_SCHEMA = {
