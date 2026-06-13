@@ -203,6 +203,7 @@ async def check_policy(
     request: Request,
     authorization: str | None = Header(default=None),
     x_human_approval_token: str | None = Header(default=None),
+    x_correlation_id: str | None = Header(default=None),
 ):
     """Validate token and OPA policy. Returns {allowed, role, agent_id, rule}."""
     claims = _decode_jwt(authorization)
@@ -212,10 +213,19 @@ async def check_policy(
     rule = f"harness.allow[{claims['role']}]"
 
     if short_tool == "shell_exec" and not x_human_approval_token:
+        _tool_calls_total.labels(agent_role=claims["role"], decision="deny").inc()
+        _write_audit(
+            claims["sub"], full_tool, short_tool, "", "", "deny",
+            "shell_exec_requires_human_approval", 0, x_correlation_id,
+        )
         raise HTTPException(403, "shell_exec_requires_human_approval")
 
     if not await _check_opa(claims["role"], short_tool):
         _tool_calls_total.labels(agent_role=claims["role"], decision="deny").inc()
+        _write_audit(
+            claims["sub"], full_tool, short_tool, "", "", "deny",
+            rule, 0, x_correlation_id,
+        )
         raise HTTPException(403, "policy_denied")
 
     return {
