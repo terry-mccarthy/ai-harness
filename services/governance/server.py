@@ -1,7 +1,5 @@
 import asyncio
-import base64
 from datetime import datetime, timedelta
-import hashlib
 import json
 import logging
 import os
@@ -12,191 +10,42 @@ import httpx
 import jwt
 import pymysql
 import pymysql.cursors
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Header, Request, Response
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+
+from core.config import (
+    CLIENTS,
+    DOLT_DB,
+    DOLT_HOST,
+    DOLT_PASSWORD,
+    DOLT_PORT,
+    DOLT_USER,
+    EXPIRY_PASS_INTERVAL,
+    OPA_URL,
+    PRIVATE_KEY as _private_key,
+    PUBLIC_KEY as _public_key,
+    TOKEN_TTL,
+    b64url as _b64url,
+)
+from core.auth import decode_jwt as _decode_jwt
+from core.opa import check_opa
+from core.dolt import (
+    get_dolt_conn,
+    serialise_row as _serialise_row,
+    write_audit as _write_audit,
+    write_episode as _write_episode,
+)
+from core.metrics import (
+    tool_call_latency as _tool_call_latency,
+    tool_calls_total as _tool_calls_total,
+)
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# ---------------------------------------------------------------------------
-# RSA keypair — load from file (preferred) or inline PEM env var
-# ---------------------------------------------------------------------------
-
-_TEST_KEY_FINGERPRINT = "sha256:f51572658f267e254a18caf6d2320581aacfbaee028a2a875a8a47af4630ffb5"
-
-_key_file = os.environ.get("JWT_PRIVATE_KEY_FILE")
-if _key_file:
-    with open(_key_file, "rb") as _f:
-        _jwt_private_key_pem = _f.read()
-else:
-    _jwt_private_key_pem = os.environ["JWT_PRIVATE_KEY"].encode()
-
-_key_fingerprint = "sha256:" + hashlib.sha256(_jwt_private_key_pem).hexdigest()
-if _key_fingerprint == _TEST_KEY_FINGERPRINT and os.environ.get("ENV") != "test":
-    raise RuntimeError(
-        "Governance is configured with the committed test key. "
-        "Set ENV=test or supply a production key via JWT_PRIVATE_KEY_FILE."
-    )
-
-_private_key = load_pem_private_key(_jwt_private_key_pem, password=None)
-_public_key = _private_key.public_key()
-
-
-def _b64url(n: int) -> str:
-    byte_len = (n.bit_length() + 7) // 8
-    return base64.urlsafe_b64encode(n.to_bytes(byte_len, "big")).rstrip(b"=").decode()
-
-
-OPA_URL = os.environ.get("OPA_URL", "http://opa:8181")
-DOLT_HOST = os.environ.get("DOLT_HOST", "dolt")
-DOLT_PORT = int(os.environ.get("DOLT_PORT", "3306"))
-DOLT_USER = os.environ.get("DOLT_USER", "harness")
-DOLT_PASSWORD = os.environ.get("DOLT_PASSWORD", "harness")
-DOLT_DB = os.environ.get("DOLT_DB", "harness")
-TOKEN_TTL = int(os.environ.get("TOKEN_TTL", "900"))  # 15 min
-EXPIRY_PASS_INTERVAL = int(os.environ.get("EXPIRY_PASS_INTERVAL", "1000"))
 _audit_call_count: int = 0
-
-# ---------------------------------------------------------------------------
-# Prometheus metrics
-# ---------------------------------------------------------------------------
-_tool_calls_total = Counter(
-    "harness_tool_calls_total",
-    "Total tool invocations by agent role and decision",
-    ["agent_role", "decision"],
-)
-_tool_call_latency = Histogram(
-    "harness_tool_call_latency_ms",
-    "Tool call latency in milliseconds",
-    ["agent_role"],
-    buckets=[10, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
-)
-
-CLIENTS = {
-    "architect": {
-        "secret": os.environ.get("ARCHITECT_SECRET", "architect-secret"),
-        "role": "architect",
-    },
-    "code-reviewer": {
-        "secret": os.environ["CODE_REVIEWER_SECRET"],
-        "role": "code_reviewer",
-    },
-    "sre": {
-        "secret": os.environ.get("SRE_SECRET", "sre-secret"),
-        "role": "sre",
-    },
-    "human-operator": {
-        "secret": os.environ.get("HUMAN_OPERATOR_SECRET", "human-operator-secret"),
-        "role": "human_operator",
-    },
-}
-
-
-def _decode_jwt(authorization: str | None) -> dict:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "missing_token")
-    raw_token = authorization[7:]
-    try:
-        return jwt.decode(raw_token, _public_key, algorithms=["RS256"])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(401, "token_expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(401, "invalid_token")
-
-
-async def _check_opa(role: str, short_tool: str) -> bool:
-    try:
-        async with httpx.AsyncClient() as client:
-            opa_resp = await client.post(
-                f"{OPA_URL}/v1/data/harness/allow",
-                json={"input": {"agent_role": role, "tool_name": short_tool}},
-                timeout=5.0,
-            )
-        return opa_resp.json().get("result", False)
-    except Exception as e:
-        logger.error("OPA unreachable: %s", e)
-        return False
-
-
-def get_dolt_conn():
-    return pymysql.connect(
-        host=DOLT_HOST,
-        port=DOLT_PORT,
-        user=DOLT_USER,
-        password=DOLT_PASSWORD,
-        database=DOLT_DB,
-        autocommit=True,
-    )
-
-
-def _write_episode(
-    agent_principal, tool_name, short_tool, req_hash, correlation_id, service_class,
-):
-    conn = None
-    try:
-        import uuid as _uuid
-        episode_id = str(_uuid.uuid4())
-        timestamp_ms = int(time.time() * 1000)
-        alert_sig = f"{agent_principal}.{short_tool}:{correlation_id or ''}"
-        env_fp = json.dumps({"tool_name": tool_name, "server_id": short_tool, "timestamp_ms": timestamp_ms})
-        actions = json.dumps([{"tool": tool_name, "scoped_args": req_hash, "scope_token_ref": correlation_id}])
-        conn = get_dolt_conn()
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO episodes "
-                "(episode_id, agent_principal, alert_signature, service_class, env_fingerprint, actions) "
-                "VALUES (%s,%s,%s,%s,%s,%s)",
-                (episode_id, agent_principal, alert_sig, service_class or "unknown", env_fp, actions),
-            )
-            cur.execute(
-                "CALL DOLT_COMMIT('-Am', %s)",
-                (f"episode: {short_tool} by {agent_principal}",),
-            )
-    except Exception as e:
-        logger.error("Dolt episode write failed: %s", e)
-    finally:
-        if conn:
-            conn.close()
-
-
-def _write_audit(
-    agent_id, tool_name, server_id, req_hash, resp_hash,
-    decision, rule, latency_ms, correlation_id=None,
-):
-    conn = None
-    try:
-        conn = get_dolt_conn()
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO audit_log
-                   (agent_id, tool_name, server_id, request_hash, response_hash,
-                    policy_decision, policy_rule, timestamp_ms, latency_ms, correlation_id)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (
-                    agent_id,
-                    tool_name,
-                    server_id,
-                    req_hash,
-                    resp_hash,
-                    decision,
-                    rule,
-                    int(time.time() * 1000),
-                    latency_ms,
-                    correlation_id,
-                ),
-            )
-            cur.execute(
-                "CALL DOLT_COMMIT('-Am', %s)",
-                (f"audit: {tool_name} by {agent_id} [{decision}]",),
-            )
-    except Exception as e:
-        logger.error("Dolt audit write failed: %s", e)
-    finally:
-        if conn:
-            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +108,7 @@ async def check_policy(
         )
         raise HTTPException(403, "shell_exec_requires_human_approval")
 
-    if not await _check_opa(claims["role"], short_tool):
+    if not await check_opa("harness/allow", {"agent_role": claims["role"], "tool_name": short_tool}):
         _tool_calls_total.labels(agent_role=claims["role"], decision="deny").inc()
         _write_audit(
             claims["sub"], full_tool, short_tool, "", "", "deny",
@@ -436,14 +285,6 @@ async def list_skills(
 _VALID_OUTCOMES = {"RESOLVED", "FAILED", "ROLLED_BACK", "HUMAN_OVERRIDE", "INCONCLUSIVE"}
 
 
-def _serialise_row(row: dict) -> dict:
-    """Convert datetime and bytes values in a Dolt row to JSON-safe types."""
-    return {
-        k: (v.isoformat() if hasattr(v, "isoformat") else v.decode() if isinstance(v, (bytes, bytearray)) else v)
-        for k, v in row.items()
-    }
-
-
 def _validate_label_body(outcome: str | None, outcome_signal: dict | None) -> None:
     if outcome not in _VALID_OUTCOMES:
         raise HTTPException(422, f"outcome must be one of {sorted(_VALID_OUTCOMES)}")
@@ -468,20 +309,6 @@ def _check_episode_labelable(conn, episode_id: str, labeler_principal: str) -> d
     return row
 
 
-async def _check_opa_label(role: str) -> bool:
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{OPA_URL}/v1/data/harness/label_allowed",
-                json={"input": {"scope": "episode:label", "agent_role": role}},
-                timeout=5.0,
-            )
-        return resp.json().get("result", False) is True
-    except Exception as e:
-        logger.error("OPA label check failed: %s", e)
-        return False
-
-
 @app.post("/episodes/{episode_id}/label")
 async def label_episode(
     episode_id: str,
@@ -489,7 +316,7 @@ async def label_episode(
     authorization: str | None = Header(default=None),
 ):
     claims = _decode_jwt(authorization)
-    if not await _check_opa_label(claims["role"]):
+    if await check_opa("harness/label_allowed", {"scope": "episode:label", "agent_role": claims["role"]}) is not True:
         raise HTTPException(403, "episode_label_not_permitted")
 
     body = await request.json()
@@ -523,20 +350,6 @@ _N_MIN = 5       # minimum episode count
 _K_MIN = 2       # minimum distinct agent_principals
 _M_MIN = 2       # minimum recent episodes
 _RECENT_DAYS = 90
-
-
-async def _check_opa_propose(role: str) -> bool:
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{OPA_URL}/v1/data/harness/propose_allowed",
-                json={"input": {"scope": "candidate:propose", "agent_role": role}},
-                timeout=5.0,
-            )
-        return resp.json().get("result", False) is True
-    except Exception as e:
-        logger.error("OPA propose check failed: %s", e)
-        return False
 
 
 def _fetch_and_qualify_episodes(conn, episode_ids: list[str]) -> tuple[list[dict], list[str]]:
@@ -607,7 +420,7 @@ async def post_candidates(
     authorization: str | None = Header(default=None),
 ):
     claims = _decode_jwt(authorization)
-    if not await _check_opa_propose(claims["role"]):
+    if await check_opa("harness/propose_allowed", {"scope": "candidate:propose", "agent_role": claims["role"]}) is not True:
         raise HTTPException(403, "candidate_propose_not_permitted")
 
     body = await request.json()
@@ -672,20 +485,6 @@ async def get_candidate(
 # ---------------------------------------------------------------------------
 
 _SKILL_EXPIRY_DAYS = 90
-
-
-async def _check_opa_promote(role: str) -> bool:
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{OPA_URL}/v1/data/harness/promote_allowed",
-                json={"input": {"scope": "skill:promote", "agent_role": role}},
-                timeout=5.0,
-            )
-        return resp.json().get("result", False) is True
-    except Exception as e:
-        logger.error("OPA promote check failed: %s", e)
-        return False
 
 
 def _fetch_candidate_or_404(conn, candidate_id: str) -> dict:
@@ -753,7 +552,7 @@ async def promote_candidate(
     authorization: str | None = Header(default=None),
 ):
     claims = _decode_jwt(authorization)
-    if not await _check_opa_promote(claims["role"]):
+    if await check_opa("harness/promote_allowed", {"scope": "skill:promote", "agent_role": claims["role"]}) is not True:
         raise HTTPException(403, "skill_promote_not_permitted")
 
     conn = get_dolt_conn()
@@ -799,7 +598,7 @@ async def reject_candidate(
     authorization: str | None = Header(default=None),
 ):
     claims = _decode_jwt(authorization)
-    if not await _check_opa_promote(claims["role"]):
+    if await check_opa("harness/promote_allowed", {"scope": "skill:promote", "agent_role": claims["role"]}) is not True:
         raise HTTPException(403, "skill_promote_not_permitted")
 
     body = await request.json()
@@ -863,7 +662,7 @@ async def revoke_skill(
     authorization: str | None = Header(default=None),
 ):
     claims = _decode_jwt(authorization)
-    if not await _check_opa_promote(claims["role"]):
+    if await check_opa("harness/promote_allowed", {"scope": "skill:promote", "agent_role": claims["role"]}) is not True:
         raise HTTPException(403, "skill_promote_not_permitted")
 
     body = await request.json()
@@ -1030,7 +829,7 @@ async def expire_skills(
 ):
     """Expire overdue skills and trigger re-validation candidate proposal."""
     claims = _decode_jwt(authorization)
-    if not await _check_opa_promote(claims["role"]):
+    if await check_opa("harness/promote_allowed", {"scope": "skill:promote", "agent_role": claims["role"]}) is not True:
         raise HTTPException(403, "skill_promote_not_permitted")
     conn = get_dolt_conn()
     try:
@@ -1237,21 +1036,6 @@ _AGENT_REGISTRY: dict[str, dict] = {
 _KNOWN_AGENTS = list(_AGENT_REGISTRY.keys())
 
 
-async def _check_opa_invoke(role: str, target: str) -> bool:
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{OPA_URL}/v1/data/harness/invoke_allowed",
-                json={"input": {"role": role, "action": "invoke", "target": target}},
-                timeout=5.0,
-            )
-        result = resp.json().get("result", [])
-        return target in result
-    except Exception as e:
-        logger.error("OPA invoke check failed: %s", e)
-        return False
-
-
 def _validate_payload(schema: dict, payload: dict) -> list[str]:
     """Return list of validation errors, or empty list if valid."""
     errors = []
@@ -1366,8 +1150,11 @@ async def agent_invoke(
         raise HTTPException(422, {"errors": errors})
 
     # OPA invoke check
-    invoke_ok = await _check_opa_invoke(caller_role, target)
-    if not invoke_ok:
+    allowed_targets = await check_opa(
+        "harness/invoke_allowed",
+        {"role": caller_role, "action": "invoke", "target": target},
+    )
+    if target not in (allowed_targets or []):
         # Denied — write audit row synchronously (HTTPException cancels background tasks)
         _write_audit(
             claims["sub"],
@@ -1420,7 +1207,11 @@ async def agent_list(authorization: str | None = Header(default=None)):
     role = claims["role"]
     permitted = []
     for name in _KNOWN_AGENTS:
-        if await _check_opa_invoke(role, name):
+        allowed = await check_opa(
+            "harness/invoke_allowed",
+            {"role": role, "action": "invoke", "target": name},
+        )
+        if name in (allowed or []):
             permitted.append({"name": name})
     return permitted
 
