@@ -15,6 +15,9 @@ dependencies = [
     "pymysql>=1.1",
     "pyjwt>=2.8",
     "httpx>=0.27",
+    # mcp[cli] is needed by test_git_diff_github.py and test_unit_linter.py,
+    # which import from stub_servers/ directly (those modules use FastMCP).
+    "mcp[cli]>=1.27",
 ]
 
 [tool.uv.sources]
