@@ -399,9 +399,17 @@ POST /skills/select  (any valid JWT)
   2. POSTs `governance_url/check` — 403 raises `ToolAccessDenied` immediately
   3. Calls gateway directly (`_invoke_mcpjungle` or `_invoke_cf`)
   4. Fires `governance_url/audit` as an async background task (non-blocking)
-- `execute_skill(skill_id, inputs)` — fetches skill from `GET /skills/{id}`, runs each step via `call_tool`, applies per-step `on_failure` policy (ABORT / ROLLBACK / CONTINUE)
+- `execute_skill(skill_id, inputs)` — compatibility shim that delegates to `SkillRunner` (see below)
 - `gateway_backend="contextforge"` enables CF's JSON-RPC format + CF JWT auth
 - Legacy mode (no `governance_url`): gateway_url is treated as a proxy (backward-compatible)
+
+## SkillRunner
+
+`packages/harness-gateway/harness_gateway/skill_runner.py`:
+
+- Stateful workflow built on top of `GatewayClient.call_tool` — fetches a promoted skill from `GET /skills/{id}` and walks its steps
+- Per-step OPA re-check happens inside `call_tool`; denial surfaces here as `ToolAccessDenied` and the step's `on_failure` policy is applied (ABORT / ROLLBACK / CONTINUE)
+- `SkillRunner(gateway).execute(skill_id, inputs)` is the call form; `GatewayClient.execute_skill` is a thin shim retained for back-compat
 - Response unwrapping: `_unwrap → _check_status + _extract_content` — parses `{"content": [{"type": "text", "text": "<json>"}]}` to a plain dict; 401/403 raise `ToolAccessDenied`
 
 ---
@@ -646,3 +654,4 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0032 | `GatewayClient.execute_skill` re-uses `call_tool` per step (which already does OPA check) rather than adding a separate pre-check — avoids double-checking and keeps the per-step OPA enforcement consistent with the existing tool call path; `on_failure` policy (ABORT/ROLLBACK/CONTINUE) handled in `_handle_step_failure` to keep `execute_skill` CCN below the 9.0 health target | Accepted |
 | 0033 | CCN ceiling policy: governance `server.py` and `client.py` must maintain code health ≥ 9.0 — enforced by running `/forensics` before every commit; complex validation logic extracted into named helpers (`_validate_label_body`, `_check_episode_labelable`, `_check_count_criteria`, `_check_diversity_criteria`, `_compute_support_stats`, `_parse_steps`, `_count_completed`, etc.) that are individually testable and readable | Accepted |
 | 0034 | `POST /skills/select` uses three ordered tiebreak rules rather than LLM selection — LLM-based selection is non-deterministic and untestable; rule-based selection is auditable (each decision is tagged with the winning rule), reproducible (same inputs always produce the same winner), and escalates gracefully rather than guessing; `preconditions.env_constraints` specificity is the primary discriminator, with recency and success rate as tiebreakers; escalation surfaces tied skill IDs for operator review | Accepted |
+| 0035 | Skill execution moved out of `GatewayClient` into a dedicated `SkillRunner` module — the gateway's real job is per-call routing (auth, OPA check, invoke, audit), whereas skill execution is a stateful workflow built on top of `call_tool`; collocating them produced a 357-line class mixing four concerns; the new `SkillRunner` takes a `GatewayClient` collaborator so token caching, OPA, and audit still flow through one place; `GatewayClient.execute_skill` retained as a thin delegating shim for back-compat; `GatewayClient.get_token` promoted from `_get_token` to a public method so the new module reads it through a clean seam | Accepted |

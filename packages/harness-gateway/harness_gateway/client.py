@@ -54,7 +54,7 @@ class GatewayClient:
     def _auth_url(self) -> str:
         return self.governance_url or self.gateway_url
 
-    async def _get_token(self) -> str | None:
+    async def get_token(self) -> str | None:
         """Fetch a bearer token from the governance (or gateway) /oauth/token endpoint."""
         if not self.client_secret:
             return None
@@ -124,7 +124,7 @@ class GatewayClient:
         return resp
 
     async def _auth_headers(self) -> dict:
-        token = await self._get_token()
+        token = await self.get_token()
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         if self.human_approval_token:
             headers["X-Human-Approval-Token"] = self.human_approval_token
@@ -135,10 +135,6 @@ class GatewayClient:
         if full_name is None:
             raise ToolAccessDenied(f"403 Forbidden: {tool_name} not in allowed tool list")
         return full_name
-
-    # ------------------------------------------------------------------
-    # Governance sidecar methods (used when governance_url is set)
-    # ------------------------------------------------------------------
 
     async def _governance_check(self, token: str, full_name: str) -> None:
         """POST governance /check; raises ToolAccessDenied if denied."""
@@ -178,10 +174,6 @@ class GatewayClient:
                 )
         except Exception as e:
             logger.warning("governance audit post failed: %s", e)
-
-    # ------------------------------------------------------------------
-    # Direct gateway invocation (MCPJungle or ContextForge)
-    # ------------------------------------------------------------------
 
     def _cf_jwt(self) -> str:
         now = int(time.time())
@@ -255,87 +247,17 @@ class GatewayClient:
             return await self._invoke_cf(full_name, params)
         return await self._invoke_mcpjungle(full_name, params)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    async def _fetch_skill(self, skill_id: str) -> dict:
-        """Fetch skill from governance; raises ToolAccessDenied if revoked or missing."""
-        token = await self._get_token()
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{self.governance_url}/skills/{skill_id}",
-                headers=headers,
-                timeout=10.0,
-            )
-        if resp.status_code == 410:
-            raise ToolAccessDenied(f"skill {skill_id!r} is revoked")
-        if resp.status_code == 404:
-            raise ToolAccessDenied(f"skill {skill_id!r} not found")
-        resp.raise_for_status()
-        return resp.json()
-
-    async def _run_rollback(self, rollback_steps: list, inputs: dict) -> None:
-        for rs in rollback_steps:
-            action = rs.get("action") if isinstance(rs, dict) else rs
-            try:
-                await self.call_tool(action, inputs)
-            except Exception as e:
-                logger.warning("rollback step %s failed: %s", action, e)
-
-    async def _execute_step(self, step: dict, inputs: dict) -> dict:
-        """Invoke one skill step; raises ToolAccessDenied on denial or signal mismatch."""
-        action = step.get("action") or step.get("tool", "")
-        result = await self.call_tool(action, inputs)
-        expected = step.get("expected_signal")
-        if expected and isinstance(result, dict):
-            if not all(k in result for k in expected):
-                raise ToolAccessDenied(f"signal mismatch on step {action!r}: expected keys {list(expected)}")
-        return {"step": action, "result": result}
-
-    def _parse_steps(self, skill: dict) -> list:
-        steps = skill["steps"]
-        return json.loads(steps) if isinstance(steps, str) else steps
-
-    @staticmethod
-    def _count_completed(results: list) -> int:
-        return sum(1 for r in results if not r.get("skipped"))
-
-    async def _handle_step_failure(
-        self, exc: ToolAccessDenied, step: dict, inputs: dict, results: list
-    ) -> bool:
-        """Apply on_failure policy. Returns True to continue, False to re-raise."""
-        on_failure = step.get("on_failure", "ABORT")
-        if on_failure == "CONTINUE":
-            logger.warning("step %s denied, continuing: %s", step.get("action"), exc)
-            results.append({"step": step.get("action"), "skipped": True, "error": str(exc)})
-            return True
-        if on_failure == "ROLLBACK":
-            await self._run_rollback(step.get("rollback_steps", []), inputs)
-        return False
-
     async def execute_skill(self, skill_id: str, inputs: dict | None = None) -> dict:
-        """Execute a promoted skill step-by-step with per-step OPA re-check."""
-        if not self.governance_url:
-            raise RuntimeError("execute_skill requires governance_url to be set")
-        skill = await self._fetch_skill(skill_id)
-        steps = self._parse_steps(skill)
-        inputs = inputs or {}
-        results: list = []
-        for step in steps:
-            try:
-                results.append(await self._execute_step(step, inputs))
-            except ToolAccessDenied as exc:
-                if not await self._handle_step_failure(exc, step, inputs, results):
-                    raise
-        return {"skill_id": skill_id, "steps_completed": self._count_completed(results), "results": results}
+        """Compatibility shim — delegates to :class:`SkillRunner`."""
+        from harness_gateway.skill_runner import SkillRunner
+
+        return await SkillRunner(self).execute(skill_id, inputs)
 
     async def call_tool(self, tool_name: str, params: dict) -> dict:
         full_name = self._resolve_name(tool_name)
 
         if self.governance_url:
-            token = await self._get_token()
+            token = await self.get_token()
             await self._governance_check(token, full_name)
 
             start = int(time.time() * 1000)

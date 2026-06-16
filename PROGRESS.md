@@ -767,3 +767,32 @@ All three require a valid Bearer token (JWT decode only; no OPA check — read-o
 - OPA gotcha confirmed in tests: `human_operator` role is only allowed for `skill:promote` scope — labeling and proposing require `sre` or `code_reviewer` JWT.
 
 **Running total: 215 integration tests pass (19 new + 196 prior)**
+
+## Modularity Cleanup — Issue 07: Extract `SkillRunner` from `GatewayClient` ✅
+
+`packages/harness-gateway/harness_gateway/client.py` had grown to 357 lines mixing four concerns. Skill execution (a stateful workflow built on top of `call_tool`) was moved into a new `SkillRunner` class in `packages/harness-gateway/harness_gateway/skill_runner.py`. `GatewayClient.execute_skill` retained as a thin shim that delegates to `SkillRunner(self).execute(skill_id, inputs)`.
+
+**Tests** — 11 new unit tests (`test_unit_skill_runner.py`, all pass without docker):
+- [x] `test_execute_runs_all_steps`
+- [x] `test_abort_on_step_denial_reraises`
+- [x] `test_continue_skips_denied_step`
+- [x] `test_rollback_runs_rollback_steps_then_raises`
+- [x] `test_revoked_skill_raises` (410 from governance)
+- [x] `test_missing_skill_raises` (404 from governance)
+- [x] `test_steps_decoded_when_stored_as_json_string` (Dolt stores steps as JSON text)
+- [x] `test_expected_signal_mismatch_raises`
+- [x] `test_execute_requires_governance_url`
+- [x] `test_extracted_methods_are_not_on_gateway_client` (refactor-shape assertion)
+- [x] `test_gateway_execute_skill_shim_delegates_to_runner`
+
+**DoD (issue 07 of `.scratch/modularity-cleanup/`)**
+- [x] `skill_runner.py` exists (90 lines)
+- [x] `client.py` no longer contains `_fetch_skill`, `_parse_steps`, `_execute_step`, `_handle_step_failure`, `_run_rollback`, `_count_completed`
+- [x] `client.py` is 279 lines (under 280)
+- [x] `execute_skill` call sites still work via the shim — verified by 30/30 existing integration tests (`test_skill_execution.py` + `test_skills_cli.py`)
+- [x] ROLLBACK steps execute in order on `on_failure: ROLLBACK`
+- [x] CONTINUE / ABORT semantics on per-step denial unchanged
+- [x] `GatewayClient._get_token` promoted to public `get_token` so `SkillRunner` reads it through a clean seam (no underscore-private access across the new module boundary)
+
+**Notes**
+- Lazy import of `SkillRunner` inside `GatewayClient.execute_skill` avoids the circular import that would otherwise arise from `skill_runner.py` importing `ToolAccessDenied` from `client`.
