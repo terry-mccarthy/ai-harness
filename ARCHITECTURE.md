@@ -186,6 +186,7 @@ is standalone (no dependency on other harness packages). See
 8. **`GET /skills/{id}`** — returns skill (200), 410 if revoked, 404 if missing.
 9. **`POST /skills/{id}/revoke`** — requires `skill:promote` scope; sets status=revoked + reason.
 10. **`POST /skills/expire`** — manual trigger for expiry pass; also auto-triggered by audit counter.
+11. **`POST /skills/select`** — deterministic skill selection from all ACTIVE skills using ordered tiebreak rules: (1) precondition specificity, (2) promotion recency, (3) trailing 30-day success rate, (4) escalation if still tied. Any valid JWT can call it. Writes an audit_log entry with `tool_name='skill:select'` for every call (win or escalate).
 
 OAuth clients: `architect`, `code-reviewer`, `sre` (agent roles) + `human-operator` (human_operator role — the only role with `skill:promote` scope).
 
@@ -370,6 +371,14 @@ POST /skills/expire  (manual trigger or auto every EXPIRY_PASS_INTERVAL audits)
   →  ACTIVE skills where expires_at ≤ NOW()  →  status=EXPIRED
   →  re-validation: auto-propose candidate if fresh episodes exist for cluster_key
   →  early-review flag: skills with <50% success rate in trailing 30 days
+
+POST /skills/select  (any valid JWT)
+  →  env_fingerprint matched against skill.preconditions.env_constraints
+  →  Rule 1: max specificity score (count of matched constraints)
+  →  Rule 2: most recently promoted (max created_at) among tied
+  →  Rule 3: highest 30-day allow rate in audit_log among still-tied
+  →  Rule 4: escalate=true with tied skill IDs + scores if still tied
+  →  audit_log row written with tool_name='skill:select' (win or escalate)
 ```
 
 **[HARD]** Promotion grants no authority. Each step in `execute_skill` is independently OPA-checked using the invoking principal's token — the existence of a promoted skill does not bypass policy.
@@ -566,7 +575,7 @@ suggestions — violating them breaks the system's core guarantees.
 
 ## Test Coverage
 
-### Integration suite (189 tests) — `make test-integration`
+### Integration suite (196 tests) — `make test-integration`
 
 | Phase / Area | File                        | Tests | What they cover                                                          |
 |--------------|-----------------------------|-------|--------------------------------------------------------------------------|
@@ -583,6 +592,7 @@ suggestions — violating them breaks the system's core guarantees.
 | Skill 05     | `test_hitl_promotion.py`    | 13    | Promote/reject — scope guard, re-promotion versioning, full e2e flow     |
 | Skill 06     | `test_skill_execution.py`   | 11    | GET/revoke skills + execute_skill (ABORT/ROLLBACK/CONTINUE/revoked)      |
 | Skill 07     | `test_skill_expiry.py`      | 12    | POST /skills/expire, re-validation auto-proposal, auto-trigger, early-review flag |
+| Skill 08     | `test_skill_select.py`      | 7     | POST /skills/select — specificity/recency/success-rate tiebreaks, escalation, audit_log |
 
 ### Eval suite (7 tests) — `pytest -m eval -v -s`
 
@@ -631,3 +641,4 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0031 | `human-operator` OAuth client with `human_operator` role; `skill:promote` scope not granted to any agent role — promotion and revocation are irreversible governance actions that must have a human in the loop; the OPA scope enforcement makes it mechanically impossible for an agent to self-promote its own outputs | Accepted |
 | 0032 | `GatewayClient.execute_skill` re-uses `call_tool` per step (which already does OPA check) rather than adding a separate pre-check — avoids double-checking and keeps the per-step OPA enforcement consistent with the existing tool call path; `on_failure` policy (ABORT/ROLLBACK/CONTINUE) handled in `_handle_step_failure` to keep `execute_skill` CCN below the 9.0 health target | Accepted |
 | 0033 | CCN ceiling policy: governance `server.py` and `client.py` must maintain code health ≥ 9.0 — enforced by running `/forensics` before every commit; complex validation logic extracted into named helpers (`_validate_label_body`, `_check_episode_labelable`, `_check_count_criteria`, `_check_diversity_criteria`, `_compute_support_stats`, `_parse_steps`, `_count_completed`, etc.) that are individually testable and readable | Accepted |
+| 0034 | `POST /skills/select` uses three ordered tiebreak rules rather than LLM selection — LLM-based selection is non-deterministic and untestable; rule-based selection is auditable (each decision is tagged with the winning rule), reproducible (same inputs always produce the same winner), and escalates gracefully rather than guessing; `preconditions.env_constraints` specificity is the primary discriminator, with recency and success rate as tiebreakers; escalation surfaces tied skill IDs for operator review | Accepted |

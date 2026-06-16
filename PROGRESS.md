@@ -687,4 +687,34 @@ Self-learning loop: tool call episodes → candidate clustering → HITL promoti
 
 ---
 
-### Issue 08 — Conflict resolution and escalation ⏳ NOT STARTED
+### Issue 08 — Conflict resolution and escalation ✅
+
+**Tests** — 7 pass (`test_skill_select.py`):
+- [x] `test_select_most_specific_wins` — 3 skills with 0/1/2 matched env_constraints; most specific wins
+- [x] `test_select_recency_tiebreak` — 2 skills tied on specificity; newer `created_at` wins
+- [x] `test_select_success_rate_tiebreak` — 2 skills tied on specificity + recency; higher 30-day allow rate wins
+- [x] `test_select_full_tie_escalates` — 2 skills tied on all 3 rules; escalate=true with tied_skills
+- [x] `test_select_win_logs_to_audit_log` — winning selection written to audit_log with tool_name='skill:select'
+- [x] `test_select_escalation_logs_to_audit_log` — escalation also written to audit_log
+- [x] `test_select_requires_auth` — 401 without token
+
+**Acceptance criteria**
+- [x] POST /skills/select returns the most specific matching ACTIVE skill when one clearly wins
+- [x] Tied specificity resolves by promotion recency (most recently created_at)
+- [x] Tied recency resolves by trailing success rate (30-day allow rate from audit_log)
+- [x] Full tie returns escalate=true with tied skill IDs and scores
+- [x] Every selection (win or escalate) is written to audit_log with tool_name='skill:select'
+- [x] Integration test: three skills with overlapping preconditions; correct winner at each tiebreak layer
+- [x] Integration test: exact tie returns escalation response
+
+**New governance helpers:** `_parse_preconditions`, `_specificity_score`, `_skill_success_rate`, `_apply_specificity_rule`, `_apply_recency_rule`, `_apply_success_rate_rule`, `_run_skill_selection`, `_fetch_active_skills_for_select`
+
+**Notes**
+- `preconditions JSON DEFAULT NULL` column added to `skills` table via Dolt migration in `init.sh`. Seeded/existing skills have NULL preconditions (score 0 — least specific).
+- Specificity score = number of `env_constraints` key-value pairs in `skill.preconditions` that exactly match the request's `env_fingerprint`.
+- Tiebreak rules applied in order: each step narrows candidates to the winners at that level before proceeding.
+- Success rate uses `audit_log.agent_id = skill.agent_role` (the OAuth client_id); same approach as early-review flags in issue 07.
+- `_run_skill_selection` CCN reduced from 18 → 6 by extracting three named rule helpers. Health score: 9.1/10.
+- Dolt returns SQL NULL JSON columns as `b'null'`; `_parse_preconditions` handles this before `.get()`.
+
+**Running total: 196 integration tests pass (7 new + 189 prior)**
