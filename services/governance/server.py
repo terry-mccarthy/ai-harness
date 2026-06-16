@@ -743,6 +743,71 @@ async def reject_candidate(
 
 
 # ---------------------------------------------------------------------------
+# Skill read + revocation
+# ---------------------------------------------------------------------------
+
+
+@app.get("/skills/{skill_id}")
+async def get_skill(
+    skill_id: str,
+    authorization: str | None = Header(default=None),
+):
+    _decode_jwt(authorization)
+    conn = get_dolt_conn()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM skills WHERE id=%s ORDER BY version DESC LIMIT 1",
+                (skill_id,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        raise HTTPException(404, "skill_not_found")
+    if row["status"] == "revoked":
+        raise HTTPException(410, "skill_revoked")
+    return _serialise_row(row)
+
+
+@app.post("/skills/{skill_id}/revoke")
+async def revoke_skill(
+    skill_id: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    claims = _decode_jwt(authorization)
+    if not await _check_opa_promote(claims["role"]):
+        raise HTTPException(403, "skill_promote_not_permitted")
+
+    body = await request.json()
+    reason = body.get("reason")
+    if not reason:
+        raise HTTPException(422, "reason is required")
+
+    conn = get_dolt_conn()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute("SELECT id FROM skills WHERE id=%s LIMIT 1", (skill_id,))
+            if cur.fetchone() is None:
+                raise HTTPException(404, "skill_not_found")
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE skills SET status='revoked', revoked_reason=%s WHERE id=%s",
+                (reason, skill_id),
+            )
+            cur.execute(
+                "CALL DOLT_COMMIT('-Am', %s)",
+                (f"skill: {skill_id} revoked by {claims['sub']}: {reason}",),
+            )
+    finally:
+        conn.close()
+
+    return {"skill_id": skill_id, "status": "revoked", "reason": reason}
+
+
+# ---------------------------------------------------------------------------
 # Metrics + security endpoints (unchanged)
 # ---------------------------------------------------------------------------
 

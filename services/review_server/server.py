@@ -182,5 +182,29 @@ async def http_review(request: Request) -> JSONResponse:
         return JSONResponse({"error": "review failed — see server logs"}, status_code=500)
 
 
+@mcp.tool()
+async def run_skill(
+    skill_id: str,
+    inputs: dict | None = None,
+) -> dict:
+    """Execute a promoted governed skill by ID, running each step through OPA.
+
+    Args:
+        skill_id: The skill identifier (e.g. ``"sre:triage-incident"``).
+        inputs: Optional input parameters passed to each step.
+    """
+    gateway = GatewayClient(
+        gateway_url=os.environ["MCPJUNGLE_URL"],
+        governance_url=os.environ.get("GOVERNANCE_URL"),
+        client_id=os.environ.get("SKILL_CLIENT_ID", "sre"),
+        client_secret=os.environ.get("SKILL_CLIENT_SECRET", os.environ.get("SRE_SECRET", "")),
+    )
+    try:
+        return await gateway.execute_skill(skill_id, inputs)
+    except Exception as e:
+        logging.exception("run_skill failed for %s", skill_id)
+        raise RuntimeError(str(e)) from e
+
+
 if __name__ == "__main__":
     uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=9003)

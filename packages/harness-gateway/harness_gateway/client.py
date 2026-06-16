@@ -85,7 +85,7 @@ class GatewayClient:
             logger.warning("token fetch failed: %s", e)
             return None
 
-    def _unwrap(self, data: dict, status: int, tool_name: str) -> dict:
+    def _check_status(self, status: int, tool_name: str) -> None:
         if status == 403:
             raise ToolAccessDenied(f"403 Forbidden: {tool_name}")
         if status == 401:
@@ -94,14 +94,20 @@ class GatewayClient:
             raise httpx.HTTPStatusError(
                 f"HTTP {status}", request=httpx.Request("POST", self.gateway_url), response=None
             )
-        logger.debug("tool_call raw response: %s", data)
+
+    def _extract_content(self, data: dict):
         items = data.get("content") or data.get("result") or []
-        if items and isinstance(items[0], dict) and items[0].get("type") == "text":
-            try:
-                return json.loads(items[0]["text"])
-            except json.JSONDecodeError:
-                return items[0]["text"]
-        return data
+        if not (items and isinstance(items[0], dict) and items[0].get("type") == "text"):
+            return data
+        try:
+            return json.loads(items[0]["text"])
+        except json.JSONDecodeError:
+            return items[0]["text"]
+
+    def _unwrap(self, data: dict, status: int, tool_name: str) -> dict:
+        logger.debug("tool_call raw response: %s", data)
+        self._check_status(status, tool_name)
+        return self._extract_content(data)
 
     async def _post(self, tool_name: str, full_name: str, params: dict, headers: dict) -> "httpx.Response":
         body = {"name": full_name, **params}
@@ -252,6 +258,78 @@ class GatewayClient:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    async def _fetch_skill(self, skill_id: str) -> dict:
+        """Fetch skill from governance; raises ToolAccessDenied if revoked or missing."""
+        token = await self._get_token()
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{self.governance_url}/skills/{skill_id}",
+                headers=headers,
+                timeout=10.0,
+            )
+        if resp.status_code == 410:
+            raise ToolAccessDenied(f"skill {skill_id!r} is revoked")
+        if resp.status_code == 404:
+            raise ToolAccessDenied(f"skill {skill_id!r} not found")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def _run_rollback(self, rollback_steps: list, inputs: dict) -> None:
+        for rs in rollback_steps:
+            action = rs.get("action") if isinstance(rs, dict) else rs
+            try:
+                await self.call_tool(action, inputs)
+            except Exception as e:
+                logger.warning("rollback step %s failed: %s", action, e)
+
+    async def _execute_step(self, step: dict, inputs: dict) -> dict:
+        """Invoke one skill step; raises ToolAccessDenied on denial or signal mismatch."""
+        action = step.get("action") or step.get("tool", "")
+        result = await self.call_tool(action, inputs)
+        expected = step.get("expected_signal")
+        if expected and isinstance(result, dict):
+            if not all(k in result for k in expected):
+                raise ToolAccessDenied(f"signal mismatch on step {action!r}: expected keys {list(expected)}")
+        return {"step": action, "result": result}
+
+    def _parse_steps(self, skill: dict) -> list:
+        steps = skill["steps"]
+        return json.loads(steps) if isinstance(steps, str) else steps
+
+    @staticmethod
+    def _count_completed(results: list) -> int:
+        return sum(1 for r in results if not r.get("skipped"))
+
+    async def _handle_step_failure(
+        self, exc: ToolAccessDenied, step: dict, inputs: dict, results: list
+    ) -> bool:
+        """Apply on_failure policy. Returns True to continue, False to re-raise."""
+        on_failure = step.get("on_failure", "ABORT")
+        if on_failure == "CONTINUE":
+            logger.warning("step %s denied, continuing: %s", step.get("action"), exc)
+            results.append({"step": step.get("action"), "skipped": True, "error": str(exc)})
+            return True
+        if on_failure == "ROLLBACK":
+            await self._run_rollback(step.get("rollback_steps", []), inputs)
+        return False
+
+    async def execute_skill(self, skill_id: str, inputs: dict | None = None) -> dict:
+        """Execute a promoted skill step-by-step with per-step OPA re-check."""
+        if not self.governance_url:
+            raise RuntimeError("execute_skill requires governance_url to be set")
+        skill = await self._fetch_skill(skill_id)
+        steps = self._parse_steps(skill)
+        inputs = inputs or {}
+        results: list = []
+        for step in steps:
+            try:
+                results.append(await self._execute_step(step, inputs))
+            except ToolAccessDenied as exc:
+                if not await self._handle_step_failure(exc, step, inputs, results):
+                    raise
+        return {"skill_id": skill_id, "steps_completed": self._count_completed(results), "results": results}
 
     async def call_tool(self, tool_name: str, params: dict) -> dict:
         full_name = self._resolve_name(tool_name)
