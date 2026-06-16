@@ -187,6 +187,9 @@ is standalone (no dependency on other harness packages). See
 9. **`POST /skills/{id}/revoke`** — requires `skill:promote` scope; sets status=revoked + reason.
 10. **`POST /skills/expire`** — manual trigger for expiry pass; also auto-triggered by audit counter.
 11. **`POST /skills/select`** — deterministic skill selection from all ACTIVE skills using ordered tiebreak rules: (1) precondition specificity, (2) promotion recency, (3) trailing 30-day success rate, (4) escalation if still tied. Any valid JWT can call it. Writes an audit_log entry with `tool_name='skill:select'` for every call (win or escalate).
+12. **`GET /episodes?limit=N&unlabeled=bool`** — list recent episodes, optional unlabeled-only filter. Any valid JWT (read-only, no OPA scope required).
+13. **`GET /candidates?status=PROPOSED|PROMOTED|REJECTED`** — list candidates with optional status filter. Any valid JWT.
+14. **`GET /skills?status=active|expired|revoked`** — list latest-version skill rows with optional status filter. Any valid JWT.
 
 OAuth clients: `architect`, `code-reviewer`, `sre` (agent roles) + `human-operator` (human_operator role — the only role with `skill:promote` scope).
 
@@ -593,6 +596,7 @@ suggestions — violating them breaks the system's core guarantees.
 | Skill 06     | `test_skill_execution.py`   | 11    | GET/revoke skills + execute_skill (ABORT/ROLLBACK/CONTINUE/revoked)      |
 | Skill 07     | `test_skill_expiry.py`      | 12    | POST /skills/expire, re-validation auto-proposal, auto-trigger, early-review flag |
 | Skill 08     | `test_skill_select.py`      | 7     | POST /skills/select — specificity/recency/success-rate tiebreaks, escalation, audit_log |
+| Skills CLI   | `test_skills_cli.py`        | 19    | GET /episodes, /candidates, /skills list endpoints; CLI subprocess — full pipeline |
 
 ### Eval suite (7 tests) — `pytest -m eval -v -s`
 

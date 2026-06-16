@@ -21,6 +21,7 @@ When the implementation departs from `spec-full.md` (deliberate skip, pragmatic 
 Write the test file first. Run it, confirm it fails for the right reason, then implement. A test that was never red proves nothing.
 
 **5. Code health**
+Maintain code-health at >= 9
 
 ---
 

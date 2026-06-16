@@ -718,3 +718,52 @@ Self-learning loop: tool call episodes → candidate clustering → HITL promoti
 - Dolt returns SQL NULL JSON columns as `b'null'`; `_parse_preconditions` handles this before `.get()`.
 
 **Running total: 196 integration tests pass (7 new + 189 prior)**
+
+---
+
+## Skills CLI + Governance List Endpoints
+
+Thin CLI for the skill-learning pipeline — replaces raw curl for the human-in-the-loop workflow.
+
+### New governance endpoints
+
+- `GET /episodes?limit=N&unlabeled=bool` — list recent episodes (newest first)
+- `GET /candidates?status=PROPOSED|PROMOTED|REJECTED` — list candidates with optional status filter
+- `GET /skills?status=active|expired|revoked` — list latest-version skill rows with optional status filter
+
+All three require a valid Bearer token (JWT decode only; no OPA check — read-only).
+
+### CLI (`scripts/skills_cli.py`)
+
+**Tests** — 19 pass (`test_skills_cli.py`):
+- [x] `test_list_episodes_returns_list` — GET /episodes returns list with correct shape
+- [x] `test_list_episodes_unlabeled_filter` — unlabeled=true excludes labeled rows
+- [x] `test_list_episodes_requires_auth` — 401 without token
+- [x] `test_list_candidates_returns_list` — GET /candidates returns list
+- [x] `test_list_candidates_status_filter` — PROPOSED filter includes new candidate, excludes REJECTED
+- [x] `test_list_candidates_requires_auth` — 401 without token
+- [x] `test_list_skills_returns_list` — GET /skills returns list
+- [x] `test_list_skills_status_filter` — active filter includes newly promoted skill
+- [x] `test_list_skills_requires_auth` — 401 without token
+- [x] `test_cli_token_returns_access_token` — `skills_cli.py token` prints token JSON
+- [x] `test_cli_pipeline_shows_summary` — `pipeline` command has episodes/candidates/skills keys
+- [x] `test_cli_episodes_list` — `episodes list` returns list
+- [x] `test_cli_episodes_label` — `episodes label ID --outcome RESOLVED` labels episode
+- [x] `test_cli_candidates_list` — `candidates list` returns list
+- [x] `test_cli_candidates_propose` — `candidates propose --cluster-key ... --episodes ...` returns PROPOSED
+- [x] `test_cli_candidates_promote` — `candidates promote ID` returns skill_id
+- [x] `test_cli_skills_list` — `skills list` returns list
+- [x] `test_cli_skills_select` — `skills select` returns response with `selected` key
+- [x] `test_cli_skills_revoke` — `skills revoke ID --reason ...` returns revoked status
+
+**DoD**
+- [x] All 19 tests pass
+- [x] CLI subprocess-tested: arg parsing, correct client selection, JSON output
+- [x] OPA roles respected in tests: sre/code-reviewer for label+propose; human-operator for promote+revoke
+- [x] Health score: 9.8/10 (`skills_cli.py`), governance `list_*` endpoints are CCN ~1 each
+
+**Notes**
+- `main()` was initially CCN 19 (flat if/elif dispatch); refactored to dispatch table (`_HANDLERS`) + three extracted handlers — brought CCN down to 6, score up to 9.8.
+- OPA gotcha confirmed in tests: `human_operator` role is only allowed for `skill:promote` scope — labeling and proposing require `sre` or `code_reviewer` JWT.
+
+**Running total: 215 integration tests pass (19 new + 196 prior)**

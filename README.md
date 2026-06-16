@@ -101,7 +101,7 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 
 ## Tests
 
-### Integration suite (196 tests: all green) — `make test-integration`
+### Integration suite (215 tests: all green) — `make test-integration`
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -237,6 +237,7 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 | `test_skill_execution.py` | 11 | `GET`/revoke skills + execute_skill (ABORT/ROLLBACK/CONTINUE) |
 | `test_skill_expiry.py` | 12 | `POST /skills/expire`, re-validation auto-proposal, auto-trigger, early-review flag |
 | `test_skill_select.py` | 7 | `POST /skills/select` — specificity/recency/success-rate tiebreaks, escalation, audit_log |
+| `test_skills_cli.py` | 19 | `GET /episodes`, `/candidates`, `/skills` list endpoints; CLI subprocess for full pipeline |
 
 ### Eval suite (7 tests) — `pytest -m eval -v -s`
 
@@ -337,6 +338,8 @@ Claude Code will see all registered tools including `review_server__review_diff`
 ├── prompts/               # LLM system prompts (classify.md, synthesise.md, code_reviewer.md, architect.md, sre.md)
 ├── eval-fixtures/         # Labeled diffs for reviewer quality benchmarking (diffs/ + labels/)
 ├── test-fixtures/         # Committed test RSA key (jwt-test-key.pem) — dev/CI only
+├── scripts/
+│   └── skills_cli.py      # CLI for the skill-learning pipeline (token, pipeline, episodes, candidates, skills)
 ├── policies/              # OPA policy (harness.rego)
 ├── security/              # owasp-review.md — OWASP Agentic AI Top 10 review
 ├── docs/runbooks/         # 4 operational runbooks (agent-unresponsive, policy-rollback, cost-spike, bad-formula)

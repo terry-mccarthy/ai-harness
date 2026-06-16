@@ -352,6 +352,84 @@ async def jwks():
 
 
 # ---------------------------------------------------------------------------
+# List endpoints (read-only, any valid JWT)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/episodes")
+async def list_episodes(
+    limit: int = 20,
+    unlabeled: bool = False,
+    authorization: str | None = Header(default=None),
+):
+    _decode_jwt(authorization)
+    conn = get_dolt_conn()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            where = " WHERE outcome_labeled_at IS NULL" if unlabeled else ""
+            cur.execute(f"SELECT * FROM episodes{where} ORDER BY created_at DESC LIMIT %s", (limit,))
+            rows = cur.fetchall() or []
+    finally:
+        conn.close()
+    return [_serialise_row(r) for r in rows]
+
+
+@app.get("/candidates")
+async def list_candidates(
+    status: str | None = None,
+    authorization: str | None = Header(default=None),
+):
+    _decode_jwt(authorization)
+    conn = get_dolt_conn()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            if status:
+                cur.execute(
+                    "SELECT * FROM candidates WHERE status=%s ORDER BY created_at DESC",
+                    (status.upper(),),
+                )
+            else:
+                cur.execute("SELECT * FROM candidates ORDER BY created_at DESC")
+            rows = cur.fetchall() or []
+    finally:
+        conn.close()
+    return [_serialise_row(r) for r in rows]
+
+
+@app.get("/skills")
+async def list_skills(
+    status: str | None = None,
+    authorization: str | None = Header(default=None),
+):
+    _decode_jwt(authorization)
+    conn = get_dolt_conn()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            if status:
+                cur.execute(
+                    """
+                    SELECT s.* FROM skills s
+                    INNER JOIN (
+                        SELECT id, MAX(version) as max_v FROM skills WHERE status=%s GROUP BY id
+                    ) t ON s.id = t.id AND s.version = t.max_v
+                    """,
+                    (status,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT s.* FROM skills s
+                    INNER JOIN (SELECT id, MAX(version) as max_v FROM skills GROUP BY id) t
+                    ON s.id = t.id AND s.version = t.max_v
+                    """
+                )
+            rows = cur.fetchall() or []
+    finally:
+        conn.close()
+    return [_serialise_row(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Episode labeling
 # ---------------------------------------------------------------------------
 
