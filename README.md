@@ -101,7 +101,7 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 
 ## Tests
 
-### Integration suite (177 tests: all green) — `make test-integration`
+### Integration suite (189 tests: all green) — `make test-integration`
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -224,6 +224,18 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 | `test_contextforge_tool_group_parity` | Phase 1 tools work through the ContextForge gateway |
 | `test_contextforge_audit_log_parity` | Dolt audit rows are written regardless of which backend is active |
 | `test_gateway_rollback` | MCPJungle backend (the default) passes Phase 1 tests after CF migration |
+
+### Skill Learning — issues 01–07 (57 tests)
+
+| Suite | Tests | What it covers |
+|---|---|---|
+| `test_skill_learning_schema.py` | 14 | Dolt schema (episodes/candidates/skills), harness user grants, DoltFormulaStore compat |
+| `test_episode_capture.py` | 4 | `/audit` writes episode row; fire-and-forget; audit_log unaffected |
+| `test_outcome_labeling.py` | 7 | `POST /episodes/{id}/label` — rejection cases + happy path + Dolt commit |
+| `test_candidate_proposal.py` | 8 | `POST /candidates` — criteria rejections + happy path + `GET /candidates/{id}` |
+| `test_hitl_promotion.py` | 13 | Promote/reject — scope guard, re-promotion versioning, full e2e |
+| `test_skill_execution.py` | 11 | `GET`/revoke skills + execute_skill (ABORT/ROLLBACK/CONTINUE) |
+| `test_skill_expiry.py` | 12 | `POST /skills/expire`, re-validation auto-proposal, auto-trigger, early-review flag |
 
 ### Eval suite (7 tests) — `pytest -m eval -v -s`
 

@@ -655,24 +655,35 @@ Self-learning loop: tool call episodes → candidate clustering → HITL promoti
 
 ---
 
-### Issue 07 — Skill expiry and lightweight re-validation trigger 🔄 IN PROGRESS
+### Issue 07 — Skill expiry and lightweight re-validation trigger ✅
 
-**Status:** tests written, implementation pending.
-
-**What's left:**
-- [ ] `POST /skills/expire` endpoint on governance
-- [ ] Auto-trigger counter in `/audit` endpoint (fires every `EXPIRY_PASS_INTERVAL` calls, default 1000)
-- [ ] Re-validation: auto-propose candidate when sufficient fresh RESOLVED episodes exist for expired skill's cluster_key prefix
-- [ ] Early-review flag: trailing 30-day success rate < 0.5 in audit_log
-- [ ] `EXPIRY_PASS_INTERVAL=3` in docker-compose.yml governance env for integration test
+**Tests** — 12 pass (`test_skill_expiry.py`):
+- [x] `test_expire_requires_human_operator_role` — SRE 403 on /skills/expire
+- [x] `test_expire_returns_200_with_no_overdue_skills` — empty summary when nothing overdue
+- [x] `test_expire_transitions_overdue_skill_to_expired` — status → expired in Dolt
+- [x] `test_expire_response_includes_skill_id` — skill_ids list in response
+- [x] `test_expire_does_not_touch_non_overdue_skills` — future-expiring skills unchanged
+- [x] `test_get_expired_skill_returns_410` — GET /skills/{id} 410 for expired
+- [x] `test_execute_expired_skill_raises` — execute_skill raises ToolAccessDenied
+- [x] `test_revalidation_proposes_candidate_when_enough_episodes` — N_MIN episodes → candidate auto-proposed
+- [x] `test_revalidation_not_triggered_when_too_few_episodes` — < N_MIN → no candidate
+- [x] `test_auto_trigger_expires_skill_after_interval_audit_calls` — background trigger via audit counter
+- [x] `test_early_review_flag_set_for_low_success_rate` — < 50% allow rate → flagged
+- [x] `test_early_review_flag_absent_for_high_success_rate` — ≥ 50% allow → not flagged
 
 **Acceptance criteria**
-- [ ] POST /skills/expire transitions overdue ACTIVE skills to EXPIRED + Dolt commit per skill
-- [ ] Expired skills return error on execute_skill (issue 06 flow)
-- [ ] Re-validation auto-proposes candidate when criteria met
-- [ ] Auto-trigger fires after EXPIRY_PASS_INTERVAL audit events
-- [ ] Early-review flag in response for low success-rate skills
-- [ ] Integration test: past-expires_at skill → expire → EXPIRED + candidate re-proposed
+- [x] POST /skills/expire transitions overdue ACTIVE skills to EXPIRED + Dolt commit per skill
+- [x] Expired skills return 410 (GET /skills/{id}) and raise ToolAccessDenied on execute_skill
+- [x] Re-validation auto-proposes candidate when N_MIN resolved episodes exist for agent role
+- [x] Auto-trigger fires after EXPIRY_PASS_INTERVAL audit events (EXPIRY_PASS_INTERVAL=3 in docker-compose)
+- [x] Early-review flag in response for skills with trailing 30-day deny rate > 50%
+- [x] Integration test: past-expires_at skill → expire → EXPIRED + candidate re-proposed
+
+**New governance helpers:** `_find_expired_skills`, `_expire_skill`, `_find_active_skills`, `_find_revalidation_episodes`, `_maybe_repropose_candidate`, `_compute_early_review_flags`, `_run_expiry_pass`, `_background_expiry_pass`
+
+**Notes**
+- Re-validation criteria simplified vs issue 04: N_MIN episodes only (no K_MIN/diversity check). Auto-revalidation surfaces candidates for human review; full diversity check would never trigger in a single-credential deployment.
+- `EXPIRY_PASS_INTERVAL=3` in docker-compose for tests; default 1000 in production.
 
 ---
 

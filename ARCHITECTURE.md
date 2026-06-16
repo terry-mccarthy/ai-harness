@@ -566,7 +566,7 @@ suggestions — violating them breaks the system's core guarantees.
 
 ## Test Coverage
 
-### Integration suite (177 tests) — `make test-integration`
+### Integration suite (189 tests) — `make test-integration`
 
 | Phase / Area | File                        | Tests | What they cover                                                          |
 |--------------|-----------------------------|-------|--------------------------------------------------------------------------|
@@ -582,6 +582,7 @@ suggestions — violating them breaks the system's core guarantees.
 | Skill 04     | `test_candidate_proposal.py`| 8     | POST /candidates — 4 criteria rejections + happy path + GET /candidates/{id} |
 | Skill 05     | `test_hitl_promotion.py`    | 13    | Promote/reject — scope guard, re-promotion versioning, full e2e flow     |
 | Skill 06     | `test_skill_execution.py`   | 11    | GET/revoke skills + execute_skill (ABORT/ROLLBACK/CONTINUE/revoked)      |
+| Skill 07     | `test_skill_expiry.py`      | 12    | POST /skills/expire, re-validation auto-proposal, auto-trigger, early-review flag |
 
 ### Eval suite (7 tests) — `pytest -m eval -v -s`
 
