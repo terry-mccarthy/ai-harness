@@ -123,6 +123,36 @@ def get_dolt_conn():
     )
 
 
+def _write_episode(
+    agent_principal, tool_name, short_tool, req_hash, correlation_id, service_class,
+):
+    conn = None
+    try:
+        import uuid as _uuid
+        episode_id = str(_uuid.uuid4())
+        timestamp_ms = int(time.time() * 1000)
+        alert_sig = f"{agent_principal}.{short_tool}:{correlation_id or ''}"
+        env_fp = json.dumps({"tool_name": tool_name, "server_id": short_tool, "timestamp_ms": timestamp_ms})
+        actions = json.dumps([{"tool": tool_name, "scoped_args": req_hash, "scope_token_ref": correlation_id}])
+        conn = get_dolt_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO episodes "
+                "(episode_id, agent_principal, alert_signature, service_class, env_fingerprint, actions) "
+                "VALUES (%s,%s,%s,%s,%s,%s)",
+                (episode_id, agent_principal, alert_sig, service_class or "unknown", env_fp, actions),
+            )
+            cur.execute(
+                "CALL DOLT_COMMIT('-Am', %s)",
+                (f"episode: {short_tool} by {agent_principal}",),
+            )
+    except Exception as e:
+        logger.error("Dolt episode write failed: %s", e)
+    finally:
+        if conn:
+            conn.close()
+
+
 def _write_audit(
     agent_id, tool_name, server_id, req_hash, resp_hash,
     decision, rule, latency_ms, correlation_id=None,
@@ -275,6 +305,15 @@ async def audit(
         rule,
         latency_ms,
         correlation_id,
+    )
+    background_tasks.add_task(
+        _write_episode,
+        claims["sub"],
+        full_tool,
+        short_tool,
+        req_hash,
+        correlation_id,
+        body.get("service_class"),
     )
     return {}
 
