@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from datetime import datetime, timedelta
 import hashlib
 import json
 import logging
@@ -425,6 +426,152 @@ async def label_episode(
 
 
 # ---------------------------------------------------------------------------
+# Candidate proposal
+# ---------------------------------------------------------------------------
+
+_N_MIN = 5       # minimum episode count
+_K_MIN = 2       # minimum distinct agent_principals
+_M_MIN = 2       # minimum recent episodes
+_RECENT_DAYS = 90
+
+
+async def _check_opa_propose(role: str) -> bool:
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{OPA_URL}/v1/data/harness/propose_allowed",
+                json={"input": {"scope": "candidate:propose", "agent_role": role}},
+                timeout=5.0,
+            )
+        return resp.json().get("result", False) is True
+    except Exception as e:
+        logger.error("OPA propose check failed: %s", e)
+        return False
+
+
+def _fetch_and_qualify_episodes(conn, episode_ids: list[str]) -> tuple[list[dict], list[str]]:
+    """Return (qualified_rows, disqualified_ids). qualified_rows have outcome=RESOLVED + labeled."""
+    fmt = ",".join(["%s"] * len(episode_ids))
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            f"SELECT episode_id, agent_principal, outcome, outcome_labeled_at "
+            f"FROM episodes WHERE episode_id IN ({fmt})",
+            episode_ids,
+        )
+        found = {r["episode_id"]: r for r in cur.fetchall()}
+
+    qualified, disqualified = [], []
+    for eid in episode_ids:
+        row = found.get(eid)
+        if row and row["outcome"] == "RESOLVED" and row["outcome_labeled_at"] is not None:
+            qualified.append(row)
+        else:
+            disqualified.append(eid)
+    return qualified, disqualified
+
+
+def _check_candidate_criteria(
+    qualified: list[dict],
+    disqualified: list[str],
+    n_total: int,
+) -> list[str]:
+    """Return list of error strings; empty means all criteria pass."""
+    errors = []
+    if disqualified:
+        errors.append(f"episodes not RESOLVED+labeled: {disqualified}")
+    if n_total < _N_MIN:
+        errors.append(f"need at least {_N_MIN} episodes, got {n_total}")
+    if not errors:
+        principals = {r["agent_principal"] for r in qualified}
+        if len(principals) < _K_MIN:
+            errors.append(f"need at least {_K_MIN} distinct agent_principals, got {len(principals)}")
+        cutoff = datetime.utcnow() - timedelta(days=_RECENT_DAYS)
+        recent = [r for r in qualified if r["outcome_labeled_at"] and r["outcome_labeled_at"] > cutoff]
+        if len(recent) < _M_MIN:
+            errors.append(f"need at least {_M_MIN} episodes within last {_RECENT_DAYS} days, got {len(recent)}")
+    return errors
+
+
+@app.post("/candidates", status_code=201)
+async def post_candidates(
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    claims = _decode_jwt(authorization)
+    if not await _check_opa_propose(claims["role"]):
+        raise HTTPException(403, "candidate_propose_not_permitted")
+
+    body = await request.json()
+    episode_ids = body.get("episode_ids", [])
+    cluster_key = body.get("cluster_key", "")
+    proposed_procedure = body.get("proposed_procedure", {})
+
+    conn = get_dolt_conn()
+    try:
+        qualified, disqualified = _fetch_and_qualify_episodes(conn, episode_ids)
+        errors = _check_candidate_criteria(qualified, disqualified, len(episode_ids))
+        if errors:
+            raise HTTPException(422, {"errors": errors})
+
+        principals = {r["agent_principal"] for r in qualified}
+        cutoff = datetime.utcnow() - timedelta(days=_RECENT_DAYS)
+        recent_count = sum(1 for r in qualified if r["outcome_labeled_at"] and r["outcome_labeled_at"] > cutoff)
+        support_stats = {
+            "n_episodes": len(qualified),
+            "n_principals": len(principals),
+            "recent_count": recent_count,
+        }
+
+        candidate_id = str(__import__("uuid").uuid4())
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO candidates "
+                "(candidate_id, cluster_key, member_episode_ids, proposed_procedure, support_stats, status) "
+                "VALUES (%s,%s,%s,%s,%s,'PROPOSED')",
+                (
+                    candidate_id,
+                    cluster_key,
+                    json.dumps(episode_ids),
+                    json.dumps(proposed_procedure),
+                    json.dumps(support_stats),
+                ),
+            )
+            cur.execute(
+                "CALL DOLT_COMMIT('-Am', %s)",
+                (f"candidate: {candidate_id[:8]} proposed [{cluster_key}]",),
+            )
+    finally:
+        conn.close()
+
+    return {"candidate_id": candidate_id, "status": "PROPOSED"}
+
+
+@app.get("/candidates/{candidate_id}")
+async def get_candidate(
+    candidate_id: str,
+    authorization: str | None = Header(default=None),
+):
+    _decode_jwt(authorization)
+    conn = get_dolt_conn()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute("SELECT * FROM candidates WHERE candidate_id=%s", (candidate_id,))
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        raise HTTPException(404, "candidate_not_found")
+
+    for k, v in row.items():
+        if hasattr(v, "isoformat"):
+            row[k] = v.isoformat()
+        elif isinstance(v, (bytes, bytearray)):
+            row[k] = v.decode()
+    return row
+
+
+# ---------------------------------------------------------------------------
 # Metrics + security endpoints (unchanged)
 # ---------------------------------------------------------------------------
 
@@ -681,9 +828,6 @@ async def agent_list(authorization: str | None = Header(default=None)):
 # Blackboard: task_post + task_claim
 # ---------------------------------------------------------------------------
 
-import datetime
-
-
 @app.post("/tasks")
 async def task_post(
     request: Request,
@@ -729,7 +873,7 @@ async def task_claim(
     role = claims["role"]
     body = await request.json()
     lease_seconds = int(body.get("lease_seconds", 120))
-    lease_expires = datetime.datetime.utcnow() + datetime.timedelta(seconds=lease_seconds)
+    lease_expires = datetime.utcnow() + timedelta(seconds=lease_seconds)
     worker_id = claims["sub"]
 
     conn = get_dolt_conn()
@@ -739,7 +883,7 @@ async def task_claim(
             cur.execute(
                 "UPDATE tasks SET status='pending', claimed_by=NULL, lease_expires=NULL "
                 "WHERE status='claimed' AND lease_expires < %s",
-                (datetime.datetime.utcnow(),),
+                (datetime.utcnow(),),
             )
 
         # Atomic select-then-update loop

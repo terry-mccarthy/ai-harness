@@ -44,3 +44,9 @@ label_allowed if {
     input.scope == "episode:label"
     input.agent_role in {"sre", "code_reviewer"}
 }
+
+# Candidate proposal scope — same roles propose skill candidates
+propose_allowed if {
+    input.scope == "candidate:propose"
+    input.agent_role in {"sre", "code_reviewer"}
+}
