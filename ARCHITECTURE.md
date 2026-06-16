@@ -179,7 +179,15 @@ is standalone (no dependency on other harness packages). See
 1. **`POST /oauth/token`** — client credentials grant. Three clients: `architect`, `code-reviewer`, `sre`. Issues **RS256 JWTs** with `sub`, `role`, 15-min TTL, signed with a private RSA key loaded from `JWT_PRIVATE_KEY_FILE`. Verifier uses the derived public key — downstream services cannot mint tokens.
 2. **`GET /jwks`** — returns the RSA public key as a JWK set for downstream verifiers.
 3. **`POST /check`** — validates Bearer JWT, calls OPA `POST /v1/data/harness/allow`; returns `{"allowed": true, "role": ..., "agent_id": ..., "rule": ...}` on allow, 403 on deny. Also gates `shell_exec` behind `X-Human-Approval-Token`.
-4. **`POST /audit`** — accepts an audit record from GatewayClient and writes to Dolt async (202 response, background task). Emits Prometheus counters/histograms.
+4. **`POST /audit`** — accepts an audit record from GatewayClient and writes to Dolt async (202 response, background task). Also writes an `episodes` row (independent background task). Emits Prometheus counters/histograms. Auto-triggers expiry pass every `EXPIRY_PASS_INTERVAL` (default 1000) audit events.
+5. **`POST /episodes/{id}/label`** — sets outcome + outcome_signal + outcome_labeled_at. Requires `episode:label` OPA scope (sre, code_reviewer). Enforces independence rule: labeler ≠ agent_principal.
+6. **`POST /candidates`** / **`GET /candidates/{id}`** — propose a candidate from a qualified episode set (N_min=5, K=2 principals, M=2 recent). Requires `candidate:propose` scope.
+7. **`POST /candidates/{id}/promote`** / **`POST /candidates/{id}/reject`** — human gate. Requires `skill:promote` scope (human-operator client only; no agent role has this). Promotion re-validates criteria, creates/versions a `skills` row with 90-day expiry.
+8. **`GET /skills/{id}`** — returns skill (200), 410 if revoked, 404 if missing.
+9. **`POST /skills/{id}/revoke`** — requires `skill:promote` scope; sets status=revoked + reason.
+10. **`POST /skills/expire`** — manual trigger for expiry pass; also auto-triggered by audit counter.
+
+OAuth clients: `architect`, `code-reviewer`, `sre` (agent roles) + `human-operator` (human_operator role — the only role with `skill:promote` scope).
 
 Governance no longer forwards tool calls. Rate limiting is delegated to the gateway (ContextForge).
 
@@ -189,11 +197,13 @@ Governance no longer forwards tool calls. Rate limiting is delegated to the gate
 
 `policies/harness.rego` maps agent roles to allowed tool names:
 
-| Role            | Allowed tools                                                                        |
-|-----------------|--------------------------------------------------------------------------------------|
-| `architect`     | `codebase_search`, `adr_read`, `adr_write`, `diagram_gen`                            |
-| `code_reviewer` | `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`  |
-| `sre`           | `observability_query`, `runbook_read`, `log_search`, `shell_exec`                    |
+| Role             | Allowed tools / scopes                                                                |
+|------------------|---------------------------------------------------------------------------------------|
+| `architect`      | `codebase_search`, `adr_read`, `adr_write`, `diagram_gen`                             |
+| `code_reviewer`  | `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`   |
+| `sre`            | `observability_query`, `runbook_read`, `log_search`, `shell_exec`                     |
+| `sre` + `code_reviewer` | `episode:label` scope, `candidate:propose` scope                           |
+| `human_operator` | `skill:promote` scope (promote + reject + revoke — no tool access)                    |
 
 Default: deny. Cross-role calls (e.g. architect calling `shell_exec`) return 403 without
 reaching the tool server.
@@ -227,9 +237,7 @@ SELECT * FROM dolt_diff_audit_log;   -- row-level diff per commit
 The `harness` DB user has INSERT + SELECT only — no DELETE. The audit log is append-only
 by construction and by policy.
 
-Dolt also hosts the **formula store** (`formulas` + `formula_pours` tables). Every
-`propose()` call and every quality update is a Dolt commit, so formula history is
-fully diffable with `dolt log` and `dolt diff`.
+Dolt also hosts the **skill-learning store** (`episodes`, `candidates`, `skills` tables — replaced `formulas`/`formula_pours` in the skill-learning phase). Every labeling event, candidate proposal, promotion, and revocation is a Dolt commit.
 
 ---
 
@@ -333,6 +341,41 @@ Triggered manually: `make consolidate`
 
 ---
 
+## Skill Learning
+
+`episodes → candidates → skills` pipeline, all persisted in Dolt.
+
+```
+POST /audit  →  _write_episode (background)  →  episodes row (outcome=NULL)
+                   ↓ (human calls POST /episodes/{id}/label)
+             outcome + outcome_signal set; outcome_labeled_at non-null
+
+POST /candidates  →  validate N_min / K / M / recency criteria
+                  →  candidates row (status=PROPOSED, support_stats computed)
+
+POST /candidates/{id}/promote  (human-operator only)
+  →  re-validate episode criteria
+  →  skills row (status=active, expires_at=+90d, version=N)
+  →  candidate status=PROMOTED
+
+GatewayClient.execute_skill(skill_id, inputs)
+  →  GET /skills/{id}  (410 if revoked)
+  →  for each step: call_tool(step.action)  [OPA re-checked per step]
+     on ToolAccessDenied: apply on_failure (ABORT | ROLLBACK | CONTINUE)
+
+POST /skills/{id}/revoke  (human-operator only)
+  →  status=revoked; subsequent execute_skill raises ToolAccessDenied immediately
+
+POST /skills/expire  (manual trigger or auto every EXPIRY_PASS_INTERVAL audits)
+  →  ACTIVE skills where expires_at ≤ NOW()  →  status=EXPIRED
+  →  re-validation: auto-propose candidate if fresh episodes exist for cluster_key
+  →  early-review flag: skills with <50% success rate in trailing 30 days
+```
+
+**[HARD]** Promotion grants no authority. Each step in `execute_skill` is independently OPA-checked using the invoking principal's token — the existence of a promoted skill does not bypass policy.
+
+---
+
 ## GatewayClient
 
 `packages/harness-gateway/harness_gateway/client.py`:
@@ -344,9 +387,10 @@ Triggered manually: `make consolidate`
   2. POSTs `governance_url/check` — 403 raises `ToolAccessDenied` immediately
   3. Calls gateway directly (`_invoke_mcpjungle` or `_invoke_cf`)
   4. Fires `governance_url/audit` as an async background task (non-blocking)
+- `execute_skill(skill_id, inputs)` — fetches skill from `GET /skills/{id}`, runs each step via `call_tool`, applies per-step `on_failure` policy (ABORT / ROLLBACK / CONTINUE)
 - `gateway_backend="contextforge"` enables CF's JSON-RPC format + CF JWT auth
 - Legacy mode (no `governance_url`): gateway_url is treated as a proxy (backward-compatible)
-- Response unwrapping: `_unwrap(data, status, tool_name)` — parses `{"content": [{"type": "text", "text": "<json>"}]}` to a plain dict; 401/403 raise `ToolAccessDenied`
+- Response unwrapping: `_unwrap → _check_status + _extract_content` — parses `{"content": [{"type": "text", "text": "<json>"}]}` to a plain dict; 401/403 raise `ToolAccessDenied`
 
 ---
 
@@ -522,16 +566,22 @@ suggestions — violating them breaks the system's core guarantees.
 
 ## Test Coverage
 
-### Integration suite (74 tests) — `make test-integration`
+### Integration suite (177 tests) — `make test-integration`
 
-| Phase | File                        | Tests | What they cover                                                          |
-|-------|-----------------------------|-------|--------------------------------------------------------------------------|
-| 0     | `test_thin_slice.py`        | 9     | Reviewer agent contract, gateway audit log, tool access denial, MCP reachability |
-| 1     | `test_phase1_governance.py` | 17    | Auth (RS256 JWT), OPA policy check (`/check`), Dolt audit (`/audit`), token expiry |
-| 2     | `test_phase2_memory.py`     | 27    | Checkpointer, memory store (write/read/search/TTL/Redis), consolidation, formula store |
-| 3     | `test_phase3_agents.py`     | 4     | Agent protocol compliance, tool calls via gateway, shell_exec gating    |
-| 4     | `test_phase4_supervisor.py` | 12    | LangGraph orchestration (classify/route/formula/human_gate/checkpoint), E2E task flows |
-| 5     | `test_phase5_hardening.py`  | 8     | OWASP mitigations, OTel cost tags, token budget, no-rate-limit on governance, CF parity |
+| Phase / Area | File                        | Tests | What they cover                                                          |
+|--------------|-----------------------------|-------|--------------------------------------------------------------------------|
+| 0            | `test_thin_slice.py`        | 9     | Reviewer agent contract, gateway audit log, tool access denial, MCP reachability |
+| 1            | `test_phase1_governance.py` | 17    | Auth (RS256 JWT), OPA policy check (`/check`), Dolt audit (`/audit`), token expiry |
+| 2            | `test_phase2_memory.py`     | 27    | Checkpointer, memory store (write/read/search/TTL/Redis), consolidation, formula store |
+| 3            | `test_phase3_agents.py`     | 4     | Agent protocol compliance, tool calls via gateway, shell_exec gating    |
+| 4            | `test_phase4_supervisor.py` | 12    | LangGraph orchestration (classify/route/formula/human_gate/checkpoint), E2E task flows |
+| 5            | `test_phase5_hardening.py`  | 8     | OWASP mitigations, OTel cost tags, token budget, no-rate-limit on governance, CF parity |
+| Skill 01     | `test_skill_learning_schema.py` | 14 | Dolt schema (episodes/candidates/skills), harness user grants, DoltFormulaStore compat |
+| Skill 02     | `test_episode_capture.py`   | 4     | /audit writes episode row; fire-and-forget; audit_log unaffected         |
+| Skill 03     | `test_outcome_labeling.py`  | 7     | POST /episodes/{id}/label — 4 rejection cases + happy path + Dolt commit |
+| Skill 04     | `test_candidate_proposal.py`| 8     | POST /candidates — 4 criteria rejections + happy path + GET /candidates/{id} |
+| Skill 05     | `test_hitl_promotion.py`    | 13    | Promote/reject — scope guard, re-promotion versioning, full e2e flow     |
+| Skill 06     | `test_skill_execution.py`   | 11    | GET/revoke skills + execute_skill (ABORT/ROLLBACK/CONTINUE/revoked)      |
 
 ### Eval suite (7 tests) — `pytest -m eval -v -s`
 
@@ -575,3 +625,8 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0026 | Eval suite (`eval-fixtures/` + `pytest -m eval`) for reviewer quality benchmarking — integration tests prove the harness works; eval proves the agent is good; 6 labeled diffs (clean + SQL injection, hardcoded secrets, shell injection, missing auth, path traversal); scored on verdict accuracy (≥80%) and recall of must-flag patterns (≥60%); mock gateway bypasses Docker stack so evals run against Ollama only | Accepted |
 | 0027 | Agent-level token tracking in `LLMResponse` + `AgentState` — `HarnessState.tokens_used` tracks graph-level totals but providers were discarding per-call counts; enriching `LLMResponse` with `prompt_tokens`/`completion_tokens` and accumulating in the reviewer retry loop gives per-agent measurement and enables a fine-grained `token_budget` that aborts runaway retries without cancelling a successful first response | Accepted |
 | 0028 | `POST /review` plain HTTP endpoint on review-server alongside the MCP tool — MCP is the right interface for LLM agent callers (tool-use protocol, schema enforcement, audit trail); plain HTTP is the right interface for CI pipelines, pre-commit hooks, webhooks, and IDE extensions that can't run an MCP client; both share `_run_review()` with no logic duplication; `git_diff` tool gains a GitHub API mode (`pr_number` + `github_repo`) so autonomous agents can fetch any PR diff without filesystem access | Accepted |
+| 0029 | `formulas`/`formula_pours` tables replaced by `episodes`, `candidates`, `skills` — formula store was a static versioned workflow library; skill learning requires the full episode→candidate→HITL→skill pipeline with outcome tracking and independence criteria; `DoltFormulaStore` updated to read from `skills` for backwards compatibility with Phase 2 tests | Accepted |
+| 0030 | `_write_episode` as an independent `background_tasks.add_task` alongside `_write_audit` — sharing a single task or chaining would mean one failure silently swallows the other; fire-and-forget independence is the right pattern for two append-only write paths that serve different consumers | Accepted |
+| 0031 | `human-operator` OAuth client with `human_operator` role; `skill:promote` scope not granted to any agent role — promotion and revocation are irreversible governance actions that must have a human in the loop; the OPA scope enforcement makes it mechanically impossible for an agent to self-promote its own outputs | Accepted |
+| 0032 | `GatewayClient.execute_skill` re-uses `call_tool` per step (which already does OPA check) rather than adding a separate pre-check — avoids double-checking and keeps the per-step OPA enforcement consistent with the existing tool call path; `on_failure` policy (ABORT/ROLLBACK/CONTINUE) handled in `_handle_step_failure` to keep `execute_skill` CCN below the 9.0 health target | Accepted |
+| 0033 | CCN ceiling policy: governance `server.py` and `client.py` must maintain code health ≥ 9.0 — enforced by running `/forensics` before every commit; complex validation logic extracted into named helpers (`_validate_label_body`, `_check_episode_labelable`, `_check_count_criteria`, `_check_diversity_criteria`, `_compute_support_stats`, `_parse_steps`, `_count_completed`, etc.) that are individually testable and readable | Accepted |

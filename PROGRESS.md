@@ -526,3 +526,154 @@ Added `OpenRouterProvider` (PR #1) and addressed six findings from a multi-angle
 - [x] Unknown provider names raise `ValueError` with supported list; silent fallthrough to Ollama removed
 - [x] `http_review` returns 400 (not 500) for `ValueError` — config errors are now distinguishable from infrastructure failures
 - [x] Code health 9.7/10
+
+---
+
+## Skill Learning (issues 01–08 from `.scratch/skill-learning/PRD.md`)
+
+Self-learning loop: tool call episodes → candidate clustering → HITL promotion → governed skill execution → expiry/re-validation.
+
+### Issue 01 — Dolt schema: episodes, candidates, skills ✅
+
+**Tests** — 14 pass (`test_skill_learning_schema.py`):
+- [x] `test_episodes_table_exists` / `test_episodes_columns`
+- [x] `test_candidates_table_exists` / `test_candidates_columns`
+- [x] `test_skills_table_exists` / `test_skills_columns`
+- [x] `test_seeded_skills_present` — three seed skills (sre:triage-incident, code_reviewer:review-pr, architect:write-adr)
+- [x] `test_formulas_table_gone` — formulas + formula_pours dropped and replaced
+- [x] `test_harness_user_can_insert_episode` / `test_harness_user_cannot_delete_episodes`
+- [x] `test_formula_store_list_active_returns_seeded_skills` / `test_formula_store_lookup_finds_skill_by_keyword`
+- [x] `test_harness_user_can_insert_skill`
+
+**Definition of Done**
+- [x] `episodes`, `candidates`, `skills` tables in `services/dolt/init.sh` (replacing `formulas`/`formula_pours`)
+- [x] `DoltFormulaStore` reads from `skills` table; three seed rows committed on init
+- [x] `harness` user: SELECT+INSERT on episodes (no DELETE); SELECT+INSERT+UPDATE on candidates+skills
+
+**Notes**
+- `formulas` and `formula_pours` tables dropped; `DoltFormulaStore` updated to read `skills` — Phase 2 formula tests pass unchanged via the compatibility shim
+
+---
+
+### Issue 02 — Episode capture on governance audit path ✅
+
+**Tests** — 4 pass (`test_episode_capture.py`):
+- [x] `test_audit_writes_episode_row` — POST /audit creates episodes row with outcome=NULL
+- [x] `test_episode_agent_principal_matches_jwt_sub` — agent_principal = JWT sub
+- [x] `test_audit_still_returns_202` — episode write is fire-and-forget
+- [x] `test_audit_log_still_written` — existing audit_log write unaffected
+
+**Definition of Done**
+- [x] `_write_episode` runs as independent `background_tasks.add_task` alongside `_write_audit` — one failure cannot swallow the other
+- [x] `alert_signature` derived as `{role}.{short_tool}:{correlation_id}`; `env_fingerprint` and `actions` populated from audit payload
+- [x] Episode write failure logged, 202 response unchanged
+
+---
+
+### Issue 03 — Outcome labeling endpoint ✅
+
+**Tests** — 7 pass (`test_outcome_labeling.py`):
+- [x] `test_label_returns_200_and_commits` — different principal, valid signal → 200 + Dolt commit
+- [x] `test_dolt_commit_created_on_label`
+- [x] `test_self_label_returns_409` — labeler_principal == agent_principal
+- [x] `test_empty_outcome_signal_returns_422`
+- [x] `test_relabel_returns_409` — already labeled
+- [x] `test_opa_rejects_no_label_scope` — architect → 403
+- [x] `test_missing_episode_returns_404`
+
+**Definition of Done**
+- [x] `POST /episodes/{id}/label` with four rejection cases (self-label, empty signal, re-label, missing)
+- [x] OPA `episode:label` scope granted to `sre` and `code_reviewer` only
+- [x] `_validate_label_body` + `_check_episode_labelable` + `_serialise_row` extracted to hold CCN ≤ 9
+
+---
+
+### Issue 04 — Manual candidate proposal ✅
+
+**Tests** — 8 pass (`test_candidate_proposal.py`):
+- [x] `test_post_candidates_returns_201` — 5 qualified independent recent RESOLVED episodes
+- [x] `test_candidate_stored_in_dolt` — status=PROPOSED, support_stats computed
+- [x] `test_get_candidate_returns_full_record` — GET /candidates/{id} with member_episode_ids
+- [x] `test_below_n_min_returns_422` (< 5 episodes)
+- [x] `test_below_k_principals_returns_422` (all same principal)
+- [x] `test_below_m_recent_returns_422` (all > 90 days old)
+- [x] `test_unqualified_episodes_returns_422` (unlabeled episode in list)
+- [x] `test_opa_rejects_no_propose_scope` — architect → 403
+
+**Definition of Done**
+- [x] `POST /candidates` + `GET /candidates/{id}` on governance
+- [x] OPA `candidate:propose` scope granted to `sre` and `code_reviewer`
+- [x] Criteria: N_min=5, K=2 distinct principals, M=2 recent (90 days); `support_stats` computed automatically
+- [x] Validation split into `_check_count_criteria` + `_check_diversity_criteria`; `_compute_support_stats` extracted
+
+---
+
+### Issue 05 — HITL promotion gate ✅
+
+**Tests** — 13 pass (`test_hitl_promotion.py`):
+- [x] `test_promote_creates_active_skill` — human-operator token → ACTIVE skill, promoted_by set
+- [x] `test_promote_transitions_candidate_to_promoted`
+- [x] `test_promote_dolt_commit_message` — commit includes candidate id and human principal
+- [x] `test_promote_skill_expires_90_days_out`
+- [x] `test_repromote_increments_version` — re-promotion → version 2, procedure_diff in response
+- [x] `test_reject_sets_status_rejected` — with reason
+- [x] `test_reject_without_reason_returns_422`
+- [x] `test_repromote_already_promoted_candidate_409`
+- [x] `test_reject_already_rejected_candidate_409`
+- [x] `test_agent_role_cannot_promote` (×3: architect, sre, code-reviewer) → 403
+- [x] `test_full_episode_to_skill_flow` — end-to-end episode→candidate→promote
+
+**Definition of Done**
+- [x] `POST /candidates/{id}/promote` + `POST /candidates/{id}/reject` on governance
+- [x] `human-operator` OAuth client added; OPA `skill:promote` scope granted **only** to `human_operator` role
+- [x] Re-validation of episode criteria at promote time; re-promotion creates new version with procedure diff
+- [x] `expires_at = NOW() + 90 days`; `source_candidate_id` set on skill row
+
+---
+
+### Issue 06 — Skill execution with per-step OPA re-check and revocation ✅
+
+**Tests** — 11 pass (`test_skill_execution.py`):
+- [x] `test_get_skill_returns_200` / `test_get_revoked_skill_returns_410` / `test_get_missing_skill_returns_404`
+- [x] `test_revoke_sets_status_revoked` — POST /skills/{id}/revoke + Dolt commit + revoked_reason stored
+- [x] `test_agent_cannot_revoke` — 403
+- [x] `test_revoke_without_reason_returns_422`
+- [x] `test_execute_skill_runs_all_steps` — all steps complete, structured result returned
+- [x] `test_abort_on_step_denial` — ABORT stops after failed step, subsequent steps not reached
+- [x] `test_continue_on_step_denial` — CONTINUE skips denied step, carries on
+- [x] `test_rollback_runs_rollback_steps_then_raises` — rollback steps fire before re-raise
+- [x] `test_execute_revoked_skill_raises` — no tool calls made on revoked skill
+
+**Definition of Done**
+- [x] `GET /skills/{id}` (200 active, 410 revoked, 404 missing) on governance
+- [x] `POST /skills/{id}/revoke` requires `skill:promote` scope (human-operator only)
+- [x] `GatewayClient.execute_skill(skill_id, inputs)` — fetches skill, runs each step through `call_tool` (existing OPA re-check path), applies `on_failure` policy (ABORT/ROLLBACK/CONTINUE)
+- [x] `run_skill` MCP tool added to review_server; uses `SKILL_CLIENT_ID`/`SKILL_CLIENT_SECRET` env vars
+- [x] CCN ceiling held at 9.0 via `_parse_steps`, `_count_completed`, `_handle_step_failure`, `_check_status`, `_extract_content` extractions
+
+**Running total: 177 integration tests pass**
+
+---
+
+### Issue 07 — Skill expiry and lightweight re-validation trigger 🔄 IN PROGRESS
+
+**Status:** tests written, implementation pending.
+
+**What's left:**
+- [ ] `POST /skills/expire` endpoint on governance
+- [ ] Auto-trigger counter in `/audit` endpoint (fires every `EXPIRY_PASS_INTERVAL` calls, default 1000)
+- [ ] Re-validation: auto-propose candidate when sufficient fresh RESOLVED episodes exist for expired skill's cluster_key prefix
+- [ ] Early-review flag: trailing 30-day success rate < 0.5 in audit_log
+- [ ] `EXPIRY_PASS_INTERVAL=3` in docker-compose.yml governance env for integration test
+
+**Acceptance criteria**
+- [ ] POST /skills/expire transitions overdue ACTIVE skills to EXPIRED + Dolt commit per skill
+- [ ] Expired skills return error on execute_skill (issue 06 flow)
+- [ ] Re-validation auto-proposes candidate when criteria met
+- [ ] Auto-trigger fires after EXPIRY_PASS_INTERVAL audit events
+- [ ] Early-review flag in response for low success-rate skills
+- [ ] Integration test: past-expires_at skill → expire → EXPIRED + candidate re-proposed
+
+---
+
+### Issue 08 — Conflict resolution and escalation ⏳ NOT STARTED

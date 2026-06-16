@@ -101,7 +101,7 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 
 ## Tests
 
-### Integration suite (74 tests: all green) — `make test-integration`
+### Integration suite (177 tests: all green) — `make test-integration`
 
 ### Phase 0 — Core reviewer (9 tests)
 
