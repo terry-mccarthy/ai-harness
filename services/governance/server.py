@@ -21,9 +21,11 @@ from core.config import (
     DOLT_PORT,
     DOLT_USER,
     EXPIRY_PASS_INTERVAL,
+    MIN_EPISODES,
     OPA_URL,
     PRIVATE_KEY as _private_key,
     PUBLIC_KEY as _public_key,
+    RECENT_DAYS,
     TOKEN_TTL,
     b64url as _b64url,
 )
@@ -346,10 +348,10 @@ async def label_episode(
 # Candidate proposal
 # ---------------------------------------------------------------------------
 
-_N_MIN = 5       # minimum episode count
+_N_MIN = MIN_EPISODES
 _K_MIN = 2       # minimum distinct agent_principals
 _M_MIN = 2       # minimum recent episodes
-_RECENT_DAYS = 90
+_RECENT_DAYS = RECENT_DAYS
 
 
 def _fetch_and_qualify_episodes(conn, episode_ids: list[str]) -> tuple[list[dict], list[str]]:

@@ -41,6 +41,10 @@ DOLT_DB = os.environ.get("DOLT_DB", "harness")
 TOKEN_TTL = int(os.environ.get("TOKEN_TTL", "900"))
 EXPIRY_PASS_INTERVAL = int(os.environ.get("EXPIRY_PASS_INTERVAL", "1000"))
 
+# Candidate-proposal thresholds shared across learning and skills routers
+MIN_EPISODES = 5            # minimum episode count for a candidate
+RECENT_DAYS = 90            # episode-recency window in days
+
 
 CLIENTS = {
     "architect": {
