@@ -85,6 +85,10 @@ CLIENTS = {
         "secret": os.environ.get("SRE_SECRET", "sre-secret"),
         "role": "sre",
     },
+    "human-operator": {
+        "secret": os.environ.get("HUMAN_OPERATOR_SECRET", "human-operator-secret"),
+        "role": "human_operator",
+    },
 }
 
 
@@ -576,6 +580,166 @@ async def get_candidate(
     if row is None:
         raise HTTPException(404, "candidate_not_found")
     return _serialise_row(row)
+
+
+# ---------------------------------------------------------------------------
+# HITL promotion gate
+# ---------------------------------------------------------------------------
+
+_SKILL_EXPIRY_DAYS = 90
+
+
+async def _check_opa_promote(role: str) -> bool:
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{OPA_URL}/v1/data/harness/promote_allowed",
+                json={"input": {"scope": "skill:promote", "agent_role": role}},
+                timeout=5.0,
+            )
+        return resp.json().get("result", False) is True
+    except Exception as e:
+        logger.error("OPA promote check failed: %s", e)
+        return False
+
+
+def _fetch_candidate_or_404(conn, candidate_id: str) -> dict:
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute("SELECT * FROM candidates WHERE candidate_id=%s", (candidate_id,))
+        row = cur.fetchone()
+    if row is None:
+        raise HTTPException(404, "candidate_not_found")
+    for k, v in row.items():
+        if isinstance(v, (bytes, bytearray)):
+            row[k] = v.decode()
+    return row
+
+
+def _fetch_latest_skill(conn, skill_id: str) -> dict | None:
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            "SELECT * FROM skills WHERE id=%s ORDER BY version DESC LIMIT 1",
+            (skill_id,),
+        )
+        return cur.fetchone()
+
+
+def _compute_procedure_diff(old_proc, new_proc) -> dict | None:
+    if old_proc is None:
+        return None
+    old = old_proc if isinstance(old_proc, dict) else json.loads(old_proc)
+    new = new_proc if isinstance(new_proc, dict) else json.loads(new_proc)
+    if old == new:
+        return None
+    return {"before": old, "after": new}
+
+
+def _insert_skill(conn, skill_id: str, candidate: dict, version: int, human_principal: str) -> None:
+    procedure = candidate["proposed_procedure"]
+    if isinstance(procedure, (bytes, bytearray)):
+        procedure = procedure.decode()
+    expires_at = datetime.utcnow() + timedelta(days=_SKILL_EXPIRY_DAYS)
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO skills "
+            "(id, name, agent_role, version, status, description, input_schema, steps, "
+            "output_contract, promoted_by, source_candidate_id, expires_at, created_at) "
+            "VALUES (%s,%s,%s,%s,'active',%s,%s,%s,%s,%s,%s,%s,NOW())",
+            (
+                skill_id,
+                skill_id,
+                skill_id.split(".")[0] if "." in skill_id else "unknown",
+                version,
+                f"Promoted from candidate {candidate['candidate_id'][:8]}",
+                "{}",
+                procedure if isinstance(procedure, str) else json.dumps(procedure),
+                "{}",
+                human_principal,
+                candidate["candidate_id"],
+                expires_at,
+            ),
+        )
+
+
+@app.post("/candidates/{candidate_id}/promote")
+async def promote_candidate(
+    candidate_id: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    claims = _decode_jwt(authorization)
+    if not await _check_opa_promote(claims["role"]):
+        raise HTTPException(403, "skill_promote_not_permitted")
+
+    conn = get_dolt_conn()
+    try:
+        candidate = _fetch_candidate_or_404(conn, candidate_id)
+        if candidate["status"] == "PROMOTED":
+            raise HTTPException(409, "candidate_already_promoted")
+
+        episode_ids = candidate["member_episode_ids"]
+        if isinstance(episode_ids, str):
+            episode_ids = json.loads(episode_ids)
+        qualified, disqualified = _fetch_and_qualify_episodes(conn, episode_ids)
+        errors = _check_candidate_criteria(qualified, disqualified, len(episode_ids))
+        if errors:
+            raise HTTPException(422, {"errors": errors})
+
+        cluster_key = candidate["cluster_key"]
+        prior = _fetch_latest_skill(conn, cluster_key)
+        new_version = (prior["version"] + 1) if prior else 1
+        prior_proc = prior["steps"] if prior else None
+        proc_diff = _compute_procedure_diff(prior_proc, candidate["proposed_procedure"])
+
+        _insert_skill(conn, cluster_key, candidate, new_version, claims["sub"])
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE candidates SET status='PROMOTED' WHERE candidate_id=%s",
+                (candidate_id,),
+            )
+            cur.execute(
+                "CALL DOLT_COMMIT('-Am', %s)",
+                (f"skill: promoted from candidate {candidate_id[:8]} by {claims['sub']}",),
+            )
+    finally:
+        conn.close()
+
+    return {"skill_id": cluster_key, "version": new_version, "procedure_diff": proc_diff}
+
+
+@app.post("/candidates/{candidate_id}/reject")
+async def reject_candidate(
+    candidate_id: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    claims = _decode_jwt(authorization)
+    if not await _check_opa_promote(claims["role"]):
+        raise HTTPException(403, "skill_promote_not_permitted")
+
+    body = await request.json()
+    reason = body.get("reason")
+    if not reason:
+        raise HTTPException(422, "reason is required")
+
+    conn = get_dolt_conn()
+    try:
+        candidate = _fetch_candidate_or_404(conn, candidate_id)
+        if candidate["status"] == "REJECTED":
+            raise HTTPException(409, "candidate_already_rejected")
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE candidates SET status='REJECTED' WHERE candidate_id=%s",
+                (candidate_id,),
+            )
+            cur.execute(
+                "CALL DOLT_COMMIT('-Am', %s)",
+                (f"candidate: {candidate_id[:8]} rejected by {claims['sub']}: {reason}",),
+            )
+    finally:
+        conn.close()
+
+    return {"status": "REJECTED", "reason": reason}
 
 
 # ---------------------------------------------------------------------------

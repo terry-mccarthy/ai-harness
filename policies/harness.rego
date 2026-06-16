@@ -50,3 +50,9 @@ propose_allowed if {
     input.scope == "candidate:propose"
     input.agent_role in {"sre", "code_reviewer"}
 }
+
+# Skill promote/reject scope — human operators only; intentionally NOT in any agent role
+promote_allowed if {
+    input.scope == "skill:promote"
+    input.agent_role == "human_operator"
+}
