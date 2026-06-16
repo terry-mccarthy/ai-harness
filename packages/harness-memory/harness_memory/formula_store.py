@@ -46,17 +46,18 @@ class DoltFormulaStore:
     # ------------------------------------------------------------------
 
     def propose(self, formula: Formula) -> str:
-        """Insert or add a new version of a formula; returns Dolt commit hash."""
+        """Insert or add a new version of a skill; returns Dolt commit hash."""
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO formulas
+                    INSERT INTO skills
                         (id, name, agent_role, version, status, description,
-                         input_schema, steps, output_contract, quality_score,
-                         created_at, created_by)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         input_schema, steps, output_contract,
+                         promoted_by, source_candidate_id, expires_at,
+                         revoked_reason, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         formula.id, formula.name, formula.agent_role,
@@ -64,12 +65,13 @@ class DoltFormulaStore:
                         json.dumps(formula.input_schema),
                         json.dumps(formula.steps),
                         json.dumps(formula.output_contract),
-                        formula.quality_score, now, formula.created_by,
+                        formula.promoted_by, formula.source_candidate_id,
+                        formula.expires_at, formula.revoked_reason, now,
                     ),
                 )
                 cur.execute(
                     "CALL DOLT_COMMIT('-Am', %s)",
-                    (f"formula: {formula.id} v{formula.version}",),
+                    (f"skill: {formula.id} v{formula.version}",),
                 )
                 cur.execute("SELECT commit_hash FROM dolt_log LIMIT 1")
                 row = cur.fetchone()
@@ -80,28 +82,28 @@ class DoltFormulaStore:
             with conn.cursor() as cur:
                 if version is None:
                     cur.execute(
-                        "SELECT * FROM formulas WHERE id = %s ORDER BY version DESC LIMIT 1",
+                        "SELECT * FROM skills WHERE id = %s ORDER BY version DESC LIMIT 1",
                         (formula_id,),
                     )
                 else:
                     cur.execute(
-                        "SELECT * FROM formulas WHERE id = %s AND version = %s",
+                        "SELECT * FROM skills WHERE id = %s AND version = %s",
                         (formula_id, version),
                     )
                 row = cur.fetchone()
         return self._row_to_formula(row) if row else None
 
     def list_active(self, agent_role: str) -> list[Formula]:
-        """Return the latest active version of each formula for the given role."""
+        """Return the latest active version of each skill for the given role."""
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT f.*
-                    FROM formulas f
+                    FROM skills f
                     INNER JOIN (
                         SELECT id, MAX(version) AS max_ver
-                        FROM formulas
+                        FROM skills
                         WHERE agent_role = %s AND status NOT IN ('deprecated', 'draft')
                         GROUP BY id
                     ) latest ON f.id = latest.id AND f.version = latest.max_ver
@@ -132,12 +134,12 @@ class DoltFormulaStore:
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE formulas SET status = 'deprecated' WHERE id = %s",
+                    "UPDATE skills SET status = 'deprecated' WHERE id = %s",
                     (formula_id,),
                 )
                 cur.execute(
                     "CALL DOLT_COMMIT('-Am', %s)",
-                    (f"formula: {formula_id} deprecated",),
+                    (f"skill: {formula_id} deprecated",),
                 )
 
     def update_quality(self, formula_id: str, quality_score: float, status: str) -> None:
@@ -145,37 +147,23 @@ class DoltFormulaStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    UPDATE formulas
-                    SET quality_score = %s, status = %s
+                    UPDATE skills
+                    SET status = %s
                     WHERE id = %s
                       AND status NOT IN ('deprecated')
                     """,
-                    (quality_score, status, formula_id),
+                    (status, formula_id),
                 )
-                # Only commit if UPDATE actually matched rows
                 if cur.rowcount > 0:
                     cur.execute(
                         "CALL DOLT_COMMIT('-Am', %s)",
-                        (f"formula: {formula_id} quality={quality_score:.2f} status={status}",),
+                        (f"skill: {formula_id} status={status}",),
                     )
-
-    def get_pour_stats(self, formula_id: str) -> dict:
-        """Return {total, successes} pour counts."""
-        with self._conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) AS total, SUM(success) AS successes FROM formula_pours WHERE formula_id = %s",
-                    (formula_id,),
-                )
-                row = cur.fetchone()
-        total = row["total"] or 0
-        successes = int(row["successes"] or 0)
-        return {"total": total, "successes": successes}
 
     def get_all_formula_ids(self) -> list[str]:
         with self._conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT DISTINCT id FROM formulas WHERE status != 'deprecated'")
+                cur.execute("SELECT DISTINCT id FROM skills WHERE status != 'deprecated'")
                 rows = cur.fetchall()
         return [r["id"] for r in rows]
 
@@ -211,18 +199,17 @@ class DoltFormulaStore:
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT * FROM formulas WHERE agent_role = %s AND status = 'draft'",
+                    "SELECT * FROM skills WHERE agent_role = %s AND status = 'draft'",
                     (agent_role,),
                 )
                 rows = cur.fetchall()
         return [self._row_to_formula(r) for r in rows]
 
     def _delete_where_id_like(self, pattern: str) -> None:
-        """Delete test formulas by id pattern (e.g. 'test:%')."""
+        """Delete test skills by id pattern (e.g. 'test:%')."""
         with self._conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM formula_pours WHERE formula_id LIKE %s", (pattern,))
-                cur.execute("DELETE FROM formulas WHERE id LIKE %s", (pattern,))
+                cur.execute("DELETE FROM skills WHERE id LIKE %s", (pattern,))
                 try:
                     cur.execute(
                         "CALL DOLT_COMMIT('-Am', %s)",
@@ -247,6 +234,8 @@ class DoltFormulaStore:
             input_schema=json.loads(row["input_schema"]) if isinstance(row["input_schema"], str) else row["input_schema"],
             steps=json.loads(row["steps"]) if isinstance(row["steps"], str) else row["steps"],
             output_contract=json.loads(row["output_contract"]) if isinstance(row["output_contract"], str) else row["output_contract"],
-            quality_score=float(row.get("quality_score") or 0.0),
-            created_by=row.get("created_by") or "",
+            promoted_by=row.get("promoted_by") or "",
+            source_candidate_id=row.get("source_candidate_id"),
+            expires_at=row.get("expires_at"),
+            revoked_reason=row.get("revoked_reason"),
         )

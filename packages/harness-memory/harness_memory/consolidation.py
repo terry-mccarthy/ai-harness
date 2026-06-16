@@ -11,10 +11,6 @@ from .models import ConsolidationResult
 # different-topic pairs ~0.35–0.62.  0.80 catches near-duplicates while
 # keeping genuinely different items apart.
 CLUSTER_THRESHOLD = 0.80
-# Minimum pours before quality scoring takes effect
-MIN_POURS = 10
-PROVEN_THRESHOLD = 0.80
-REVIEW_THRESHOLD = 0.30
 
 
 def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
@@ -90,24 +86,4 @@ class ConsolidationWorker:
                 await self._store._mark_consolidated(namespace, item["key"])
                 result.episodes_consolidated += 1
 
-        # 5. Update formula quality scores
-        await self._update_formula_quality(result)
-
         return result
-
-    async def _update_formula_quality(self, result: ConsolidationResult) -> None:
-        formula_ids = self._formula_store.get_all_formula_ids()
-        for fid in formula_ids:
-            stats = self._formula_store.get_pour_stats(fid)
-            total = stats["total"]
-            if total < MIN_POURS:
-                continue
-            rate = stats["successes"] / total
-            if rate >= PROVEN_THRESHOLD:
-                new_status = "proven"
-            elif rate < REVIEW_THRESHOLD:
-                new_status = "review"
-            else:
-                new_status = "active"
-            self._formula_store.update_quality(fid, rate, new_status)
-            result.formulas_updated += 1

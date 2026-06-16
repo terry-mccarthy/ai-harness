@@ -1,6 +1,8 @@
 # AI Harness
 
-A governed, self-learning agent harness with production hardening. Every tool call routes through a governance layer: OAuth 2.1 auth, OPA policy enforcement, Redis rate limiting, and a tamper-evident Dolt audit log. Supports MCPJungle and ContextForge as MCP gateway backends with a feature-flag rollback.
+![AI Harness](docs/ai-harness.jpeg)
+
+A governed, memory-augmented agent harness with production hardening. Every tool call routes through a governance layer: OAuth 2.1 auth, OPA policy enforcement, and a tamper-evident Dolt audit log. Recurring successful remediations are promoted into versioned, HITL-gated skills via a procedural skill-learning pipeline. Supports MCPJungle and ContextForge as MCP gateway backends with a feature-flag rollback.
 
 ## What it does
 

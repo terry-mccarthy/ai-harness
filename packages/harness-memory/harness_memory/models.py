@@ -11,11 +11,13 @@ class Formula:
     input_schema: dict
     steps: list
     output_contract: dict
-    created_by: str
+    promoted_by: str
     version: int = 1
     status: str = "active"
     description: str = ""
-    quality_score: float = 0.0
+    source_candidate_id: str | None = None
+    expires_at: datetime | None = None
+    revoked_reason: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

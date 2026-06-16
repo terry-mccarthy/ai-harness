@@ -382,7 +382,7 @@ def _triage_formula(version: int = 1) -> Any:
         input_schema={"type": "object", "properties": {"alert": {"type": "string"}}},
         steps=[{"action": "observability_query"}, {"action": "runbook_read"}],
         output_contract={"type": "object", "properties": {"report": {"type": "string"}}},
-        created_by="test",
+        promoted_by="test",
     )
 
 
@@ -392,40 +392,6 @@ def clean_test_formulas(formula_store):
     formula_store._delete_where_id_like("test:%")
     yield
     formula_store._delete_where_id_like("test:%")
-
-
-async def test_formula_quality_score_updated(formula_store, consolidation_worker, memory_store):
-    """After run_pass(), formula with 8/10 successful pours has quality_score >= 0.8."""
-    formula_store.propose(_triage_formula())
-    formula_store._record_pours("test:triage-incident", successes=8, failures=2)
-
-    await consolidation_worker.run_pass("sre")
-
-    formula = formula_store.get("test:triage-incident")
-    assert formula is not None
-    assert formula.quality_score >= 0.8
-
-
-async def test_formula_graduates_to_proven(formula_store, consolidation_worker, memory_store):
-    """Formula with >=10 pours and >=80% success has status='proven' after consolidation."""
-    formula_store.propose(_triage_formula())
-    formula_store._record_pours("test:triage-incident", successes=9, failures=1)
-
-    await consolidation_worker.run_pass("sre")
-
-    formula = formula_store.get("test:triage-incident")
-    assert formula.status == "proven"
-
-
-async def test_formula_flagged_for_review(formula_store, consolidation_worker, memory_store):
-    """Formula with >=10 pours and <30% success has status='review' after consolidation."""
-    formula_store.propose(_triage_formula())
-    formula_store._record_pours("test:triage-incident", successes=2, failures=8)
-
-    await consolidation_worker.run_pass("sre")
-
-    formula = formula_store.get("test:triage-incident")
-    assert formula.status == "review"
 
 
 async def test_formula_write_creates_dolt_commit(formula_store):

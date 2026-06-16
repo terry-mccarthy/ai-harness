@@ -177,11 +177,11 @@ def test_harness_user_cannot_delete_tasks():
 
 @pytest.mark.integration
 def test_existing_tables_unaffected():
-    """audit_log and formulas tables still exist after migration."""
+    """audit_log and skills tables still exist after migration."""
     conn = get_dolt_conn()
     with conn:
         with conn.cursor() as cur:
             cur.execute("SHOW TABLES")
             tables = {row[0] for row in cur.fetchall()}
     assert "audit_log" in tables, "audit_log table missing after migration"
-    assert "formulas" in tables, "formulas table missing after migration"
+    assert "skills" in tables, "skills table missing after migration"

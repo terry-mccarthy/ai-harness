@@ -28,27 +28,51 @@ CREATE TABLE IF NOT EXISTS audit_log (
     correlation_id  VARCHAR(36)  NULL
 );
 
-CREATE TABLE IF NOT EXISTS formulas (
-    id               VARCHAR(64)  NOT NULL,
-    name             TEXT         NOT NULL,
-    agent_role       TEXT         NOT NULL,
-    version          INTEGER      NOT NULL DEFAULT 1,
-    status           TEXT         NOT NULL DEFAULT 'active',
-    description      TEXT,
-    input_schema     JSON         NOT NULL,
-    steps            JSON         NOT NULL,
-    output_contract  JSON         NOT NULL,
-    quality_score    FLOAT        NOT NULL DEFAULT 0.0,
-    created_at       DATETIME     NOT NULL,
-    created_by       TEXT         NOT NULL,
-    UNIQUE KEY uq_formula_version (id, version)
+-- Migrate: remove old formula tables and replace with governed skill tables
+DROP TABLE IF EXISTS formula_pours;
+DROP TABLE IF EXISTS formulas;
+
+CREATE TABLE IF NOT EXISTS episodes (
+    episode_id          CHAR(36)     PRIMARY KEY,
+    created_at          TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    agent_principal     TEXT         NOT NULL,
+    alert_signature     TEXT,
+    service_class       TEXT,
+    env_fingerprint     JSON,
+    diagnosis           JSON,
+    actions             JSON,
+    outcome             ENUM('RESOLVED','FAILED','ROLLED_BACK','HUMAN_OVERRIDE','INCONCLUSIVE') NULL,
+    outcome_signal      JSON         NULL,
+    outcome_labeled_at  TIMESTAMP    NULL,
+    human_actor         TEXT         NULL
 );
 
-CREATE TABLE IF NOT EXISTS formula_pours (
-    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-    formula_id  VARCHAR(64) NOT NULL,
-    success     BOOLEAN     NOT NULL,
-    poured_at   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS candidates (
+    candidate_id        CHAR(36)     PRIMARY KEY,
+    created_at          TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    cluster_key         TEXT,
+    member_episode_ids  JSON,
+    proposed_procedure  JSON,
+    support_stats       JSON,
+    status              ENUM('PROPOSED','UNDER_REVIEW','PROMOTED','REJECTED') NOT NULL DEFAULT 'PROPOSED'
+);
+
+CREATE TABLE IF NOT EXISTS skills (
+    id                  VARCHAR(64)  NOT NULL,
+    name                TEXT         NOT NULL,
+    agent_role          TEXT         NOT NULL,
+    description         TEXT,
+    version             INTEGER      NOT NULL DEFAULT 1,
+    status              TEXT         NOT NULL DEFAULT 'active',
+    input_schema        JSON         NOT NULL,
+    steps               JSON         NOT NULL,
+    output_contract     JSON         NOT NULL,
+    promoted_by         TEXT         NOT NULL,
+    source_candidate_id VARCHAR(64)  NULL,
+    expires_at          DATETIME     NULL,
+    revoked_reason      TEXT         NULL,
+    created_at          DATETIME     NOT NULL,
+    UNIQUE KEY uq_skill_version (id, version)
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -81,12 +105,13 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 SQL
 
 # Stage and commit schema — idempotent: skip if nothing changed
-dolt add -A && dolt commit -m "init: audit_log + formulas schema" || echo "(schema already committed, skipping)"
+dolt add -A && dolt commit -m "init: audit_log + skill-learning schema" || echo "(schema already committed, skipping)"
 
-# Seed formulas (local SQL mode, idempotent INSERT IGNORE)
+# Seed skills (migrated from formulas, idempotent INSERT IGNORE)
 dolt sql << 'SQL'
-INSERT IGNORE INTO formulas
-    (id, name, agent_role, version, status, description, input_schema, steps, output_contract, quality_score, created_at, created_by)
+INSERT IGNORE INTO skills
+    (id, name, agent_role, version, status, description, input_schema, steps, output_contract,
+     promoted_by, source_candidate_id, expires_at, created_at)
 VALUES
     (
         'sre:triage-incident', 'Triage Incident', 'sre', 1, 'active',
@@ -94,7 +119,7 @@ VALUES
         '{"type":"object","properties":{"alert":{"type":"string"}}}',
         '[{"action":"observability_query"},{"action":"log_search"},{"action":"runbook_read"},{"action":"llm_synthesise"}]',
         '{"type":"object","properties":{"report":{"type":"string"}}}',
-        0.0, NOW(), 'seed'
+        'seed', NULL, DATE_ADD(NOW(), INTERVAL 10 YEAR), NOW()
     ),
     (
         'code_reviewer:review-pr', 'Review Pull Request', 'code_reviewer', 1, 'active',
@@ -102,7 +127,7 @@ VALUES
         '{"type":"object","properties":{"pr_number":{"type":"integer"}}}',
         '[{"action":"git_diff"},{"action":"run_linter"},{"action":"review_diff"}]',
         '{"type":"object","properties":{"findings":{"type":"array"}}}',
-        0.0, NOW(), 'seed'
+        'seed', NULL, DATE_ADD(NOW(), INTERVAL 10 YEAR), NOW()
     ),
     (
         'architect:write-adr', 'Write Architecture Decision Record', 'architect', 1, 'active',
@@ -110,11 +135,11 @@ VALUES
         '{"type":"object","properties":{"decision":{"type":"string"}}}',
         '[{"action":"codebase_search"},{"action":"adr_read"},{"action":"adr_write"}]',
         '{"type":"object","properties":{"adr_path":{"type":"string"}}}',
-        0.0, NOW(), 'seed'
+        'seed', NULL, DATE_ADD(NOW(), INTERVAL 10 YEAR), NOW()
     );
 SQL
 
-dolt add -A && dolt commit -m "seed: three starter formulas" || echo "(seed already committed, skipping)"
+dolt add -A && dolt commit -m "seed: three starter skills (migrated from formulas)" || echo "(seed already committed, skipping)"
 
 # Start SQL server in background — newer Dolt: root has no password by default
 dolt sql-server --host 0.0.0.0 --port 3306 &
@@ -139,8 +164,9 @@ CREATE USER IF NOT EXISTS 'harness'@'%' IDENTIFIED BY 'harness';
 GRANT SELECT, INSERT ON harness.audit_log TO 'harness'@'%';
 GRANT SELECT ON harness.dolt_log TO 'harness'@'%';
 GRANT SELECT ON harness.dolt_diff_audit_log TO 'harness'@'%';
-GRANT SELECT, INSERT, UPDATE ON harness.formulas TO 'harness'@'%';
-GRANT SELECT, INSERT ON harness.formula_pours TO 'harness'@'%';
+GRANT SELECT, INSERT ON harness.episodes TO 'harness'@'%';
+GRANT SELECT, INSERT, UPDATE ON harness.candidates TO 'harness'@'%';
+GRANT SELECT, INSERT, UPDATE ON harness.skills TO 'harness'@'%';
 GRANT SELECT, INSERT, UPDATE ON harness.tasks TO 'harness'@'%';
 GRANT SELECT, INSERT ON harness.agent_messages TO 'harness'@'%';
 SQL

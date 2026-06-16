@@ -172,13 +172,6 @@ async def synthesise_node(state: HarnessState, formula_store=None, llm_provider=
         else:
             final_response = _fallback_summary(state, output)
 
-        # Record formula outcome if a formula was poured
-        if formula_store and state.get("formula_id") and state.get("formula_instance_id"):
-            success = state.get("error") is None
-            formula_store._record_pours(state["formula_id"], successes=1 if success else 0, failures=0 if success else 1)
-            logger.info("synthesise: recorded formula outcome formula_id=%s success=%s",
-                        state["formula_id"], success)
-
         return {"final_response": final_response}
 
 
@@ -206,7 +199,7 @@ async def propose_formula_node(state: HarnessState, formula_store) -> dict:
             input_schema={"type": "object"},
             steps=[{"action": "llm_synthesise"}],
             output_contract={"type": "object"},
-            created_by="supervisor:propose",
+            promoted_by="supervisor:propose",
         )
         formula_store.propose(draft)
         logger.info("propose_formula: created draft %s", draft_id)
