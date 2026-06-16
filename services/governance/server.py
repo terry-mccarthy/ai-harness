@@ -963,6 +963,136 @@ async def expire_skills(
 
 
 # ---------------------------------------------------------------------------
+# Skill selection — issue 08
+# ---------------------------------------------------------------------------
+
+
+def _fetch_active_skills_for_select(conn) -> list[dict]:
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT s.* FROM skills s
+            INNER JOIN (
+                SELECT id, MAX(version) as max_v
+                FROM skills WHERE status='active'
+                GROUP BY id
+            ) t ON s.id = t.id AND s.version = t.max_v
+            """
+        )
+        return cur.fetchall() or []
+
+
+def _parse_preconditions(raw) -> dict:
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode()
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _specificity_score(skill: dict, env_fingerprint: dict) -> int:
+    raw = skill.get("preconditions")
+    if not raw:
+        return 0
+    prec = _parse_preconditions(raw)
+    return sum(1 for k, v in prec.get("env_constraints", {}).items() if env_fingerprint.get(k) == v)
+
+
+def _skill_success_rate(conn, skill: dict) -> float:
+    cutoff_ms = int((datetime.utcnow() - timedelta(days=30)).timestamp() * 1000)
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            "SELECT COUNT(*) as total, SUM(policy_decision='allow') as allowed "
+            "FROM audit_log WHERE agent_id=%s AND timestamp_ms >= %s",
+            (skill["agent_role"], cutoff_ms),
+        )
+        row = cur.fetchone()
+    if not row or not row["total"]:
+        return 0.0
+    return float(row["allowed"] or 0) / float(row["total"])
+
+
+def _apply_specificity_rule(skills: list, env_fingerprint: dict) -> list:
+    scored = [(s, _specificity_score(s, env_fingerprint)) for s in skills]
+    best = max(sc for _, sc in scored)
+    return [(s, sc) for s, sc in scored if sc == best]
+
+
+def _apply_recency_rule(candidates: list) -> tuple:
+    best_ts = max(s["created_at"] for s, _ in candidates)
+    survivors = [(s, sc) for s, sc in candidates if s["created_at"] == best_ts]
+    ts_val = best_ts.isoformat() if hasattr(best_ts, "isoformat") else str(best_ts)
+    return survivors, ts_val
+
+
+def _apply_success_rate_rule(conn, candidates: list) -> list:
+    rated = [(s, sc, _skill_success_rate(conn, s)) for s, sc in candidates]
+    best = max(r for _, _, r in rated)
+    return [(s, sc, r) for s, sc, r in rated if r == best]
+
+
+def _run_skill_selection(conn, env_fingerprint: dict) -> dict:
+    skills = _fetch_active_skills_for_select(conn)
+    if not skills:
+        return {"winner": None, "tied": [], "reason": "no active skills"}
+
+    candidates = _apply_specificity_rule(skills, env_fingerprint)
+    if len(candidates) == 1:
+        s, sc = candidates[0]
+        return {"winner": s, "rule": "specificity", "score": sc}
+
+    candidates, ts_val = _apply_recency_rule(candidates)
+    if len(candidates) == 1:
+        return {"winner": candidates[0][0], "rule": "recency", "score": ts_val}
+
+    rated = _apply_success_rate_rule(conn, candidates)
+    if len(rated) == 1:
+        s, sc, r = rated[0]
+        return {"winner": s, "rule": "success_rate", "score": r}
+
+    tied = [{"id": s["id"], "specificity": sc, "success_rate": r} for s, sc, r in rated]
+    return {"winner": None, "tied": tied, "reason": f"tied: {[s['id'] for s, sc, r in rated]}"}
+
+
+@app.post("/skills/select")
+async def select_skill(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None),
+):
+    """Select the best ACTIVE skill using ordered specificity → recency → success-rate tiebreaks."""
+    claims = _decode_jwt(authorization)
+    body = await request.json()
+    env_fingerprint = body.get("env_fingerprint") or {}
+
+    conn = get_dolt_conn()
+    try:
+        result = _run_skill_selection(conn, env_fingerprint)
+    finally:
+        conn.close()
+
+    winner = result.get("winner")
+    policy_rule = f"selected[{result.get('rule')}]:{winner['id']}" if winner else "escalated"
+    background_tasks.add_task(
+        _write_audit,
+        claims["sub"], "skill:select", "skill:select", "", "", "allow", policy_rule, 0, None,
+    )
+
+    if winner:
+        return {"selected": winner["id"], "rationale": {"rule": result["rule"], "score": result["score"]}}
+    return {
+        "selected": None,
+        "escalate": True,
+        "reason": result.get("reason", "no winner"),
+        "tied_skills": result.get("tied", []),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Metrics + security endpoints (unchanged)
 # ---------------------------------------------------------------------------
 

@@ -141,6 +141,11 @@ SQL
 
 dolt add -A && dolt commit -m "seed: three starter skills (migrated from formulas)" || echo "(seed already committed, skipping)"
 
+# Migration: add preconditions column to skills (issue 08 — idempotent)
+{ dolt sql -q "ALTER TABLE skills ADD COLUMN preconditions JSON DEFAULT NULL" && \
+  dolt add -A && dolt commit -m "migration: add preconditions to skills"; } \
+  || echo "(preconditions migration already applied, skipping)"
+
 # Start SQL server in background — newer Dolt: root has no password by default
 dolt sql-server --host 0.0.0.0 --port 3306 &
 SERVER_PID=$!
