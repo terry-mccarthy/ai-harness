@@ -9,6 +9,7 @@ import time
 import httpx
 import jwt
 import pymysql
+import pymysql.cursors
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Header, Request, Response
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
@@ -336,6 +337,91 @@ async def jwks():
             "e": _b64url(pub.e),
         }]
     }
+
+
+# ---------------------------------------------------------------------------
+# Episode labeling
+# ---------------------------------------------------------------------------
+
+_VALID_OUTCOMES = {"RESOLVED", "FAILED", "ROLLED_BACK", "HUMAN_OVERRIDE", "INCONCLUSIVE"}
+
+
+async def _check_opa_label(role: str) -> bool:
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{OPA_URL}/v1/data/harness/label_allowed",
+                json={"input": {"scope": "episode:label", "agent_role": role}},
+                timeout=5.0,
+            )
+        return resp.json().get("result", False) is True
+    except Exception as e:
+        logger.error("OPA label check failed: %s", e)
+        return False
+
+
+@app.post("/episodes/{episode_id}/label")
+async def label_episode(
+    episode_id: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    claims = _decode_jwt(authorization)
+
+    if not await _check_opa_label(claims["role"]):
+        raise HTTPException(403, "episode_label_not_permitted")
+
+    body = await request.json()
+    outcome = body.get("outcome")
+    outcome_signal = body.get("outcome_signal")
+    labeler_principal = body.get("labeler_principal", claims["sub"])
+
+    if outcome not in _VALID_OUTCOMES:
+        raise HTTPException(422, f"outcome must be one of {sorted(_VALID_OUTCOMES)}")
+    if not outcome_signal:
+        raise HTTPException(422, "outcome_signal must be non-empty")
+
+    conn = get_dolt_conn()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                "SELECT agent_principal, outcome_labeled_at FROM episodes WHERE episode_id=%s",
+                (episode_id,),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            raise HTTPException(404, "episode_not_found")
+        if row["outcome_labeled_at"] is not None:
+            raise HTTPException(409, "episode_already_labeled")
+        if row["agent_principal"] == labeler_principal:
+            raise HTTPException(409, "self_label_not_permitted")
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE episodes SET outcome=%s, outcome_signal=%s, outcome_labeled_at=NOW(), human_actor=%s "
+                "WHERE episode_id=%s",
+                (outcome, json.dumps(outcome_signal), labeler_principal, episode_id),
+            )
+            cur.execute(
+                "CALL DOLT_COMMIT('-Am', %s)",
+                (f"episode: {episode_id[:8]} labeled {outcome}",),
+            )
+
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute("SELECT * FROM episodes WHERE episode_id=%s", (episode_id,))
+            updated = cur.fetchone()
+
+        # convert non-serialisable types
+        for k, v in updated.items():
+            if hasattr(v, "isoformat"):
+                updated[k] = v.isoformat()
+            elif isinstance(v, (bytes, bytearray)):
+                updated[k] = v.decode()
+
+        return updated
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

@@ -38,3 +38,9 @@ claim_allowed if {
     input.action == "claim"
     input.required_role == input.role
 }
+
+# Episode labeling scope — sre and code_reviewer are natural outcome observers
+label_allowed if {
+    input.scope == "episode:label"
+    input.agent_role in {"sre", "code_reviewer"}
+}
