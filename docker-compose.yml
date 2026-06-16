@@ -201,6 +201,8 @@ services:
       CODE_REVIEWER_SECRET: ${CODE_REVIEWER_SECRET}
       ARCHITECT_SECRET: ${ARCHITECT_SECRET:-architect-secret}
       SRE_SECRET: ${SRE_SECRET:-sre-secret}
+      HUMAN_OPERATOR_SECRET: ${HUMAN_OPERATOR_SECRET:-human-operator-secret}
+      EXPIRY_PASS_INTERVAL: "3"
       DOLT_HOST: dolt
       DOLT_PORT: "3306"
       DOLT_USER: root

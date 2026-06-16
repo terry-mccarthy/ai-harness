@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+import uuid
 
 import httpx
 import jwt
@@ -56,6 +57,8 @@ DOLT_USER = os.environ.get("DOLT_USER", "harness")
 DOLT_PASSWORD = os.environ.get("DOLT_PASSWORD", "harness")
 DOLT_DB = os.environ.get("DOLT_DB", "harness")
 TOKEN_TTL = int(os.environ.get("TOKEN_TTL", "900"))  # 15 min
+EXPIRY_PASS_INTERVAL = int(os.environ.get("EXPIRY_PASS_INTERVAL", "1000"))
+_audit_call_count: int = 0
 
 # ---------------------------------------------------------------------------
 # Prometheus metrics
@@ -285,6 +288,7 @@ async def audit(
     x_correlation_id: str | None = Header(default=None),
 ):
     """Accept an audit record from GatewayClient and write it to Dolt async."""
+    global _audit_call_count
     claims = _decode_jwt(authorization)
     body = await request.json()
     full_tool = body.get("tool_name", "")
@@ -321,6 +325,9 @@ async def audit(
         correlation_id,
         body.get("service_class"),
     )
+    _audit_call_count += 1
+    if EXPIRY_PASS_INTERVAL > 0 and _audit_call_count % EXPIRY_PASS_INTERVAL == 0:
+        background_tasks.add_task(_background_expiry_pass)
     return {}
 
 
@@ -766,8 +773,8 @@ async def get_skill(
 
     if row is None:
         raise HTTPException(404, "skill_not_found")
-    if row["status"] == "revoked":
-        raise HTTPException(410, "skill_revoked")
+    if row["status"] in ("revoked", "expired"):
+        raise HTTPException(410, f"skill_{row['status']}")
     return _serialise_row(row)
 
 
@@ -805,6 +812,154 @@ async def revoke_skill(
         conn.close()
 
     return {"skill_id": skill_id, "status": "revoked", "reason": reason}
+
+
+# ---------------------------------------------------------------------------
+# Skill expiry and re-validation — issue 07
+# ---------------------------------------------------------------------------
+
+
+def _find_expired_skills(conn) -> list[dict]:
+    """Return latest-version rows for ACTIVE skills whose expires_at has passed."""
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT s.* FROM skills s
+            INNER JOIN (
+                SELECT id, MAX(version) as max_v
+                FROM skills WHERE status='active' AND expires_at <= NOW()
+                GROUP BY id
+            ) t ON s.id = t.id AND s.version = t.max_v
+            """
+        )
+        return cur.fetchall() or []
+
+
+def _expire_skill(conn, skill_id: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE skills SET status='expired' WHERE id=%s", (skill_id,))
+        cur.execute("CALL DOLT_COMMIT('-Am', %s)", (f"skill: {skill_id} expired",))
+
+
+def _find_active_skills(conn) -> list[dict]:
+    """Return latest-version rows for ACTIVE skills (not yet expired)."""
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT s.* FROM skills s
+            INNER JOIN (
+                SELECT id, MAX(version) as max_v
+                FROM skills WHERE status='active'
+                GROUP BY id
+            ) t ON s.id = t.id AND s.version = t.max_v
+            """
+        )
+        return cur.fetchall() or []
+
+
+def _find_revalidation_episodes(conn, agent_role: str) -> list[dict]:
+    """Return recent RESOLVED episodes written by agents with the given role."""
+    cutoff = datetime.utcnow() - timedelta(days=_RECENT_DAYS)
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            "SELECT * FROM episodes WHERE agent_principal=%s AND outcome='RESOLVED' AND created_at >= %s",
+            (agent_role, cutoff),
+        )
+        return cur.fetchall() or []
+
+
+def _maybe_repropose_candidate(conn, skill: dict) -> str | None:
+    """Auto-propose a candidate if enough recent resolved episodes exist. Returns candidate_id or None."""
+    episodes = _find_revalidation_episodes(conn, skill["agent_role"])
+    if len(episodes) < _N_MIN:
+        return None
+    candidate_id = str(uuid.uuid4())
+    cluster_key = skill["id"]
+    episode_ids = [ep["episode_id"] for ep in episodes[:_N_MIN]]
+    stats = {"n_episodes": len(episode_ids), "auto_revalidation": True}
+    procedure = skill["steps"]
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO candidates "
+            "(candidate_id, cluster_key, member_episode_ids, proposed_procedure, support_stats, status) "
+            "VALUES (%s, %s, %s, %s, %s, 'PROPOSED')",
+            (candidate_id, cluster_key, json.dumps(episode_ids), procedure, json.dumps(stats)),
+        )
+        cur.execute(
+            "CALL DOLT_COMMIT('-Am', %s)",
+            (f"candidate: {candidate_id[:8]} auto-proposed [{cluster_key}]",),
+        )
+    return candidate_id
+
+
+def _compute_early_review_flags(conn, active_skills: list[dict]) -> list[str]:
+    """Return skill IDs whose trailing 30-day audit success rate is < 0.5."""
+    flagged = []
+    cutoff_ms = int((datetime.utcnow() - timedelta(days=30)).timestamp() * 1000)
+    for skill in active_skills:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                "SELECT COUNT(*) as total, SUM(policy_decision='allow') as allowed "
+                "FROM audit_log WHERE agent_id=%s AND timestamp_ms >= %s",
+                (skill["agent_role"], cutoff_ms),
+            )
+            row = cur.fetchone()
+        total = int(row["total"] or 0) if row else 0
+        if total == 0:
+            continue
+        allowed = int(row["allowed"] or 0)
+        if (allowed / total) < 0.5:
+            flagged.append(skill["id"])
+    return flagged
+
+
+def _run_expiry_pass(conn) -> dict:
+    """Expire overdue skills, auto-propose re-validation candidates, flag low-success skills."""
+    expired_skills = _find_expired_skills(conn)
+    skill_ids = []
+    re_proposed = []
+    for skill in expired_skills:
+        _expire_skill(conn, skill["id"])
+        skill_ids.append(skill["id"])
+        candidate_id = _maybe_repropose_candidate(conn, skill)
+        if candidate_id:
+            re_proposed.append(candidate_id)
+    active_skills = _find_active_skills(conn)
+    flagged = _compute_early_review_flags(conn, active_skills)
+    return {
+        "expired_count": len(expired_skills),
+        "skill_ids": skill_ids,
+        "re_proposed_candidates": re_proposed,
+        "flagged_for_early_review": flagged,
+    }
+
+
+def _background_expiry_pass() -> None:
+    conn = None
+    try:
+        conn = get_dolt_conn()
+        _run_expiry_pass(conn)
+    except Exception as e:
+        logger.warning("background expiry pass failed: %s", e)
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.post("/skills/expire")
+async def expire_skills(
+    authorization: str | None = Header(default=None),
+):
+    """Expire overdue skills and trigger re-validation candidate proposal."""
+    claims = _decode_jwt(authorization)
+    if not await _check_opa_promote(claims["role"]):
+        raise HTTPException(403, "skill_promote_not_permitted")
+    conn = get_dolt_conn()
+    try:
+        result = _run_expiry_pass(conn)
+    finally:
+        conn.close()
+    return result
 
 
 # ---------------------------------------------------------------------------
