@@ -347,6 +347,38 @@ async def jwks():
 _VALID_OUTCOMES = {"RESOLVED", "FAILED", "ROLLED_BACK", "HUMAN_OVERRIDE", "INCONCLUSIVE"}
 
 
+def _serialise_row(row: dict) -> dict:
+    """Convert datetime and bytes values in a Dolt row to JSON-safe types."""
+    return {
+        k: (v.isoformat() if hasattr(v, "isoformat") else v.decode() if isinstance(v, (bytes, bytearray)) else v)
+        for k, v in row.items()
+    }
+
+
+def _validate_label_body(outcome: str | None, outcome_signal: dict | None) -> None:
+    if outcome not in _VALID_OUTCOMES:
+        raise HTTPException(422, f"outcome must be one of {sorted(_VALID_OUTCOMES)}")
+    if not outcome_signal:
+        raise HTTPException(422, "outcome_signal must be non-empty")
+
+
+def _check_episode_labelable(conn, episode_id: str, labeler_principal: str) -> dict:
+    """Fetch episode and raise if it cannot be labeled. Returns the episode row."""
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            "SELECT agent_principal, outcome_labeled_at FROM episodes WHERE episode_id=%s",
+            (episode_id,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise HTTPException(404, "episode_not_found")
+    if row["outcome_labeled_at"] is not None:
+        raise HTTPException(409, "episode_already_labeled")
+    if row["agent_principal"] == labeler_principal:
+        raise HTTPException(409, "self_label_not_permitted")
+    return row
+
+
 async def _check_opa_label(role: str) -> bool:
     try:
         async with httpx.AsyncClient() as client:
@@ -368,7 +400,6 @@ async def label_episode(
     authorization: str | None = Header(default=None),
 ):
     claims = _decode_jwt(authorization)
-
     if not await _check_opa_label(claims["role"]):
         raise HTTPException(403, "episode_label_not_permitted")
 
@@ -376,51 +407,21 @@ async def label_episode(
     outcome = body.get("outcome")
     outcome_signal = body.get("outcome_signal")
     labeler_principal = body.get("labeler_principal", claims["sub"])
-
-    if outcome not in _VALID_OUTCOMES:
-        raise HTTPException(422, f"outcome must be one of {sorted(_VALID_OUTCOMES)}")
-    if not outcome_signal:
-        raise HTTPException(422, "outcome_signal must be non-empty")
+    _validate_label_body(outcome, outcome_signal)
 
     conn = get_dolt_conn()
     try:
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
-            cur.execute(
-                "SELECT agent_principal, outcome_labeled_at FROM episodes WHERE episode_id=%s",
-                (episode_id,),
-            )
-            row = cur.fetchone()
-
-        if row is None:
-            raise HTTPException(404, "episode_not_found")
-        if row["outcome_labeled_at"] is not None:
-            raise HTTPException(409, "episode_already_labeled")
-        if row["agent_principal"] == labeler_principal:
-            raise HTTPException(409, "self_label_not_permitted")
-
+        _check_episode_labelable(conn, episode_id, labeler_principal)
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE episodes SET outcome=%s, outcome_signal=%s, outcome_labeled_at=NOW(), human_actor=%s "
                 "WHERE episode_id=%s",
                 (outcome, json.dumps(outcome_signal), labeler_principal, episode_id),
             )
-            cur.execute(
-                "CALL DOLT_COMMIT('-Am', %s)",
-                (f"episode: {episode_id[:8]} labeled {outcome}",),
-            )
-
+            cur.execute("CALL DOLT_COMMIT('-Am', %s)", (f"episode: {episode_id[:8]} labeled {outcome}",))
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute("SELECT * FROM episodes WHERE episode_id=%s", (episode_id,))
-            updated = cur.fetchone()
-
-        # convert non-serialisable types
-        for k, v in updated.items():
-            if hasattr(v, "isoformat"):
-                updated[k] = v.isoformat()
-            elif isinstance(v, (bytes, bytearray)):
-                updated[k] = v.decode()
-
-        return updated
+            return _serialise_row(cur.fetchone())
     finally:
         conn.close()
 
@@ -470,26 +471,45 @@ def _fetch_and_qualify_episodes(conn, episode_ids: list[str]) -> tuple[list[dict
     return qualified, disqualified
 
 
-def _check_candidate_criteria(
-    qualified: list[dict],
-    disqualified: list[str],
-    n_total: int,
-) -> list[str]:
-    """Return list of error strings; empty means all criteria pass."""
+def _compute_support_stats(qualified: list[dict]) -> dict:
+    cutoff = datetime.utcnow() - timedelta(days=_RECENT_DAYS)
+    return {
+        "n_episodes": len(qualified),
+        "n_principals": len({r["agent_principal"] for r in qualified}),
+        "recent_count": sum(1 for r in qualified if r["outcome_labeled_at"] and r["outcome_labeled_at"] > cutoff),
+    }
+
+
+def _check_count_criteria(n_total: int, disqualified: list[str]) -> list[str]:
     errors = []
     if disqualified:
         errors.append(f"episodes not RESOLVED+labeled: {disqualified}")
     if n_total < _N_MIN:
         errors.append(f"need at least {_N_MIN} episodes, got {n_total}")
-    if not errors:
-        principals = {r["agent_principal"] for r in qualified}
-        if len(principals) < _K_MIN:
-            errors.append(f"need at least {_K_MIN} distinct agent_principals, got {len(principals)}")
-        cutoff = datetime.utcnow() - timedelta(days=_RECENT_DAYS)
-        recent = [r for r in qualified if r["outcome_labeled_at"] and r["outcome_labeled_at"] > cutoff]
-        if len(recent) < _M_MIN:
-            errors.append(f"need at least {_M_MIN} episodes within last {_RECENT_DAYS} days, got {len(recent)}")
     return errors
+
+
+def _check_diversity_criteria(qualified: list[dict]) -> list[str]:
+    errors = []
+    principals = {r["agent_principal"] for r in qualified}
+    if len(principals) < _K_MIN:
+        errors.append(f"need at least {_K_MIN} distinct agent_principals, got {len(principals)}")
+    cutoff = datetime.utcnow() - timedelta(days=_RECENT_DAYS)
+    recent = sum(1 for r in qualified if r["outcome_labeled_at"] and r["outcome_labeled_at"] > cutoff)
+    if recent < _M_MIN:
+        errors.append(f"need at least {_M_MIN} episodes within last {_RECENT_DAYS} days, got {recent}")
+    return errors
+
+
+def _check_candidate_criteria(
+    qualified: list[dict],
+    disqualified: list[str],
+    n_total: int,
+) -> list[str]:
+    count_errors = _check_count_criteria(n_total, disqualified)
+    if count_errors:
+        return count_errors
+    return _check_diversity_criteria(qualified)
 
 
 @app.post("/candidates", status_code=201)
@@ -513,14 +533,7 @@ async def post_candidates(
         if errors:
             raise HTTPException(422, {"errors": errors})
 
-        principals = {r["agent_principal"] for r in qualified}
-        cutoff = datetime.utcnow() - timedelta(days=_RECENT_DAYS)
-        recent_count = sum(1 for r in qualified if r["outcome_labeled_at"] and r["outcome_labeled_at"] > cutoff)
-        support_stats = {
-            "n_episodes": len(qualified),
-            "n_principals": len(principals),
-            "recent_count": recent_count,
-        }
+        support_stats = _compute_support_stats(qualified)
 
         candidate_id = str(__import__("uuid").uuid4())
         with conn.cursor() as cur:
@@ -562,13 +575,7 @@ async def get_candidate(
 
     if row is None:
         raise HTTPException(404, "candidate_not_found")
-
-    for k, v in row.items():
-        if hasattr(v, "isoformat"):
-            row[k] = v.isoformat()
-        elif isinstance(v, (bytes, bytearray)):
-            row[k] = v.decode()
-    return row
+    return _serialise_row(row)
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +689,22 @@ async def _call_mcpjungle(tool_name: str, params: dict) -> dict:
     return data
 
 
+def _resolve_idempotent_complete(conn, idem_key: str) -> dict | None:
+    """Return cached result dict if this idempotency_key was already completed, else None."""
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            "SELECT result FROM tasks WHERE idempotency_key = %s AND status = 'done'",
+            (idem_key,),
+        )
+        existing = cur.fetchone()
+    if not existing:
+        return None
+    stored = existing["result"]
+    if isinstance(stored, str):
+        stored = json.loads(stored)
+    return {"status": "done", "result": stored}
+
+
 @app.post("/tasks/complete")
 async def task_complete(
     request: Request,
@@ -699,38 +722,24 @@ async def task_complete(
 
     conn = get_dolt_conn()
     try:
-        # Check for existing completion via idempotency_key
         if idem_key:
-            with conn.cursor(pymysql.cursors.DictCursor) as cur:
-                cur.execute(
-                    "SELECT result FROM tasks WHERE idempotency_key = %s AND status = 'done'",
-                    (idem_key,),
-                )
-                existing = cur.fetchone()
-            if existing:
-                stored = existing["result"]
-                if isinstance(stored, str):
-                    stored = json.loads(stored)
-                return {"status": "done", "result": stored}
+            cached = _resolve_idempotent_complete(conn, idem_key)
+            if cached:
+                return cached
 
-        result_json = json.dumps(result)
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE tasks SET status='done', result=%s, idempotency_key=%s "
                 "WHERE id=%s AND status='claimed' AND claimed_by=%s",
-                (result_json, idem_key, task_id, claims["sub"]),
+                (json.dumps(result), idem_key, task_id, claims["sub"]),
             )
             affected = cur.rowcount
 
         if affected == 0:
-            # Could be: task not found, wrong status, or wrong claimer
             raise HTTPException(403, "task not claimable by this worker or already done")
 
         with conn.cursor() as cur:
-            cur.execute(
-                "CALL DOLT_COMMIT('-Am', %s)",
-                (f"task_complete: {task_id[:8]} by {claims['sub']}",),
-            )
+            cur.execute("CALL DOLT_COMMIT('-Am', %s)", (f"task_complete: {task_id[:8]} by {claims['sub']}",))
     finally:
         conn.close()
 
