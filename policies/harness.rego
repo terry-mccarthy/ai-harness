@@ -4,7 +4,7 @@ default allow = false
 
 allow if {
     input.agent_role == "architect"
-    input.tool_name in {"codebase_search", "adr_read", "adr_write", "diagram_gen"}
+    input.tool_name in {"codebase_search", "adr_read", "adr_write", "diagram_gen", "architecture_review"}
 }
 
 allow if {

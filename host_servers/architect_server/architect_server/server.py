@@ -3,11 +3,13 @@
 Runs as a FastMCP streamable-HTTP server on the host (default :9006).
 Reached from Docker containers via host.docker.internal:9006.
 
-v1 (slices 1–5): real codebase_search (BM25 / semantic / hybrid via Ollama
-embeddings) backed by a per-process LRU cache that watchfiles invalidates on
-local-path edits, with ``https://`` / ``file://`` git URLs shallow-cloned and
-keyed by commit SHA. ``adr_read``/``adr_write`` operate on ``<repo>/docs/adr/``.
-``diagram_gen`` remains a stub-echo until slice 6.
+v1 (slices 1–5, 7): real ``codebase_search`` (BM25 / semantic / hybrid via
+Ollama embeddings) backed by a per-process LRU cache that watchfiles
+invalidates on local-path edits, with ``https://`` / ``file://`` git URLs
+shallow-cloned and keyed by commit SHA. ``adr_read`` / ``adr_write`` operate
+on ``<repo>/docs/adr/``. ``architecture_review`` scores a diff or codebase
+against ``<repo>/ARCHITECTURE.md`` + ADRs via Ollama chat. ``diagram_gen``
+remains a stub-echo until slice 6.
 """
 from __future__ import annotations
 
@@ -21,8 +23,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from architect_server.adr import read_adr, write_adr
+from architect_server.architecture_review import architecture_review as _architecture_review
 from architect_server.cache import IndexCache
 from architect_server.embeddings import OllamaEmbedder
+from architect_server.llm import OllamaLLM
 from architect_server.resolver import is_git_url, resolve_git_repo
 from architect_server.search import build_index, embed_index, search
 
@@ -60,6 +64,16 @@ def _resolve_repo(repo: str | None) -> str:
 
 def _make_embedder() -> OllamaEmbedder:
     return OllamaEmbedder()
+
+
+def _make_llm() -> OllamaLLM:
+    return OllamaLLM()
+
+
+def _resolve_for_review(repo: str) -> Path:
+    if is_git_url(repo):
+        return resolve_git_repo(repo, _CLONES_DIR).local_path
+    return Path(repo).resolve()
 
 
 @mcp.tool()
@@ -162,8 +176,45 @@ def adr_write(title: str, content: str, repo: str | None = None) -> dict:
 
 @mcp.tool()
 def diagram_gen(description: str) -> dict:
-    """Generate a diagram from a description. (stub — replaced in slice 5)"""
+    """Generate a diagram from a description. (stub — replaced in slice 6)"""
     return {"result": "stub", "tool": "diagram_gen", "description": description}
+
+
+@mcp.tool()
+def architecture_review(
+    target_mode: str,
+    repo: str | None = None,
+    diff: str | None = None,
+) -> dict:
+    """Score a codebase or diff against the repo's stated architectural invariants.
+
+    Args:
+        target_mode: ``"codebase"`` (scan the repo file tree) or ``"diff"`` (score a unified diff).
+        repo: local directory path or ``http(s)://``/``file://`` git URL.
+            Falls back to ``ARCHITECT_DEFAULT_REPO`` env var if unset.
+        diff: required when ``target_mode=="diff"``; unified-diff text.
+
+    Returns:
+        ``{"target_mode": ..., "repo": ..., "findings": [...], "summary": "..."}``.
+        On LLM parse failure, the result also carries ``parse_error`` and ``raw``.
+    """
+    try:
+        target = _resolve_repo(repo)
+    except ValueError as exc:
+        return {"error": str(exc), "findings": []}
+    try:
+        local_path = _resolve_for_review(target)
+    except RuntimeError as exc:
+        return {"error": str(exc), "findings": []}
+    try:
+        return _architecture_review(
+            repo=str(local_path),
+            target_mode=target_mode,
+            diff=diff,
+            llm=_make_llm(),
+        )
+    except ValueError as exc:
+        return {"error": str(exc), "findings": []}
 
 
 def main() -> None:
