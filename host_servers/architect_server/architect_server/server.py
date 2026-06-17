@@ -3,19 +3,21 @@
 Runs as a FastMCP streamable-HTTP server on the host (default :9006).
 Reached from Docker containers via host.docker.internal:9006.
 
-v1 (slice 1): real codebase_search backed by BM25; adr_read/adr_write/diagram_gen
-remain stub-echo until subsequent slices replace them.
+v1 (slice 1+2): real codebase_search (BM25) and adr_read/adr_write against
+``<repo>/docs/adr/``. ``diagram_gen`` remains a stub-echo until slice 6.
 """
 from __future__ import annotations
 
 import logging
 import os
 from dataclasses import asdict
+from pathlib import Path
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from architect_server.adr import read_adr, write_adr
 from architect_server.search import build_index, search
 
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
@@ -65,15 +67,48 @@ def codebase_search(query: str, repo: str | None = None, top_k: int = 5) -> dict
 
 
 @mcp.tool()
-def adr_read(title: str) -> dict:
-    """Read an Architecture Decision Record by title. (stub — replaced in slice 2)"""
-    return {"result": "stub", "tool": "adr_read", "title": title}
+def adr_read(
+    query: str | None = None,
+    path: str | None = None,
+    repo: str | None = None,
+    top_k: int = 5,
+) -> dict:
+    """Read Architecture Decision Records from ``<repo>/docs/adr/``.
+
+    Args:
+        query: optional free-text query to rank ADRs by token overlap on title+content.
+        path: optional repo-relative path to a single ADR (e.g. docs/adr/0001-foo.md).
+        repo: local directory path. Falls back to ARCHITECT_DEFAULT_REPO env var if unset.
+        top_k: max records to return when filtering by query (default 5).
+
+    Returns:
+        ``{"repo": "...", "adrs": [{"id": "0036", "title": ..., "status": ..., "path": ..., "content": ...}]}``
+    """
+    try:
+        target = _resolve_repo(repo)
+    except ValueError as exc:
+        return {"error": str(exc), "adrs": []}
+    adrs = read_adr(target, query=query, path=path, top_k=top_k)
+    return {"repo": str(Path(target).resolve()), "adrs": adrs}
 
 
 @mcp.tool()
-def adr_write(title: str, content: str) -> dict:
-    """Write an Architecture Decision Record. (stub — replaced in slice 2)"""
-    return {"result": "stub", "tool": "adr_write", "title": title}
+def adr_write(title: str, content: str, repo: str | None = None) -> dict:
+    """Persist a new Architecture Decision Record to ``<repo>/docs/adr/``.
+
+    The next sequential 4-digit id is assigned automatically; the title is
+    slugified for the filename. If ``content`` does not already start with a
+    Markdown heading, a ``# {title}`` heading is prepended.
+
+    Returns:
+        ``{"repo": "...", "id": "0037", "path": "docs/adr/0037-...md"}``
+    """
+    try:
+        target = _resolve_repo(repo)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    out = write_adr(target, title=title, content=content)
+    return {"repo": str(Path(target).resolve()), **out}
 
 
 @mcp.tool()

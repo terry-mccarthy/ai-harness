@@ -240,6 +240,37 @@ async def test_architect_codebase_search_returns_real_chunks():
 
 
 @pytest.mark.integration
+async def test_architect_adr_read_returns_real_records():
+    """adr_read returns real ADR records from <repo>/docs/adr/, not stub echo.
+
+    Proves ADR-0036 slice 2: the host-side architect server can read ADRs from
+    a passed-in repo path through the governance + gateway path.
+    """
+    import os
+    from harness_gateway.client import GatewayClient
+
+    gw = GatewayClient(
+        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8080"),
+        governance_url=os.environ.get("GOVERNANCE_URL", "http://localhost:8090"),
+        client_id="architect",
+        client_secret=os.environ.get("ARCHITECT_SECRET", "architect-secret"),
+    )
+    result = await gw.call_tool(
+        "adr_read",
+        {"query": "architect mcp server", "repo": "/Users/terry/personal/friday"},
+    )
+
+    assert "adrs" in result, f"expected real response shape, got {result!r}"
+    adrs = result["adrs"]
+    assert adrs, "expected at least one ADR for a query matching ADR-0036"
+    first = adrs[0]
+    for field in ("id", "title", "status", "path", "content"):
+        assert field in first, f"adr missing field {field!r}: {first!r}"
+    assert first["id"] == "0036"
+    assert "architect" in first["title"].lower()
+
+
+@pytest.mark.integration
 async def test_architect_denied_shell_exec():
     """Architect node raises ToolAccessDenied if it attempts shell_exec."""
     import os
