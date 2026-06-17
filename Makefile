@@ -1,6 +1,35 @@
 SHELL := /bin/bash
 
-.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e test-load review consolidate alembic-upgrade monitoring-up
+.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e test-load review consolidate alembic-upgrade monitoring-up architect-up architect-down architect-status
+
+ARCHITECT_PID := .architect.pid
+ARCHITECT_LOG := .architect.log
+ARCHITECT_PORT ?= 9006
+
+architect-up:
+	@if [ -f $(ARCHITECT_PID) ] && kill -0 $$(cat $(ARCHITECT_PID)) 2>/dev/null; then \
+	  echo "architect server already running (pid $$(cat $(ARCHITECT_PID)))"; \
+	else \
+	  ARCHITECT_PORT=$(ARCHITECT_PORT) ARCHITECT_DEFAULT_REPO=$(PWD) \
+	    nohup .venv/bin/python -m architect_server.server > $(ARCHITECT_LOG) 2>&1 & echo $$! > $(ARCHITECT_PID); \
+	  sleep 1; \
+	  echo "architect server started on :$(ARCHITECT_PORT) (pid $$(cat $(ARCHITECT_PID))), logs: $(ARCHITECT_LOG)"; \
+	fi
+
+architect-down:
+	@if [ -f $(ARCHITECT_PID) ]; then \
+	  kill $$(cat $(ARCHITECT_PID)) 2>/dev/null && echo "architect server stopped" || echo "architect server not running"; \
+	  rm -f $(ARCHITECT_PID); \
+	else \
+	  echo "no $(ARCHITECT_PID); nothing to stop"; \
+	fi
+
+architect-status:
+	@if [ -f $(ARCHITECT_PID) ] && kill -0 $$(cat $(ARCHITECT_PID)) 2>/dev/null; then \
+	  echo "architect server: running (pid $$(cat $(ARCHITECT_PID)), port $(ARCHITECT_PORT))"; \
+	else \
+	  echo "architect server: stopped"; \
+	fi
 
 stack-up:
 	docker compose up -d --wait

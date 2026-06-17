@@ -142,18 +142,8 @@ services:
       retries: 20
       start_period: 60s
 
-  architect-stub:
-    build:
-      context: ./stub_servers
-      dockerfile: Dockerfile.stub
-    command: python architect_server.py
-    ports: ["9004:9004"]
-    environment:
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9004)); s.close()\""]
-      interval: 5s
-      retries: 10
+  # architect-stub removed in ADR-0036 slice 1 — replaced by host-side
+  # architect server at host.docker.internal:9006 (see `make architect-up`).
 
   sre-stub:
     build:
@@ -170,12 +160,14 @@ services:
 
   register-architect:
     image: mcpjungle/mcpjungle:latest
-    command: ["register", "--name", "architect_stub", "--url", "http://architect-stub:9004/mcp", "--registry", "http://mcpjungle:8080", "--force"]
+    # Name kept as architect_stub through slice 6 to preserve TOOL_NAME_MAP entries;
+    # renamed in slice 7 once the host-side server replaces all four tools.
+    command: ["register", "--name", "architect_stub", "--url", "http://host.docker.internal:9006/mcp", "--registry", "http://mcpjungle:8080", "--force"]
     depends_on:
       mcpjungle:
         condition: service_healthy
-      architect-stub:
-        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: "no"
 
   register-sre:
@@ -256,8 +248,6 @@ services:
       bash -c "pip install httpx pyjwt --quiet && python /app/setup.py"
     depends_on:
       contextforge:
-        condition: service_healthy
-      architect-stub:
         condition: service_healthy
       sre-stub:
         condition: service_healthy

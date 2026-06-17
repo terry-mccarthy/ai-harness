@@ -9,3 +9,7 @@ __pycache__/
 AGENT-ORCHESTRATION-SPEC.md
 docs/agents/issue-tracker.md
 
+# Host-side architect server runtime artifacts (see Makefile architect-up)
+.architect.pid
+.architect.log
+

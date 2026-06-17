@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["packages/*", "services/governance", "services/review_server", "stub_servers"]
+members = ["packages/*", "services/governance", "services/review_server", "stub_servers", "host_servers/architect_server"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

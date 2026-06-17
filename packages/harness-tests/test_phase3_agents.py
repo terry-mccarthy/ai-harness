@@ -213,6 +213,33 @@ async def test_architect_tool_calls_go_via_gateway():
 
 
 @pytest.mark.integration
+async def test_architect_codebase_search_returns_real_chunks():
+    """codebase_search returns real BM25-ranked chunks from the friday repo, not stub echo.
+
+    Proves ADR-0036 slice 1: the host-side architect server is registered with MCPJungle
+    and the architect role can reach it through the governance + gateway path.
+    """
+    import os
+    from harness_gateway.client import GatewayClient
+
+    gw = GatewayClient(
+        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8080"),
+        governance_url=os.environ.get("GOVERNANCE_URL", "http://localhost:8090"),
+        client_id="architect",
+        client_secret=os.environ.get("ARCHITECT_SECRET", "architect-secret"),
+    )
+    result = await gw.call_tool("codebase_search", {"query": "audit log dolt commit", "top_k": 3})
+
+    assert "chunks" in result, f"expected real response shape, got {result!r}"
+    chunks = result["chunks"]
+    assert chunks, "expected at least one chunk for a query that matches real repo content"
+    first = chunks[0]
+    for field in ("file", "start_line", "end_line", "text", "score"):
+        assert field in first, f"chunk missing field {field!r}: {first!r}"
+    assert first["score"] > 0
+
+
+@pytest.mark.integration
 async def test_architect_denied_shell_exec():
     """Architect node raises ToolAccessDenied if it attempts shell_exec."""
     import os
