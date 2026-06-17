@@ -103,11 +103,19 @@ def test_clear_removes_all_entries(tmp_path: Path):
     assert len(cache) == 0
 
 
+def test_no_watcher_started_when_watch_path_is_none(repo_a: Path):
+    """Git-cloned entries (SHA keys) should not spin up a watchfiles thread."""
+    cache = IndexCache(max_size=10, watch_enabled=True, watch_debounce_ms=50)
+    cache.get_or_build("deadbeef" * 5, lambda: build_index(repo_a))
+    assert cache._stop_events == {}
+    cache.clear()
+
+
 def test_watchfiles_evicts_on_file_change(repo_a: Path):
     """Writing inside the watched directory should evict the cached entry."""
     cache = IndexCache(max_size=10, watch_enabled=True, watch_debounce_ms=50)
     key = str(repo_a.resolve())
-    cache.get_or_build(key, lambda: build_index(repo_a))
+    cache.get_or_build(key, lambda: build_index(repo_a), watch_path=repo_a.resolve())
     assert key in cache
 
     # Let the watch thread start its filesystem listener.

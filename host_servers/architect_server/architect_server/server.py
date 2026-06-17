@@ -3,9 +3,10 @@
 Runs as a FastMCP streamable-HTTP server on the host (default :9006).
 Reached from Docker containers via host.docker.internal:9006.
 
-v1 (slices 1–4): real codebase_search (BM25 / semantic / hybrid via Ollama
+v1 (slices 1–5): real codebase_search (BM25 / semantic / hybrid via Ollama
 embeddings) backed by a per-process LRU cache that watchfiles invalidates on
-local-path edits, plus adr_read/adr_write against ``<repo>/docs/adr/``.
+local-path edits, with ``https://`` / ``file://`` git URLs shallow-cloned and
+keyed by commit SHA. ``adr_read``/``adr_write`` operate on ``<repo>/docs/adr/``.
 ``diagram_gen`` remains a stub-echo until slice 6.
 """
 from __future__ import annotations
@@ -22,6 +23,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from architect_server.adr import read_adr, write_adr
 from architect_server.cache import IndexCache
 from architect_server.embeddings import OllamaEmbedder
+from architect_server.resolver import is_git_url, resolve_git_repo
 from architect_server.search import build_index, embed_index, search
 
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
@@ -29,6 +31,12 @@ logger = logging.getLogger(__name__)
 
 _PORT = int(os.environ.get("ARCHITECT_PORT", "9006"))
 _DEFAULT_REPO = os.environ.get("ARCHITECT_DEFAULT_REPO")
+_CLONES_DIR = Path(
+    os.environ.get(
+        "ARCHITECT_CLONES_DIR",
+        str(Path.home() / ".cache" / "architect_server" / "clones"),
+    )
+)
 
 mcp = FastMCP(
     "architect",
@@ -75,8 +83,21 @@ def codebase_search(
         target = _resolve_repo(repo)
     except ValueError as exc:
         return {"error": str(exc), "chunks": []}
-    cache_key = str(Path(target).resolve())
-    index = _index_cache.get_or_build(cache_key, lambda: build_index(target))
+    if is_git_url(target):
+        try:
+            resolved = resolve_git_repo(target, _CLONES_DIR)
+        except RuntimeError as exc:
+            return {"error": str(exc), "chunks": []}
+        cache_key = resolved.cache_key
+        index_root = resolved.local_path
+        watch_path = None  # git snapshot — no point watching
+    else:
+        index_root = Path(target).resolve()
+        cache_key = str(index_root)
+        watch_path = index_root
+    index = _index_cache.get_or_build(
+        cache_key, lambda: build_index(index_root), watch_path=watch_path
+    )
     embedder = None
     if mode in ("semantic", "hybrid"):
         try:

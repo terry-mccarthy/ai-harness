@@ -51,7 +51,17 @@ class IndexCache:
         with self._lock:
             return key in self._cache
 
-    def get_or_build(self, key: str, builder: Callable[[], Index]) -> Index:
+    def get_or_build(
+        self,
+        key: str,
+        builder: Callable[[], Index],
+        watch_path: Path | None = None,
+    ) -> Index:
+        """Return the cached ``Index`` for ``key`` or build, store, and return one.
+
+        ``watch_path`` opts the entry into watchfiles invalidation. SHA-keyed
+        git clones should leave it ``None`` — the snapshot will not change.
+        """
         with self._lock:
             cached = self._cache.get(key)
             if cached is not None:
@@ -67,8 +77,8 @@ class IndexCache:
             self._cache[key] = index
             self._cache.move_to_end(key)
             self._evict_unlocked()
-            if self._watch_enabled:
-                self._start_watching_unlocked(key)
+            if self._watch_enabled and watch_path is not None:
+                self._start_watching_unlocked(key, watch_path)
         return index
 
     def invalidate(self, key: str) -> None:
@@ -88,10 +98,9 @@ class IndexCache:
             old_key, _ = self._cache.popitem(last=False)
             self._stop_watching_unlocked(old_key)
 
-    def _start_watching_unlocked(self, key: str) -> None:
+    def _start_watching_unlocked(self, key: str, path: Path) -> None:
         if key in self._stop_events:
             return
-        path = Path(key)
         if not path.is_dir():
             return
         stop = threading.Event()
