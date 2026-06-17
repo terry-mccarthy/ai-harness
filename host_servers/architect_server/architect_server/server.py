@@ -3,13 +3,13 @@
 Runs as a FastMCP streamable-HTTP server on the host (default :9006).
 Reached from Docker containers via host.docker.internal:9006.
 
-v1 (slices 1–5, 7): real ``codebase_search`` (BM25 / semantic / hybrid via
-Ollama embeddings) backed by a per-process LRU cache that watchfiles
-invalidates on local-path edits, with ``https://`` / ``file://`` git URLs
-shallow-cloned and keyed by commit SHA. ``adr_read`` / ``adr_write`` operate
-on ``<repo>/docs/adr/``. ``architecture_review`` scores a diff or codebase
-against ``<repo>/ARCHITECTURE.md`` + ADRs via Ollama chat. ``diagram_gen``
-remains a stub-echo until slice 6.
+v1 (slices 1–7): real ``codebase_search`` (BM25 / semantic / hybrid via Ollama
+embeddings) backed by a per-process LRU cache that watchfiles invalidates on
+local-path edits, with ``https://`` / ``file://`` git URLs shallow-cloned and
+keyed by commit SHA. ``adr_read`` / ``adr_write`` operate on
+``<repo>/docs/adr/``. ``diagram_gen`` produces raw Mermaid via Ollama chat.
+``architecture_review`` scores a diff or codebase against
+``<repo>/ARCHITECTURE.md`` + ADRs via Ollama chat.
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from architect_server.adr import read_adr, write_adr
 from architect_server.architecture_review import architecture_review as _architecture_review
 from architect_server.cache import IndexCache
+from architect_server.diagram import diagram_gen as _diagram_gen
 from architect_server.embeddings import OllamaEmbedder
 from architect_server.llm import OllamaLLM
 from architect_server.resolver import is_git_url, resolve_git_repo
@@ -176,8 +177,16 @@ def adr_write(title: str, content: str, repo: str | None = None) -> dict:
 
 @mcp.tool()
 def diagram_gen(description: str) -> dict:
-    """Generate a diagram from a description. (stub — replaced in slice 6)"""
-    return {"result": "stub", "tool": "diagram_gen", "description": description}
+    """Generate a Mermaid diagram from a textual description via Ollama chat.
+
+    Returns ``{"description": ..., "mermaid": "<raw mermaid text>"}``. On LLM
+    output that does not begin with a Mermaid diagram declaration, the result
+    also carries ``parse_error`` and ``raw``.
+    """
+    try:
+        return _diagram_gen(description, llm=_make_llm())
+    except ValueError as exc:
+        return {"error": str(exc), "description": description, "mermaid": ""}
 
 
 @mcp.tool()
