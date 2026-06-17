@@ -161,7 +161,14 @@ def _bm25_score(query_tokens: list[str], doc_tokens: list[str], doc_len: int, id
 
 
 def embed_index(index: Index, embedder: Embedder) -> None:
-    """Populate ``index.embeddings`` by embedding every chunk's text."""
+    """Populate ``index.embeddings`` by embedding every chunk's text.
+
+    Idempotent: returns immediately if embeddings are already present. This
+    matters for cached indices — bm25 callers leave ``embeddings`` as ``None``,
+    a later hybrid call populates it, and subsequent calls reuse the vectors.
+    """
+    if index.embeddings is not None:
+        return
     if not index.chunks:
         index.embeddings = []
         return

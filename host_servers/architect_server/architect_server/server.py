@@ -3,9 +3,10 @@
 Runs as a FastMCP streamable-HTTP server on the host (default :9006).
 Reached from Docker containers via host.docker.internal:9006.
 
-v1 (slices 1–3): real codebase_search (BM25 / semantic / hybrid via Ollama
-embeddings) and adr_read/adr_write against ``<repo>/docs/adr/``. ``diagram_gen``
-remains a stub-echo until slice 6.
+v1 (slices 1–4): real codebase_search (BM25 / semantic / hybrid via Ollama
+embeddings) backed by a per-process LRU cache that watchfiles invalidates on
+local-path edits, plus adr_read/adr_write against ``<repo>/docs/adr/``.
+``diagram_gen`` remains a stub-echo until slice 6.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from architect_server.adr import read_adr, write_adr
+from architect_server.cache import IndexCache
 from architect_server.embeddings import OllamaEmbedder
 from architect_server.search import build_index, embed_index, search
 
@@ -35,9 +37,7 @@ mcp = FastMCP(
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
-# Per-process LRU is added in slice 4; for slice 1 we rebuild on every call.
-# This keeps the implementation honest about indexing cost so the cache slice
-# has a concrete latency target to beat.
+_index_cache = IndexCache()
 
 
 def _resolve_repo(repo: str | None) -> str:
@@ -75,7 +75,8 @@ def codebase_search(
         target = _resolve_repo(repo)
     except ValueError as exc:
         return {"error": str(exc), "chunks": []}
-    index = build_index(target)
+    cache_key = str(Path(target).resolve())
+    index = _index_cache.get_or_build(cache_key, lambda: build_index(target))
     embedder = None
     if mode in ("semantic", "hybrid"):
         try:

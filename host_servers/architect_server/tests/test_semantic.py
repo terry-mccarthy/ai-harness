@@ -148,3 +148,22 @@ def test_invalid_mode_raises(repo: Path):
     index = build_index(repo)
     with pytest.raises(ValueError, match="mode"):
         search(index, query="x", mode="lexical")
+
+
+def test_embed_index_is_idempotent(repo: Path):
+    """A cached Index is reused across modes; re-embedding would be wasteful."""
+
+    class CountingEmbedder(BagOfWordsEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def embed_many(self, texts):
+            self.calls += 1
+            return super().embed_many(texts)
+
+    index = build_index(repo)
+    embedder = CountingEmbedder()
+    embed_index(index, embedder)
+    embed_index(index, embedder)
+    assert embedder.calls == 1
