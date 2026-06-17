@@ -1,4 +1,9 @@
-"""BM25 codebase search over a local repo. Pure stdlib + math."""
+"""BM25 + dense hybrid codebase search over a local repo.
+
+Pure stdlib + math for BM25. Dense search delegates to an injected ``Embedder``
+that exposes ``embed_one(text)`` and ``embed_many(texts)``. Hybrid mode merges
+both rankings via Reciprocal Rank Fusion (RRF, k=60).
+"""
 from __future__ import annotations
 
 import math
@@ -6,6 +11,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 _SKIP_DIRS = frozenset({
     ".git", "node_modules", "__pycache__", ".venv", "venv",
@@ -19,6 +25,13 @@ _WORD_SPLIT = re.compile(r"[^a-zA-Z0-9]+")
 _CAMEL_SPLIT = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _BM25_K1 = 1.5
 _BM25_B = 0.75
+_RRF_K = 60
+_VALID_MODES = ("bm25", "semantic", "hybrid")
+
+
+class Embedder(Protocol):
+    def embed_one(self, text: str) -> list[float]: ...
+    def embed_many(self, texts: list[str]) -> list[list[float]]: ...
 
 
 @dataclass(frozen=True)
@@ -37,6 +50,7 @@ class Index:
     _doc_freq: dict[str, int] = field(default_factory=dict)
     _doc_len: list[int] = field(default_factory=list)
     _avgdl: float = 0.0
+    embeddings: list[list[float]] | None = None
 
 
 @dataclass(frozen=True)
@@ -146,28 +160,88 @@ def _bm25_score(query_tokens: list[str], doc_tokens: list[str], doc_len: int, id
     return score
 
 
-def search(index: Index, query: str, top_k: int = 5, mode: str = "bm25") -> list[SearchResult]:
-    """Return top-k chunks ranked by the requested mode. v1 only supports 'bm25'."""
-    if mode != "bm25":
-        raise ValueError(f"mode {mode!r} not supported in v1; only 'bm25' available")
-    query_tokens = _tokenize(query)
+def embed_index(index: Index, embedder: Embedder) -> None:
+    """Populate ``index.embeddings`` by embedding every chunk's text."""
+    if not index.chunks:
+        index.embeddings = []
+        return
+    index.embeddings = embedder.embed_many([c.text for c in index.chunks])
+
+
+def _to_result(index: Index, doc_idx: int, score: float) -> SearchResult:
+    chunk = index.chunks[doc_idx]
+    return SearchResult(
+        file=chunk.file,
+        start_line=chunk.start_line,
+        end_line=chunk.end_line,
+        text=chunk.text,
+        score=round(score, 4),
+    )
+
+
+def _bm25_rank(index: Index, query_tokens: list[str]) -> list[tuple[int, float]]:
     if not query_tokens or not index.chunks:
         return []
-
-    scored: list[tuple[float, int]] = []
-    for i, (tokens, dl) in enumerate(zip(index._doc_tokens, index._doc_len)):
-        score = _bm25_score(query_tokens, tokens, dl, index)
-        if score > 0:
-            scored.append((score, i))
-
-    scored.sort(key=lambda x: -x[0])
-    return [
-        SearchResult(
-            file=index.chunks[i].file,
-            start_line=index.chunks[i].start_line,
-            end_line=index.chunks[i].end_line,
-            text=index.chunks[i].text,
-            score=round(score, 4),
-        )
-        for score, i in scored[:top_k]
+    scored = [
+        (i, _bm25_score(query_tokens, tokens, dl, index))
+        for i, (tokens, dl) in enumerate(zip(index._doc_tokens, index._doc_len))
     ]
+    scored = [pair for pair in scored if pair[1] > 0]
+    scored.sort(key=lambda pair: -pair[1])
+    return scored
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity. Returns 0 if either vector is zero-length."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _semantic_rank(index: Index, query: str, embedder: Embedder) -> list[tuple[int, float]]:
+    if not index.chunks or index.embeddings is None:
+        return []
+    q_vec = embedder.embed_one(query)
+    scored = [(i, _cosine(q_vec, v)) for i, v in enumerate(index.embeddings)]
+    scored = [pair for pair in scored if pair[1] > 0]
+    scored.sort(key=lambda pair: -pair[1])
+    return scored
+
+
+def _rrf_merge(*rankings: list[tuple[int, float]]) -> list[tuple[int, float]]:
+    """Reciprocal Rank Fusion. ``score(d) = sum 1/(k + rank_i(d))`` over each ranked list."""
+    fused: dict[int, float] = {}
+    for ranked in rankings:
+        for rank, (doc_idx, _score) in enumerate(ranked):
+            fused[doc_idx] = fused.get(doc_idx, 0.0) + 1.0 / (_RRF_K + rank + 1)
+    return sorted(fused.items(), key=lambda pair: -pair[1])
+
+
+def search(
+    index: Index,
+    query: str,
+    top_k: int = 5,
+    mode: str = "bm25",
+    embedder: Embedder | None = None,
+) -> list[SearchResult]:
+    """Return top-k chunks ranked by ``mode``: ``bm25``, ``semantic``, or ``hybrid``."""
+    if mode not in _VALID_MODES:
+        raise ValueError(f"mode {mode!r} not supported; expected one of {_VALID_MODES}")
+    if mode in ("semantic", "hybrid") and embedder is None:
+        raise ValueError(f"mode {mode!r} requires an embedder")
+    if not index.chunks:
+        return []
+
+    if mode == "bm25":
+        ranked = _bm25_rank(index, _tokenize(query))
+    elif mode == "semantic":
+        ranked = _semantic_rank(index, query, embedder)  # type: ignore[arg-type]
+    else:  # hybrid
+        bm25 = _bm25_rank(index, _tokenize(query))
+        semantic = _semantic_rank(index, query, embedder)  # type: ignore[arg-type]
+        ranked = _rrf_merge(bm25, semantic) or bm25
+
+    return [_to_result(index, doc_idx, score) for doc_idx, score in ranked[:top_k]]

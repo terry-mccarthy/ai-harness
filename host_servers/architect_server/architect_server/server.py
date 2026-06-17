@@ -3,8 +3,9 @@
 Runs as a FastMCP streamable-HTTP server on the host (default :9006).
 Reached from Docker containers via host.docker.internal:9006.
 
-v1 (slice 1+2): real codebase_search (BM25) and adr_read/adr_write against
-``<repo>/docs/adr/``. ``diagram_gen`` remains a stub-echo until slice 6.
+v1 (slices 1–3): real codebase_search (BM25 / semantic / hybrid via Ollama
+embeddings) and adr_read/adr_write against ``<repo>/docs/adr/``. ``diagram_gen``
+remains a stub-echo until slice 6.
 """
 from __future__ import annotations
 
@@ -18,7 +19,8 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from architect_server.adr import read_adr, write_adr
-from architect_server.search import build_index, search
+from architect_server.embeddings import OllamaEmbedder
+from architect_server.search import build_index, embed_index, search
 
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger(__name__)
@@ -48,22 +50,47 @@ def _resolve_repo(repo: str | None) -> str:
     return target
 
 
+def _make_embedder() -> OllamaEmbedder:
+    return OllamaEmbedder()
+
+
 @mcp.tool()
-def codebase_search(query: str, repo: str | None = None, top_k: int = 5) -> dict:
-    """Search a codebase with a BM25 keyword query.
+def codebase_search(
+    query: str,
+    repo: str | None = None,
+    top_k: int = 5,
+    mode: str = "hybrid",
+) -> dict:
+    """Search a codebase with BM25, semantic, or hybrid ranking.
 
     Args:
         query: natural-language or code query.
         repo: local directory path. Falls back to ARCHITECT_DEFAULT_REPO env var if unset.
         top_k: number of results to return (default 5).
+        mode: ``bm25`` | ``semantic`` | ``hybrid`` (default ``hybrid``). Hybrid merges
+            BM25 and dense rankings via Reciprocal Rank Fusion. ``semantic`` and
+            ``hybrid`` require Ollama to be reachable at ``OLLAMA_HOST``.
     """
     try:
         target = _resolve_repo(repo)
     except ValueError as exc:
         return {"error": str(exc), "chunks": []}
     index = build_index(target)
-    results = search(index, query=query, top_k=top_k, mode="bm25")
-    return {"repo": str(index.root), "chunks": [asdict(r) for r in results]}
+    embedder = None
+    if mode in ("semantic", "hybrid"):
+        try:
+            embedder = _make_embedder()
+            embed_index(index, embedder)
+        except Exception as exc:
+            logger.warning("embedder unavailable, falling back to bm25: %s", exc)
+            mode = "bm25"
+            embedder = None
+    results = search(index, query=query, top_k=top_k, mode=mode, embedder=embedder)
+    return {
+        "repo": str(index.root),
+        "mode": mode,
+        "chunks": [asdict(r) for r in results],
+    }
 
 
 @mcp.tool()
