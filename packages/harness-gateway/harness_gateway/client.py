@@ -20,6 +20,7 @@ TOOL_NAME_MAP = {
     "adr_read": "architect_stub__adr_read",
     "adr_write": "architect_stub__adr_write",
     "diagram_gen": "architect_stub__diagram_gen",
+    "architecture_review": "architect_stub__architecture_review",
     "observability_query": "sre_stub__observability_query",
     "runbook_read": "sre_stub__runbook_read",
     "log_search": "sre_stub__log_search",

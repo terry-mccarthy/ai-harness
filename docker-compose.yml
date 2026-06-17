@@ -160,8 +160,9 @@ services:
 
   register-architect:
     image: mcpjungle/mcpjungle:latest
-    # Name kept as architect_stub through slice 6 to preserve TOOL_NAME_MAP entries;
-    # renamed in slice 7 once the host-side server replaces all four tools.
+    # Registered name is intentionally architect_stub — kept post-retirement
+    # (ADR-0036 slice 8) to preserve TOOL_NAME_MAP entries and avoid churning
+    # every audit log, test, and runbook that references the prefix.
     command: ["register", "--name", "architect_stub", "--url", "http://host.docker.internal:9006/mcp", "--registry", "http://mcpjungle:8080", "--force"]
     depends_on:
       mcpjungle:

@@ -1,7 +1,15 @@
 # ADR-0036: Architect MCP server — host-side, semble-style, designed for ECS portability
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-06-17
+
+Delivered across 7 slices (slice 8 retired `stub_servers/architect_server.py`).
+Slices 1–5 added `codebase_search` (BM25 → semantic → hybrid → LRU cache with
+`watchfiles` invalidation → `https://`/`file://` git URLs keyed by commit SHA)
+and real `adr_read` / `adr_write`. Slices 6–7 added `diagram_gen` (Mermaid via
+Ollama chat) and `architecture_review(target_mode)`. 57 unit tests pass; the
+host process is managed by `make architect-up` / `make architect-down` and
+registered with MCPJungle via the `register-architect` init container.
 
 ## Context
 
