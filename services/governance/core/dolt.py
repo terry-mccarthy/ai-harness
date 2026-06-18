@@ -88,6 +88,42 @@ def write_audit(
             conn.close()
 
 
+def write_gate_failure(
+    thread_id, rule, severity, file, message, task, repo_path, target_language, gate_signal,
+):
+    conn = None
+    try:
+        conn = get_dolt_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO architectural_gate_failures
+                   (thread_id, rule, severity, file, message, task, repo_path,
+                    target_language, gate_signal, timestamp_ms)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (
+                    thread_id,
+                    rule,
+                    severity,
+                    file,
+                    message,
+                    task,
+                    repo_path,
+                    target_language,
+                    json.dumps(gate_signal) if isinstance(gate_signal, dict) else gate_signal,
+                    int(time.time() * 1000),
+                ),
+            )
+            cur.execute(
+                "CALL DOLT_COMMIT('-Am', %s)",
+                (f"gate_failure: {rule} [{severity}]",),
+            )
+    except Exception as e:
+        logger.error("Dolt gate failure write failed: %s", e)
+    finally:
+        if conn:
+            conn.close()
+
+
 def serialise_row(row: dict) -> dict:
     """Convert datetime and bytes values in a Dolt row to JSON-safe types."""
     return {

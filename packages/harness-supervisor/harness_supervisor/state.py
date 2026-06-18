@@ -1,4 +1,17 @@
-from typing import TypedDict
+from typing import TypedDict, List, Optional
+
+
+class ArchitecturalViolation(TypedDict):
+    rule: str
+    severity: str  # "HARD" | "SOFT"
+    file: str
+    message: str
+
+
+class GateSignalContract(TypedDict):
+    result: str  # "PASS" | "FAIL"
+    violations: List[ArchitecturalViolation]
+    action: str  # "PROCEED" | "STOP_AND_SURFACE"
 
 
 class HarnessState(TypedDict):
@@ -17,3 +30,8 @@ class HarnessState(TypedDict):
     memory_context:          list | None
     tokens_used:             int             # running LLM token total for this thread
     token_budget:            int | None      # None = unlimited; graph halts when exceeded
+    target_language:         str             # e.g., 'python', 'php', 'typescript'
+    repo_path:               str             # path or URI of the target repository
+    gate_signal:             GateSignalContract | None
+    human_justification:     str | None      # human operator justification for soft failures
+

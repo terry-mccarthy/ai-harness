@@ -15,7 +15,7 @@ from core.config import (
     TOKEN_TTL,
     b64url,
 )
-from core.dolt import write_audit, write_episode
+from core.dolt import write_audit, write_episode, write_gate_failure
 from core.metrics import tool_call_latency, tool_calls_total
 from core.opa import check_opa
 
@@ -156,6 +156,36 @@ async def audit(
     if EXPIRY_PASS_INTERVAL > 0 and _audit_call_count % EXPIRY_PASS_INTERVAL == 0:
         from routers.skills import background_expiry_pass  # lazy: lives in slice 04
         background_tasks.add_task(background_expiry_pass)
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Architectural gate failure audit
+# ---------------------------------------------------------------------------
+
+
+@router.post("/audit/architectural-gate", status_code=202)
+async def architectural_gate_audit(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None),
+):
+    """Record an architectural gate failure in Dolt (async)."""
+    claims = decode_jwt(authorization)
+    body = await request.json()
+    background_tasks.add_task(
+        write_gate_failure,
+        thread_id=body.get("thread_id"),
+        rule=body.get("rule"),
+        severity=body.get("severity"),
+        file=body.get("file"),
+        message=body.get("message"),
+        task=body.get("task"),
+        repo_path=body.get("repo_path"),
+        target_language=body.get("target_language"),
+        gate_signal=body.get("gate_signal"),
+    )
+    tool_calls_total.labels(agent_role=claims["role"], decision="deny").inc()
     return {}
 
 

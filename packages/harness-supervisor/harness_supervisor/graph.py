@@ -20,6 +20,7 @@ from .nodes import (
     run_agent_node,
     synthesise_node,
     propose_formula_node,
+    architectural_gate_node,
     error_handler_node,
 )
 from .approval import validate_approval_token
@@ -48,7 +49,27 @@ def _should_propose_formula(state: HarnessState) -> str:
     return "synthesise"
 
 
+def route_after_gate(state: HarnessState) -> str:
+    signal = state.get("gate_signal")
+    if not signal:
+        return "error_handler"
+    if signal["result"] == "PASS":
+        return "synthesise"
+    if signal["result"] == "FAIL":
+        has_hard = any(v.get("severity") == "HARD" for v in signal.get("violations", []))
+        has_soft = any(v.get("severity") == "SOFT" for v in signal.get("violations", []))
+        if has_hard:
+            return "human_gate"
+        if has_soft and not state.get("human_justification"):
+            return "human_gate"
+        return "synthesise"
+    return "error_handler"
+
+
 def _after_human_gate(state: HarnessState) -> str:
+    # Gate soft-fail justification — resume to synthesise
+    if state.get("human_justification"):
+        return "synthesise"
     token = state.get("human_approval_token")
     thread_id = state.get("thread_id", "")
     if not token:
@@ -88,8 +109,9 @@ async def build_supervisor(
     builder.add_node("sre",             partial(run_agent_node,      agent=sre))
     builder.add_node("synthesise",      partial(synthesise_node,     formula_store=fstore, llm_provider=llm_provider))
     builder.add_node("propose_formula", partial(propose_formula_node, formula_store=fstore))
-    builder.add_node("human_gate",      _human_gate_node)
-    builder.add_node("error_handler",   error_handler_node)
+    builder.add_node("architectural_gate", partial(architectural_gate_node, gateway=gateway))
+    builder.add_node("human_gate",         _human_gate_node)
+    builder.add_node("error_handler",      error_handler_node)
 
     # Edges
     builder.set_entry_point("classify")
@@ -101,7 +123,15 @@ async def build_supervisor(
         "sre":           "sre",
     })
 
-    for agent_node in ("architect", "code_reviewer", "sre"):
+    # Architect goes through architectural gate; other agents use formula routing
+    builder.add_edge("architect", "architectural_gate")
+    builder.add_conditional_edges("architectural_gate", route_after_gate, {
+        "synthesise":    "synthesise",
+        "human_gate":    "human_gate",
+        "error_handler": "error_handler",
+    })
+
+    for agent_node in ("code_reviewer", "sre"):
         builder.add_conditional_edges(agent_node, _should_propose_formula, {
             "synthesise":      "synthesise",
             "propose_formula": "propose_formula",

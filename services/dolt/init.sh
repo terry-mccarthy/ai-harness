@@ -14,6 +14,21 @@ fi
 
 # Create tables using local SQL mode (no server needed)
 dolt sql << 'SQL'
+CREATE TABLE IF NOT EXISTS architectural_gate_failures (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    thread_id       VARCHAR(36)  NOT NULL,
+    rule            VARCHAR(128) NOT NULL,
+    severity        VARCHAR(8)   NOT NULL,
+    file            TEXT,
+    message         TEXT,
+    task            TEXT,
+    repo_path       TEXT,
+    target_language VARCHAR(32),
+    gate_signal     JSON,
+    timestamp_ms    BIGINT       NOT NULL,
+    INDEX idx_thread (thread_id)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     agent_id        VARCHAR(64)  NOT NULL,
@@ -166,6 +181,7 @@ mysql -h 127.0.0.1 -P 3306 -u root << 'SQL'
 CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY 'root';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 CREATE USER IF NOT EXISTS 'harness'@'%' IDENTIFIED BY 'harness';
+GRANT SELECT, INSERT ON harness.architectural_gate_failures TO 'harness'@'%';
 GRANT SELECT, INSERT ON harness.audit_log TO 'harness'@'%';
 GRANT SELECT ON harness.dolt_log TO 'harness'@'%';
 GRANT SELECT ON harness.dolt_diff_audit_log TO 'harness'@'%';

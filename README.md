@@ -101,7 +101,7 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 
 ## Tests
 
-### Integration suite (215 tests: all green) — `make test-integration`
+### Integration suite (229 tests: all green) — `make test-integration`
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -238,6 +238,25 @@ LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server gov
 | `test_skill_expiry.py` | 12 | `POST /skills/expire`, re-validation auto-proposal, auto-trigger, early-review flag |
 | `test_skill_select.py` | 7 | `POST /skills/select` — specificity/recency/success-rate tiebreaks, escalation, audit_log |
 | `test_skills_cli.py` | 19 | `GET /episodes`, `/candidates`, `/skills` list endpoints; CLI subprocess for full pipeline |
+
+### Phase 7 — Architecture as Code (14 tests)
+
+| Test | What it proves |
+|---|---|
+| `test_gate_passes_clean_code` | No violations → gate_signal.result == 'PASS' |
+| `test_gate_fails_layer_violation` | Layer violation → HARD severity, FAIL result |
+| `test_gate_enforces_complexity_limit` | Complexity limit → SOFT severity, FAIL result |
+| `test_gate_passes_params_to_tool` | repo_path + target_language forwarded to tool |
+| `test_gate_handles_tool_denied` | ToolAccessDenied → FAIL + error dict |
+| `test_route_after_gate_pass` | PASS → routs to synthesise |
+| `test_route_after_gate_hard_fail` | HARD violation → routs to human_gate |
+| `test_route_after_gate_soft_fail_no_justification` | SOFT without justification → human_gate |
+| `test_route_after_gate_soft_fail_with_justification` | SOFT with justification → synthesise |
+| `test_route_after_gate_no_signal` | No signal → error_handler |
+| `test_architect_halts_on_hard_constraint` | E2E: architect → gate → human_gate on HARD |
+| `test_architect_passes_on_clean_code` | E2E: architect → gate → synthesise on PASS |
+| `test_dolt_records_gate_failures` | architectural_gate_failures INSERT + Dolt commit |
+| `test_audit_architectural_gate_endpoint` | POST /audit/architectural-gate returns 202 |
 
 ### Eval suite (7 tests) — `pytest -m eval -v -s`
 

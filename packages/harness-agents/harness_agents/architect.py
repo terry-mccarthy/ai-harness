@@ -28,7 +28,7 @@ def _clean_raw(raw: str) -> str:
 
 class ArchitectAgent:
     name = "architect"
-    allowed_tools = ["codebase_search", "adr_read", "adr_write", "diagram_gen", "architecture_review"]
+    allowed_tools = ["codebase_search", "adr_read", "adr_write", "diagram_gen"]
     memory_namespace = "architect"
 
     def __init__(self, gateway: GatewayClient, llm_provider: LLMProvider, memory_store=None):

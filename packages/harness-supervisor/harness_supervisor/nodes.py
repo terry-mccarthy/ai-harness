@@ -9,6 +9,7 @@ from pathlib import Path
 from opentelemetry import trace
 
 from harness_agents.llm import LLMProvider
+from harness_gateway.client import ToolAccessDenied
 from .state import HarnessState
 
 logger = logging.getLogger(__name__)
@@ -204,6 +205,34 @@ async def propose_formula_node(state: HarnessState, formula_store) -> dict:
         formula_store.propose(draft)
         logger.info("propose_formula: created draft %s", draft_id)
         return {}
+
+
+async def architectural_gate_node(state: HarnessState, gateway) -> dict:
+    tracer = trace.get_tracer(__name__)
+    with tracer.start_as_current_span("architectural_gate"):
+        repo_path = state.get("repo_path", ".")
+        target_language = state.get("target_language", "python")
+
+        try:
+            result = await gateway.call_tool("execute_architecture_check", {
+                "repo_path": repo_path,
+                "target_language": target_language,
+            })
+        except ToolAccessDenied as e:
+            logger.error("gate tool denied: %s", e)
+            return {
+                "gate_signal": {
+                    "result": "FAIL",
+                    "violations": [],
+                    "action": "STOP_AND_SURFACE",
+                },
+                "error": {"code": "tool_access_denied", "reason": str(e)},
+            }
+
+        signal = result if isinstance(result, dict) else {}
+        logger.info("architectural_gate: result=%s violations=%d",
+                     signal.get("result"), len(signal.get("violations", [])))
+        return {"gate_signal": signal}
 
 
 async def error_handler_node(state: HarnessState) -> dict:
