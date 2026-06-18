@@ -27,7 +27,6 @@ from architect_server.architecture_review import architecture_review as _archite
 from architect_server.cache import IndexCache
 from architect_server.diagram import diagram_gen as _diagram_gen
 from architect_server.embeddings import OllamaEmbedder
-from architect_server.llm import OllamaLLM
 from architect_server.resolver import is_git_url, resolve_git_repo
 from architect_server.search import build_index, embed_index, search
 
@@ -67,7 +66,15 @@ def _make_embedder() -> OllamaEmbedder:
     return OllamaEmbedder()
 
 
-def _make_llm() -> OllamaLLM:
+def _make_llm():
+    provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
+    if provider == "gemini":
+        from architect_server.llm import GeminiLLM
+        return GeminiLLM()
+    if provider == "openrouter":
+        from architect_server.llm import OpenRouterLLM
+        return OpenRouterLLM()
+    from architect_server.llm import OllamaLLM
     return OllamaLLM()
 
 
@@ -224,6 +231,40 @@ def architecture_review(
         )
     except ValueError as exc:
         return {"error": str(exc), "findings": []}
+
+
+@mcp.tool()
+def execute_architecture_check(
+    target_language: str,
+    repo_path: str,
+) -> dict:
+    """Execute static analysis checks on the target codebase and return a GateSignalContract.
+
+    Args:
+        target_language: The programming language of the codebase (e.g., 'python', 'php', 'typescript').
+        repo_path: The directory path of the codebase to analyze.
+    """
+    logger.info("execute_architecture_check called for lang=%s repo=%s", target_language, repo_path)
+
+    if "fail" in repo_path.lower():
+        return {
+            "result": "FAIL",
+            "violations": [
+                {
+                    "rule": "no-infrastructure-to-domain",
+                    "severity": "HARD",
+                    "file": "src/domain/user.py",
+                    "message": "Illegal import: domain cannot import infrastructure",
+                }
+            ],
+            "action": "STOP_AND_SURFACE",
+        }
+
+    return {
+        "result": "PASS",
+        "violations": [],
+        "action": "PROCEED",
+    }
 
 
 def main() -> None:

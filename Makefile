@@ -10,6 +10,7 @@ architect-up:
 	@if [ -f $(ARCHITECT_PID) ] && kill -0 $$(cat $(ARCHITECT_PID)) 2>/dev/null; then \
 	  echo "architect server already running (pid $$(cat $(ARCHITECT_PID)))"; \
 	else \
+	  set -a && source .env && set +a && \
 	  ARCHITECT_PORT=$(ARCHITECT_PORT) ARCHITECT_DEFAULT_REPO=$(PWD) \
 	    nohup .venv/bin/python -m architect_server.server > $(ARCHITECT_LOG) 2>&1 & echo $$! > $(ARCHITECT_PID); \
 	  sleep 1; \
