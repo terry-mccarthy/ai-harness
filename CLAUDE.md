@@ -9,13 +9,13 @@ Before declaring a phase done, update:
 - `README.md` — stack section, test count, config table, project layout
 - `CLAUDE.md` — any new gotchas, changed startup commands, updated flow description
 - `ARCHITECTURE.md` — the current architecture and ADRs. 
-- `PROGRESS.md` — tick off passing tests and DoD items, note any divergences from `spec-full.md`
+- `PROGRESS.md` — tick off passing tests and DoD items
 
 **2. Document gotchas immediately, not at end-of-phase.**
 If something takes more than one attempt to get right — a library quirk, an API difference from docs, a config flag that was removed, a subtle ordering issue — add it to the relevant section of this file *before* moving on. Future sessions start cold; anything not written here will be re-discovered the hard way.
 
 **3. Note divergences from the spec explicitly.**
-When the implementation departs from `spec-full.md` (deliberate skip, pragmatic simplification, upstream difference), record it in `PROGRESS.md` under that phase's Notes section. Don't silently drift.
+Record deliberate skips, pragmatic simplifications, and upstream differences in `PROGRESS.md` under that phase's Notes section. Don't silently drift.
 
 **4. Red before green.**
 Write the test file first. Run it, confirm it fails for the right reason, then implement. A test that was never red proves nothing.
@@ -312,6 +312,15 @@ A hung/abandoned `pytest -m integration` process holds Dolt + PostgreSQL connect
 ### Human approval token scoping
 
 The `human_approval_token` is a short-lived JWT (10-min TTL) scoped to a specific `thread_id` and `tool_name` (e.g., `shell_exec`). The token is passed as the `X-Human-Approval-Token` header to governance, which validates the signature and scope before allowing the tool call. A token issued for thread A cannot be reused for thread B, and a token for `shell_exec` cannot be used for other tools.
+
+## Architectural gate — Phase 7 gotchas
+
+- **Graph wiring change for architect path:** The architect agent no longer goes through `_should_propose_formula` — it now goes `architect → architectural_gate → route_after_gate`. Code reviewer and SRE agents are unaffected (still use `_should_propose_formula`). If you add a new agent that should also go through the gate, add its own `builder.add_edge("agent", "architectural_gate")`.
+- **`route_after_gate` routing:** PASS → `synthesise`, FAIL with HARD → `human_gate`, FAIL with SOFT without `human_justification` → `human_gate`, FAIL with SOFT with `human_justification` → `synthesise`. No gate signal → `error_handler`.
+- **`human_gate` now has two resume paths:** `human_justification` (gate soft-fail) → resume to `synthesise`; `human_approval_token` (shell_exec) → resume to `sre`. The justification check comes first.
+- **`execute_architecture_check` is a stub:** It's mapped to `architect_stub__execute_architecture_check` in the TOOL_NAME_MAP. The actual sandbox isolation (Docker-in-Docker) is not implemented. The graph wiring, OPA policy, Dolt schema, and governance endpoint are all functional — only the stub handler needs to be replaced when sandboxes are built.
+- **No `architecture_review` in architect's `allowed_tools`:** The architect was already restricted to `["codebase_search", "adr_read", "adr_write", "diagram_gen"]` before Phase 7. Tests that expect the architect to call `architecture_review` directly will fail.
+- **Dolt migration for gate failures:** The `architectural_gate_failures` table must exist before integration tests pass. Use `docker compose exec dolt mysql ... -e "CREATE TABLE IF NOT EXISTS ..."` against the running Dolt container (see `services/dolt/init.sh` for the full schema).
 
 ## Connecting Claude Code to the harness
 

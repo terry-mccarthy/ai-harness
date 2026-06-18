@@ -64,7 +64,7 @@ Replicate semble's architecture for the architect MCP server.
   restart, no shared log aggregation. Mitigated by `make architect-up` + an
   optional launchd plist for long-running dev use.
 - Local-path mode reads anything the host user can read. The OPA policy check
-  still runs (governance is mandatory intercept — [HARD]), but the *tool
+  still runs (governance enforces policy as a sidecar — [HARD] per ADR 0023), but the *tool
   implementation* has no filesystem sandbox. Same risk profile as semble itself.
 - LRU cache is per-process; restarts cost a re-index. Acceptable for v1;
   revisit if cold starts dominate.

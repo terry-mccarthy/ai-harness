@@ -31,9 +31,10 @@ end-to-end.
 These are the non-negotiable constraints that define this system. Every other design decision
 flows from them.
 
-**[HARD]** The governance service is a mandatory intercept for all agent-to-agent tool calls.
-No agent code may call MCPJungle (`:8080`) directly — all calls MUST route through
-governance (`:8090`), which handles auth, policy, and audit before forwarding.
+**[HARD]** The governance service MUST authorize every tool call before it reaches the gateway.
+No agent code may invoke an MCPJungle (`:8080`) or ContextForge (`:4444`) tool without
+first receiving a 200 OK from governance's `/check` endpoint. Governance handles auth,
+policy, and audit as a sidecar (not a forwarding proxy — see ADR 0023).
 
 **[HARD]** Every tool call — allowed or denied — MUST produce an audit row in Dolt and trigger
 a `DOLT_COMMIT`. The audit log must be complete; partial audit is not acceptable.
@@ -94,24 +95,21 @@ MCPJungle  :8080
   │  review_server__review_diff
   ▼
 review-server  :9003  (FastMCP)
-  │  CodeReviewerAgent
-  │  GatewayClient  ← fetches JWT from governance /oauth/token
-  │
-  │  POST /check  (Bearer <JWT>, tool_name)
-  ▼
-governance  :8090  (FastAPI)          — policy + audit sidecar [HARD]
-  ├── validate JWT  (RS256, 15-min TTL)
-  └── POST /v1/data/harness/allow  →  OPA  :8181  → 200 allowed / 403 denied
-  │
-  │  (on allow) POST /api/v0/tools/invoke  (direct, no auth)
-  ▼
-MCPJungle  :8080
-  ├── git_diff_stub__git_diff    →  git-diff-stub  :9001
-  └── linter_stub__run_linter    →  linter-stub    :9002
-  │
-  │  (async, fire-and-forget) POST /audit  →  governance
-  ▼
-Dolt  :3306  ← INSERT audit_log + CALL DOLT_COMMIT
+  GatewayClient
+
+    │  ① POST /oauth/token  ────────────────→  governance :8090  (sidecar) [HARD]
+    │                                           ├── JWT (RS256, 15-min)
+    │  ② POST /check (Bearer JWT, tool_name) ─→  governance :8090
+    │                                           └── → OPA :8181
+    │                                                 ├── 200 allow
+    │                                                 └── 403 deny  →  ToolAccessDenied
+    │
+    │  (if allowed)
+    ├── ③ POST /api/v0/tools/invoke (direct) ─→  MCPJungle :8080  /  ContextForge :4444
+    │                                            └── → MCP server (stub or real)
+    │
+    └── ④ async POST /audit ────────────────→  governance :8090  →  Dolt :3306
+                                                                    (INSERT + DOLT_COMMIT)
 ```
 
 Every tool call the agent makes produces:
@@ -134,7 +132,7 @@ Every tool call the agent makes produces:
 | `governance`     | local build                    | 8090 | OAuth token issuance (`/oauth/token`), OPA policy check (`/check`), async Dolt audit (`/audit`) |
 | `git-diff-stub`  | local build                    | 9001 | Real `git diff` MCP server (baked sample repo)               |
 | `linter-stub`    | local build                    | 9002 | Semgrep-based `run_linter` MCP server (`semgrep-rules.yml`)  |
-| `architect-stub` | local build                    | 9004 | Stub MCP server for architect-role tools                     |
+| `architect-stub` | local build                    | 9004 | Stub MCP server for architect-role tools (codebase_search, adr_read, adr_write, diagram_gen, execute_architecture_check) |
 | `sre-stub`       | local build                    | 9005 | Stub MCP server for SRE-role tools                           |
 | `review-server`  | local build                    | 9003 | `review_diff` MCP tool — runs full code-reviewer agent       |
 | `register-*`     | mcpjungle image                | —    | One-shot init containers that register MCP servers           |
@@ -190,10 +188,24 @@ is standalone (no dependency on other harness packages). See
 12. **`GET /episodes?limit=N&unlabeled=bool`** — list recent episodes, optional unlabeled-only filter. Any valid JWT (read-only, no OPA scope required).
 13. **`GET /candidates?status=PROPOSED|PROMOTED|REJECTED`** — list candidates with optional status filter. Any valid JWT.
 14. **`GET /skills?status=active|expired|revoked`** — list latest-version skill rows with optional status filter. Any valid JWT.
+15. **`POST /audit/architectural-gate`** — (async, 202) records an architectural gate failure in the `architectural_gate_failures` Dolt table with full violation details + DOLT_COMMIT.
 
 OAuth clients: `architect`, `code-reviewer`, `sre` (agent roles) + `human-operator` (human_operator role — the only role with `skill:promote` scope).
 
 Governance no longer forwards tool calls. Rate limiting is delegated to the gateway (ContextForge).
+
+### Architectural Gate (Phase 7)
+
+A static-analysis gate that runs between `architect` output and `synthesise`. The `architectural_gate_node` calls `execute_architecture_check` via the gateway, which evaluates the repository code against rules defined in `ARCHITECTURE.md`.
+
+```
+architect → architectural_gate → route_after_gate
+  PASS       → synthesise
+  FAIL HARD  → human_gate (architectural violation requires human attention)
+  FAIL SOFT  → human_gate (unless human_justification is provided)
+```
+
+Violations are recorded in a dedicated Dolt table `architectural_gate_failures` via `POST /audit/architectural-gate`. Each failure INSERT is followed by `CALL DOLT_COMMIT`, making the full architectural review history diffable and tamper-evident.
 
 ---
 
@@ -203,7 +215,7 @@ Governance no longer forwards tool calls. Rate limiting is delegated to the gate
 
 | Role             | Allowed tools / scopes                                                                |
 |------------------|---------------------------------------------------------------------------------------|
-| `architect`      | `codebase_search`, `adr_read`, `adr_write`, `diagram_gen`                             |
+| `architect`      | `codebase_search`, `adr_read`, `adr_write`, `diagram_gen`, `execute_architecture_check` |
 | `code_reviewer`  | `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`   |
 | `sre`            | `observability_query`, `runbook_read`, `log_search`, `shell_exec`                     |
 | `sre` + `code_reviewer` | `episode:label` scope, `candidate:propose` scope                           |
@@ -536,7 +548,7 @@ section. Every change to the codebase should pass all of them.
 
 | Check | What it proves | Maps to constraint |
 |---|---|---|
-| `test_tool_calls_go_through_gateway` | Tool calls visible in gateway audit log | Governance is mandatory intercept [HARD] |
+| `test_tool_calls_go_through_gateway` | Tool calls visible in gateway audit log | Governance authorizes every call [HARD] |
 | `test_reviewer_denied_cross_role_tool` | Unlisted tools blocked before network call | OPA default-deny enforced [HARD] |
 | `test_audit_row_written` | Tool call writes row to `audit_log` in Dolt | Audit log is complete [HARD] |
 | `test_audit_dolt_commit_created` | Audit INSERT triggers a Dolt commit | Every call is a git commit [HARD] |
@@ -586,7 +598,7 @@ suggestions — violating them breaks the system's core guarantees.
 
 ## Test Coverage
 
-### Integration suite (196 tests) — `make test-integration`
+### Integration suite (215 tests) — `make test-integration`
 
 | Phase / Area | File                        | Tests | What they cover                                                          |
 |--------------|-----------------------------|-------|--------------------------------------------------------------------------|
@@ -605,6 +617,7 @@ suggestions — violating them breaks the system's core guarantees.
 | Skill 07     | `test_skill_expiry.py`      | 12    | POST /skills/expire, re-validation auto-proposal, auto-trigger, early-review flag |
 | Skill 08     | `test_skill_select.py`      | 7     | POST /skills/select — specificity/recency/success-rate tiebreaks, escalation, audit_log |
 | Skills CLI   | `test_skills_cli.py`        | 19    | GET /episodes, /candidates, /skills list endpoints; CLI subprocess — full pipeline |
+| 7            | `test_phase7_aac.py`       | 14    | Architectural gate node (unit), route_after_gate (unit), E2E graph flows, Dolt gate failures recording |
 
 ### Eval suite (7 tests) — `pytest -m eval -v -s`
 
@@ -656,3 +669,4 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0034 | `POST /skills/select` uses three ordered tiebreak rules rather than LLM selection — LLM-based selection is non-deterministic and untestable; rule-based selection is auditable (each decision is tagged with the winning rule), reproducible (same inputs always produce the same winner), and escalates gracefully rather than guessing; `preconditions.env_constraints` specificity is the primary discriminator, with recency and success rate as tiebreakers; escalation surfaces tied skill IDs for operator review | Accepted |
 | 0035 | Skill execution moved out of `GatewayClient` into a dedicated `SkillRunner` module — the gateway's real job is per-call routing (auth, OPA check, invoke, audit), whereas skill execution is a stateful workflow built on top of `call_tool`; collocating them produced a 357-line class mixing four concerns; the new `SkillRunner` takes a `GatewayClient` collaborator so token caching, OPA, and audit still flow through one place; `GatewayClient.execute_skill` retained as a thin delegating shim for back-compat; `GatewayClient.get_token` promoted from `_get_token` to a public method so the new module reads it through a clean seam | Accepted |
 | 0036 | Architect MCP server replicates semble's pattern — host-side FastMCP streamable-HTTP, `repo`-per-call (v1: local path / `https://`; v2: `s3://` + `upload://` for ECS), LRU cache keyed by commit SHA, hybrid BM25+dense via Ollama `nomic-embed-text`; ADRs live in `<repo>/docs/adr/`; new `architecture_review(target_mode)` tool covers codebase + diff modes; same tool signature in host and AWS modes — only resolvers change. See [docs/adr/0036-architect-mcp-server.md](docs/adr/0036-architect-mcp-server.md) | Accepted |
+| 0037 | Architectural gate (AaC engine) — `architectural_gate_node` between architect and synthesise calls `execute_architecture_check` via gateway; `route_after_gate` routes PASS → synthesise, FAIL (HARD or SOFT without justification) → human_gate, SOFT with justification → synthesise; failures recorded in dedicated `architectural_gate_failures` Dolt table with DOLT_COMMIT per write; `POST /audit/architectural-gate` endpoint on governance; container sandbox stub deferred to follow-up | Accepted |
