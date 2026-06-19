@@ -130,11 +130,11 @@ Every tool call the agent makes produces:
 | `mcpjungle`      | mcpjungle/mcpjungle:latest     | 8080 | MCP proxy / tool registry / MCP server for Claude Code       |
 | `dolt`           | local build                    | 3306 | Git-versioned audit log + formula store                      |
 | `governance`     | local build                    | 8090 | OAuth token issuance (`/oauth/token`), OPA policy check (`/check`), async Dolt audit (`/audit`) |
-| `git-diff-stub`  | local build                    | 9001 | Real `git diff` MCP server (baked sample repo)               |
+| `diff-proxy`     | local build                    | 9001 | Real `git diff` MCP server (baked sample repo)               |
 | `linter-stub`    | local build                    | 9002 | Semgrep-based `run_linter` MCP server (`semgrep-rules.yml`)  |
-| `architect-stub` | local build                    | 9004 | Stub MCP server for architect-role tools (codebase_search, adr_read, adr_write, diagram_gen, execute_architecture_check) |
+| `github-mcp`     | local build                    | 9010 | GitHub API MCP server — `codebase_search` + `adr_read` (read-only) |
 | `sre-stub`       | local build                    | 9005 | Stub MCP server for SRE-role tools                           |
-| `review-server`  | local build                    | 9003 | `review_diff` MCP tool — runs full code-reviewer agent       |
+| `review-server`  | local build                    | 9003 | `review_diff`, `architecture_review`, `execute_architecture_check` MCP tools — runs full code-reviewer agent, architecture review, and architectural gate |
 | `register-*`     | mcpjungle image                | —    | One-shot init containers that register MCP servers           |
 
 ---
@@ -671,3 +671,4 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0035 | Skill execution moved out of `GatewayClient` into a dedicated `SkillRunner` module — the gateway's real job is per-call routing (auth, OPA check, invoke, audit), whereas skill execution is a stateful workflow built on top of `call_tool`; collocating them produced a 357-line class mixing four concerns; the new `SkillRunner` takes a `GatewayClient` collaborator so token caching, OPA, and audit still flow through one place; `GatewayClient.execute_skill` retained as a thin delegating shim for back-compat; `GatewayClient.get_token` promoted from `_get_token` to a public method so the new module reads it through a clean seam | Accepted |
 | 0036 | Architect MCP server replicates semble's pattern — host-side FastMCP streamable-HTTP, `repo`-per-call (v1: local path / `https://`; v2: `s3://` + `upload://` for ECS), LRU cache keyed by commit SHA, hybrid BM25+dense via Ollama `nomic-embed-text`; ADRs live in `<repo>/docs/adr/`; new `architecture_review(target_mode)` tool covers codebase + diff modes; same tool signature in host and AWS modes — only resolvers change. See [docs/adr/0036-architect-mcp-server.md](docs/adr/0036-architect-mcp-server.md) | Accepted |
 | 0037 | Architectural gate (AaC engine) — `architectural_gate_node` between architect and synthesise calls `execute_architecture_check` via gateway; `route_after_gate` routes PASS → synthesise, FAIL (HARD or SOFT without justification) → human_gate, SOFT with justification → synthesise; failures recorded in dedicated `architectural_gate_failures` Dolt table with DOLT_COMMIT per write; `POST /audit/architectural-gate` endpoint on governance; container sandbox stub deferred to follow-up | Accepted |
+| 0038 | Replace host-side architect server with review-server and github-mcp — `architecture_review` + `execute_architecture_check` moved to review-server (has multi-provider LLM, already in Docker); `codebase_search` + `adr_read` served by new github-mcp service wrapping GitHub API (read-only); `adr_write` and `diagram_gen` removed (review-only); host-side retired, all services now run in Docker | Accepted |

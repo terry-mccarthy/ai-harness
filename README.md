@@ -96,7 +96,7 @@ All options are in `.env` (copy from `.env.example`):
 To enable debug logging without restarting the whole stack:
 
 ```bash
-LOG_LEVEL=DEBUG docker compose up -d git-diff-stub linter-stub review-server governance
+LOG_LEVEL=DEBUG docker compose up -d diff-proxy linter-stub review-server governance
 ```
 
 ## Tests

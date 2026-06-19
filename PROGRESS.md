@@ -800,9 +800,31 @@ All three require a valid Bearer token (JWT decode only; no OPA check — read-o
 - [x] All 10 unit tests pass without Docker (0.18s); 2 E2E tests pass with InMemorySaver
 
 **Notes / divergences**
-- No container sandbox created yet — `execute_architecture_check` is a thin mapping to `architect_stub__execute_architecture_check`. The sandbox isolation (Docker-in-Docker sandbox containers) is deferred to a follow-up phase. The graph wiring, Dolt schema, OPA policy, and governance endpoint are fully functional: swapping in a real sandbox server requires only changing the stub handler.
-- `ArchitectAgent.allowed_tools` was already restricted to `["codebase_search", "adr_read", "adr_write", "diagram_gen"]` (no `architecture_review`) before this phase — no change needed.
+- The container sandbox path remains a stub (`execute_architecture_check` runs checkers inside the review-server container, not in an isolated sandbox). The subprocess-based checkers (`import-linter`, `xenon`) are mounted directly — the architecture is ready for sandbox-in-Docker replacement.
+- `ArchitectAgent.allowed_tools` was already restricted to `["codebase_search", "adr_read"]` (no `architecture_review`) before this phase — no change needed.
 - `state.py` already had `ArchitecturalViolation`, `GateSignalContract`, and the extended `HarnessState` fields (`target_language`, `repo_path`, `gate_signal`, `human_justification`) from a prior edit — no state changes were needed.
+
+### Post-Phase 7: Stub → Real Gate (2026-06-19)
+
+Replaced `execute_architecture_check` stub with subprocess-based deterministic checkers:
+
+- `services/review_server/architecture_gate/` package with checker framework:
+  - `models.py` — `GateSignalContract` + `Violation` dataclasses
+  - `base.py` — `Checker` ABC
+  - `registry.py` — language → checker list map (unknown languages → PASS)
+  - `runner.py` — orchestrator: HARD violations short-circuit, SOFT allows PROCEED
+  - `checkers/import_linter.py` — subprocess wrapper for import-linter
+  - `checkers/xenon_checker.py` — subprocess wrapper for xenon
+- 9 unit tests (`test_unit_architecture_gate.py`) cover: unknown language, clean repos, layer violations, complexity violations, HARD short-circuit, SOFT proceed, graceful handling of uninstalled tools, and timeouts
+- `server.py:execute_architecture_check` now calls `run_gate()` instead of a stub
+- `pyproject.toml` deps: `import-linter>=2.0`, `xenon>=0.9`
+- Dockerfile updated to copy `architecture_gate/` into container
+- `uv.lock` + `requirements.txt` regenerated
+
+**Notes**
+- Unregistered languages return PASS (no false positives)
+- Checker failures (tool not installed, timeout) return empty violations (graceful degradation)
+- `repo_path` currently uses the path as-is; GitHub URL → temp dir clone is next
 
 ---
 
@@ -836,3 +858,41 @@ All three require a valid Bearer token (JWT decode only; no OPA check — read-o
 
 **Notes**
 - Lazy import of `SkillRunner` inside `GatewayClient.execute_skill` avoids the circular import that would otherwise arise from `skill_runner.py` importing `ToolAccessDenied` from `client`.
+
+---
+
+## ADR-0038: Architect Server Retirement ✅
+
+**Summary:** Replaced the host-side architect server (Python FastMCP running outside Docker) with a pure-Docker approach:
+- `architecture_review` + `execute_architecture_check` moved to the review server (already has multi-provider LLM support, FastMCP, Docker)
+- `codebase_search` + `adr_read` moved to new `services/github_mcp/` service wrapping the GitHub API
+- `adr_write` and `diagram_gen` removed — architect role is review-only
+- Host-side architect server (`host_servers/architect_server/`) deleted
+- Registration for `architect_stub` now points to `github-mcp:9010` instead of `host.docker.internal:9006`
+
+**Files created:** `services/github_mcp/server.py`, `services/github_mcp/Dockerfile`, `services/review_server/architecture_review.py`
+
+**Files removed:** Entire `host_servers/architect_server/` directory (server.py, llm.py, architect_review.py, adr.py, diagram.py, search.py, resolver.py, embeddings.py, cache.py, tests/)
+
+**Files modified:**
+- `services/review_server/server.py` — added `architecture_review` and `execute_architecture_check` MCP tools
+- `services/review_server/Dockerfile` — copies `architecture_review.py`
+- `packages/harness-gateway/harness_gateway/client.py` — `TOOL_NAME_MAP` updated; `architecture_review`, `execute_architecture_check` → `review_server__*`; `adr_write`, `diagram_gen` removed
+- `packages/harness-agents/harness_agents/architect.py` — `allowed_tools` now only `["codebase_search", "adr_read"]`
+- `policies/harness.rego` — removed `adr_write`, `diagram_gen` from architect; added `architecture_review`, `execute_architecture_check` to code_reviewer
+- `docker-compose.yml` — added `github-mcp` service + `register-github-mcp`; `register-architect` points to `github-mcp:9010`; removed `extra_hosts` for `host.docker.internal`
+- `services/contextforge_setup/setup.py` — architect_stub URL → `github-mcp:9010`
+- `Makefile` — removed `architect-up`, `architect-down`, `architect-status` targets and vars
+- `pyproject.toml` — removed `architect_server` from workspace members
+- `.gitignore` — removed architect pid/log entries
+- `ARCHITECTURE.md` — services table, OPA policy table, ADR table, Architectural Gate section updated
+- `CLAUDE.md` — startup command updated, tool name mappings updated
+
+**Tests:** All governance (17), Phase 6 OPA (11), Phase 6 agent invoke (6), Phase 3+4 unit (22), Phase 7 unit+integration (14) pass.
+
+**Service verification via MCPJungle:**
+- `architect_stub__codebase_search` → routed to github-mcp (requires `GITHUB_TOKEN`)
+- `architect_stub__adr_read` → routed to github-mcp ✅
+- `review_server__architecture_review` → routed to review-server ✅
+- `review_server__execute_architecture_check` → routed to review-server ✅
+- `review_server__review_diff` → routed to review-server ✅
