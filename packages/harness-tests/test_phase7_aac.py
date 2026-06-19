@@ -268,7 +268,6 @@ async def test_architect_halts_on_hard_constraint():
         gateway=_mock_gateway({
             "codebase_search": {"files": []},
             "adr_read": {"adrs": []},
-            "adr_write": {"id": "ADR-001"},
             "execute_architecture_check": _GATE_FAIL_LAYER,
         }),
         checkpointer=InMemorySaver(),
@@ -299,7 +298,6 @@ async def test_architect_passes_on_clean_code():
         gateway=_mock_gateway({
             "codebase_search": {"files": []},
             "adr_read": {"adrs": []},
-            "adr_write": {"id": "ADR-001"},
             "execute_architecture_check": _GATE_PASS,
         }),
         checkpointer=InMemorySaver(),

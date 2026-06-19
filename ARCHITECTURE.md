@@ -216,8 +216,8 @@ Violations are recorded in a dedicated Dolt table `architectural_gate_failures` 
 
 | Role             | Allowed tools / scopes                                                                |
 |------------------|---------------------------------------------------------------------------------------|
-| `architect`      | `codebase_search`, `adr_read`, `adr_write`, `diagram_gen`, `execute_architecture_check` |
-| `code_reviewer`  | `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`   |
+| `architect`      | `codebase_search`, `adr_read`, `architecture_review`, `execute_architecture_check` |
+| `code_reviewer`  | `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`, `architecture_review`, `execute_architecture_check` |
 | `sre`            | `observability_query`, `runbook_read`, `log_search`, `shell_exec`                     |
 | `sre` + `code_reviewer` | `episode:label` scope, `candidate:propose` scope                           |
 | `human_operator` | `skill:promote` scope (promote + reject + revoke — no tool access)                    |

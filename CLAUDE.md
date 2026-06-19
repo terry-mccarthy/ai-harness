@@ -158,7 +158,7 @@ allow {             # broken — rego_parse_error on modern OPA
 ```
 
 Current policy (`policies/harness.rego`) maps three roles to tool sets:
-- `architect` → `codebase_search`, `adr_read`, `adr_write`, `diagram_gen`, `architecture_review`
+- `architect` → `codebase_search`, `adr_read`, `architecture_review`, `execute_architecture_check`
 - `code_reviewer` → `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`
 - `sre` → `observability_query`, `runbook_read`, `log_search`, `shell_exec`
 

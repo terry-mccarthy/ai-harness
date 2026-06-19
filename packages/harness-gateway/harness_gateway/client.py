@@ -13,15 +13,13 @@ logger = logging.getLogger(__name__)
 
 # Maps short tool names to MCPJungle's server__tool format
 TOOL_NAME_MAP = {
-    "git_diff": "git_diff_stub__git_diff",
+    "git_diff": "diff_proxy__git_diff",
     "run_linter": "linter_stub__run_linter",
     "review_diff": "review_server__review_diff",
     "codebase_search": "architect_stub__codebase_search",
     "adr_read": "architect_stub__adr_read",
-    "adr_write": "architect_stub__adr_write",
-    "diagram_gen": "architect_stub__diagram_gen",
-    "architecture_review": "architect_stub__architecture_review",
-    "execute_architecture_check": "architect_stub__execute_architecture_check",
+    "architecture_review": "review_server__architecture_review",
+    "execute_architecture_check": "review_server__execute_architecture_check",
     "observability_query": "sre_stub__observability_query",
     "runbook_read": "sre_stub__runbook_read",
     "log_search": "sre_stub__log_search",

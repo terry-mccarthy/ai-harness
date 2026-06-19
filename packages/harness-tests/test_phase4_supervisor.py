@@ -566,7 +566,6 @@ async def test_full_design_task_e2e():
         gateway=_mock_gateway({
             "codebase_search": {"files": []},
             "adr_read": {"adrs": []},
-            "adr_write": {"id": "ADR-001"},
         }),
         checkpointer=InMemorySaver(),
     )

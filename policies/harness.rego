@@ -4,12 +4,12 @@ default allow = false
 
 allow if {
     input.agent_role == "architect"
-    input.tool_name in {"codebase_search", "adr_read", "adr_write", "diagram_gen", "architecture_review", "execute_architecture_check"}
+    input.tool_name in {"codebase_search", "adr_read", "architecture_review", "execute_architecture_check"}
 }
 
 allow if {
     input.agent_role == "code_reviewer"
-    input.tool_name in {"git_diff", "run_linter", "coverage_report", "repo_conventions_read", "review_diff"}
+    input.tool_name in {"git_diff", "run_linter", "coverage_report", "repo_conventions_read", "review_diff", "architecture_review", "execute_architecture_check"}
 }
 
 allow if {
