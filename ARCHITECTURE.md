@@ -197,7 +197,7 @@ Governance no longer forwards tool calls. Rate limiting is delegated to the gate
 
 ### Architectural Gate (Phase 7)
 
-A static-analysis gate that runs between `architect` output and `synthesise`. The `architectural_gate_node` calls `execute_architecture_check` via the gateway, which evaluates the repository code against rules defined in `ARCHITECTURE.md`.
+A static-analysis gate that runs between `architect` output and `synthesise`. The `architectural_gate_node` calls `execute_architecture_check` via the gateway (mapped to `review_server__execute_architecture_check` in TOOL_NAME_MAP), which evaluates the repository code against rules defined in `ARCHITECTURE.md`. `architecture_review` and `execute_architecture_check` are served by the review server, replacing the host-side architect server (removed in ADR-0038).
 
 ```
 architect → architectural_gate → route_after_gate

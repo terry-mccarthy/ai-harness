@@ -206,5 +206,63 @@ async def run_skill(
         raise RuntimeError(str(e)) from e
 
 
+@mcp.tool()
+async def architecture_review(
+    target_mode: str,
+    repo: str,
+    diff: str | None = None,
+    provider: str | None = None,
+) -> dict:
+    """Score a codebase or diff against the repo's stated architectural invariants.
+
+    Fetches ``ARCHITECTURE.md`` and ADRs from the GitHub repo via the GitHub API,
+    then scores the codebase file tree (``target_mode="codebase"``) or a unified
+    diff (``target_mode="diff"``) against the stated invariants.
+
+    Args:
+        target_mode: ``"codebase"`` (scan file tree) or ``"diff"`` (score a unified diff).
+        repo: GitHub URL (e.g. ``"https://github.com/owner/repo"``).
+        diff: Unified diff text (required when ``target_mode="diff"``).
+        provider: Optional LLM provider override (``"ollama"``, ``"gemini"``, or ``"openrouter"``).
+            Falls back to the ``LLM_PROVIDER`` environment variable.
+    """
+    from architecture_review import architecture_review as _architecture_review
+
+    resolved_provider = (provider or os.environ.get("LLM_PROVIDER", "ollama")).lower()
+    llm_provider = _build_llm_provider(resolved_provider)
+    try:
+        return await _architecture_review(
+            repo=repo,
+            target_mode=target_mode,
+            diff=diff,
+            llm_provider=llm_provider,
+        )
+    except Exception as e:
+        logging.exception("architecture_review failed")
+        raise RuntimeError(str(e)) from e
+
+
+@mcp.tool()
+async def execute_architecture_check(
+    target_language: str,
+    repo_path: str,
+) -> dict:
+    """Execute static analysis checks on the target codebase and return a GateSignalContract.
+
+    Args:
+        target_language: The programming language of the codebase (e.g., ``'python'``, ``'php'``, ``'typescript'``).
+        repo_path: The directory path or GitHub URL of the codebase to analyze.
+    """
+    from architecture_gate.runner import run_gate
+
+    logging.info(
+        "execute_architecture_check called for lang=%s repo=%s",
+        target_language,
+        repo_path,
+    )
+    signal = await run_gate(repo_path, target_language)
+    return signal.to_dict()
+
+
 if __name__ == "__main__":
     uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=9003)

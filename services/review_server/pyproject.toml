@@ -8,6 +8,8 @@ dependencies = [
     "ollama>=0.3",
     "httpx>=0.27",
     "jsonschema>=4.22",
+    "import-linter>=2.0",
+    "xenon>=0.9",
 ]
 
 [tool.setuptools.packages.find]
