@@ -11,6 +11,7 @@ COPY packages/harness-agents /app/packages/harness-agents
 RUN pip install -e /app/packages/harness-gateway -e /app/packages/harness-agents
 
 COPY prompts /app/prompts
+COPY services/review_server/metrics.py /app/metrics.py
 COPY services/review_server/server.py /app/server.py
 COPY services/review_server/architecture_review.py /app/architecture_review.py
 COPY services/review_server/architecture_gate/ /app/architecture_gate/
