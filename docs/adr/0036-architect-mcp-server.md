@@ -23,7 +23,7 @@ unusable.
 
 The four tools need real implementations. The hardest sub-decision is *how the
 tools access the codebase being analysed*. Existing containerised stubs
-(`git-diff-stub`) bake a sample repo into the image; that approach does not
+(`diff-proxy`) bake a sample repo into the image; that approach does not
 generalise to "analyse my actual repo".
 
 `semble` (the project's existing code-search MCP, installed as a host-side `uv`
@@ -105,7 +105,7 @@ Replicate semble's architecture for the architect MCP server.
 | Option | Why rejected |
 |---|---|
 | Bind-mount host repo read-only into the existing `architect-stub` container | Works for one repo at a time; no `repo`-per-call flexibility; `watchfiles` unreliable on macOS Docker bind mounts |
-| Bake a sample repo into the image (`git-diff-stub` pattern) | Does not generalise to "analyse my actual repo" |
+| Bake a sample repo into the image (`diff-proxy` pattern) | Does not generalise to "analyse my actual repo" |
 | Delegate `codebase_search` to the existing semble MCP server | Loses control over result shape and the architect-specific tools (`adr_*`, `architecture_review`); couples architect to an external MCP server |
 | Stdio MCP server (exactly like semble) | Does not fit MCPJungle's HTTP registration model without a stdio-to-HTTP shim |
 | Containerised with on-demand clone only (no host process) | Loses local-path mode; cannot review unpushed working trees during development |

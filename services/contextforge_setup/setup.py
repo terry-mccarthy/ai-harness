@@ -35,9 +35,9 @@ CF_SERVER_NAME = os.environ.get("CF_SERVER_NAME", "harness_all")
 STUBS_RAW = os.environ.get(
     "STUBS",
     (
-        "git_diff_stub=http://git-diff-stub:9001/mcp,"
+        "diff_proxy=http://diff-proxy:9001/mcp,"
         "linter_stub=http://linter-stub:9002/mcp,"
-        "architect_stub=http://architect-stub:9004/mcp,"
+        "architect_stub=http://github-mcp:9010/mcp,"
         "sre_stub=http://sre-stub:9005/mcp"
     ),
 )

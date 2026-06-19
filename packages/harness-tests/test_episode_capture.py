@@ -108,7 +108,7 @@ def test_episode_agent_principal_matches_jwt_sub():
 def test_audit_still_returns_202():
     """POST /audit always returns 202 (episode write is fire-and-forget)."""
     token = _get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
-    resp = _post_audit(token, "git_diff_stub__git_diff")
+    resp = _post_audit(token, "diff_proxy__git_diff")
     assert resp.status_code == 202
 
 
@@ -121,7 +121,7 @@ def test_audit_still_returns_202():
 def test_audit_log_still_written():
     """Existing audit_log write is unaffected after episode capture is added."""
     token = _get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
-    resp = _post_audit(token, "git_diff_stub__git_diff")
+    resp = _post_audit(token, "diff_proxy__git_diff")
     assert resp.status_code == 202
 
     time.sleep(1)

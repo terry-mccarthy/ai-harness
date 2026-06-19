@@ -178,7 +178,7 @@ mcp = FastMCP(
 )
 ```
 
-FastMCP defaults to DNS rebinding protection on `127.0.0.1`. Since Docker containers call each other by hostname (e.g. `git-diff-stub:9001`), the Host header validation fires and returns 421 unless disabled.
+FastMCP defaults to DNS rebinding protection on `127.0.0.1`. Since Docker containers call each other by hostname (e.g. `diff-proxy:9001`), the Host header validation fires and returns 421 unless disabled.
 
 ## GatewayClient response unwrapping
 

@@ -463,7 +463,7 @@ POST /skills/select  (any valid JWT)
 
 ## git_diff Tool
 
-The `git-diff-stub` container bakes in a sample repo at `/app/sample-repo` with two commits —
+The `diff-proxy` container bakes in a sample repo at `/app/sample-repo` with two commits —
 the second adds a password-logging `print` statement. This lets the full review pipeline run
 against a real diff without an external repo.
 

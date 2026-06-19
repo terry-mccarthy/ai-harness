@@ -42,11 +42,11 @@ services:
       interval: 5s
       retries: 10
 
-  git-diff-stub:
+  diff-proxy:
     build:
       context: ./stub_servers
       dockerfile: Dockerfile.stub
-    command: python git_diff_server.py
+    command: python diff_proxy_server.py
     ports: ["9001:9001"]
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -69,13 +69,13 @@ services:
       interval: 5s
       retries: 10
 
-  register-git-diff:
+  register-diff-proxy:
     image: mcpjungle/mcpjungle:latest
-    command: ["register", "--name", "git_diff_stub", "--url", "http://git-diff-stub:9001/mcp", "--registry", "http://mcpjungle:8080", "--force"]
+    command: ["register", "--name", "diff_proxy", "--url", "http://diff-proxy:9001/mcp", "--registry", "http://mcpjungle:8080", "--force"]
     depends_on:
       mcpjungle:
         condition: service_healthy
-      git-diff-stub:
+      diff-proxy:
         condition: service_healthy
     restart: "no"
 
@@ -252,7 +252,7 @@ services:
         condition: service_healthy
       sre-stub:
         condition: service_healthy
-      git-diff-stub:
+      diff-proxy:
         condition: service_healthy
       linter-stub:
         condition: service_healthy

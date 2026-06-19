@@ -37,7 +37,7 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 - **PostgreSQL** (`pgvector/pgvector:pg16`) — MCPJungle state, LangGraph checkpoints, and vector memory store; pgvector extension enables semantic search
 - **Redis 7** — hot-read cache for the memory store; frequently accessed items served in-process without hitting PostgreSQL
 - **Ollama** (`qwen2.5-coder:32b` default) — local LLM for reviews and vector embeddings; no API key needed
-- **git-diff-stub** — real `git diff` on the baked sample repo, or fetches a PR diff from the GitHub API (`pr_number` + `github_repo`; reads `GITHUB_TOKEN` from env)
+- **diff-proxy** — real `git diff` on the baked sample repo, or fetches a PR diff from the GitHub API (`pr_number` + `github_repo`; reads `GITHUB_TOKEN` from env)
 - **linter-stub** — semgrep-based linter (`semgrep-rules.yml`); catches SQL f-string injection, hardcoded credentials, `subprocess shell=True`, `open()` f-string paths, and `eval()`
 - **architect-stub** — stub MCP server for architect-role tools (`codebase_search`, `adr_read`, `adr_write`, `diagram_gen`)
 - **sre-stub** — stub MCP server for SRE-role tools (`observability_query`, `runbook_read`, `log_search`, `shell_exec`)
@@ -56,7 +56,7 @@ cp .env.example .env
 # JWT_PRIVATE_KEY_FILE defaults to test-fixtures/jwt-test-key.pem (dev only; set ENV=test)
 
 # 2. Build and start the stack
-docker compose build git-diff-stub linter-stub architect-stub sre-stub review-server governance dolt
+docker compose build diff-proxy linter-stub architect-stub sre-stub review-server governance dolt
 docker compose up -d
 sleep 30  # wait for Dolt to init and MCP init containers to register servers
 

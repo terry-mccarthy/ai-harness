@@ -1,7 +1,7 @@
 import pytest
 from harness_gateway.client import GatewayClient
 
-# The git-diff-stub container has a baked-in sample repo at /app/sample-repo
+# The diff-proxy container has a baked-in sample repo at /app/sample-repo
 # with one commit that adds a file containing a password print statement.
 # These tests verify the tool runs real git commands against it.
 

@@ -461,11 +461,11 @@ services:
       postgres:
         condition: service_healthy
 
-  git-diff-stub:
+  diff-proxy:
     build:
       context: ./stub_servers
       dockerfile: Dockerfile.stub
-    command: python git_diff_server.py
+    command: python diff_proxy_server.py
     ports: ["9001:9001"]
 
   linter-stub:
@@ -501,7 +501,7 @@ tool_groups:
   - name: code_reviewer
     tools:
       - name: git_diff
-        server: http://git-diff-stub:9001
+        server: http://diff-proxy:9001
       - name: run_linter
         server: http://linter-stub:9002
 ```

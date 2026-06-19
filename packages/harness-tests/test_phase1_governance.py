@@ -147,7 +147,7 @@ def test_architect_denied_tool():
 def test_reviewer_allowed_tool():
     """code-reviewer token gets allowed=true for git_diff."""
     token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
-    resp = check_policy(token, "git_diff_stub__git_diff")
+    resp = check_policy(token, "diff_proxy__git_diff")
     assert resp.status_code == 200
     assert resp.json().get("allowed") is True
 
@@ -172,7 +172,7 @@ def test_sre_allowed_tool():
 @pytest.mark.integration
 def test_unknown_token_rejected():
     """Request with 'Bearer invalid-token' returns 401 from /check."""
-    resp = check_policy("invalid-token", "git_diff_stub__git_diff")
+    resp = check_policy("invalid-token", "diff_proxy__git_diff")
     assert resp.status_code == 401
 
 
@@ -185,7 +185,7 @@ def test_unknown_token_rejected():
 def test_audit_row_written():
     """After POST /audit, a row exists in audit_log table (Dolt via MySQL)."""
     token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
-    audit_resp = post_audit(token, "git_diff_stub__git_diff")
+    audit_resp = post_audit(token, "diff_proxy__git_diff")
     assert audit_resp.status_code == 202
 
     # Brief wait for background write
@@ -205,7 +205,7 @@ def test_audit_row_written():
 def test_audit_policy_rule_recorded():
     """audit_log row has policy_decision and policy_rule fields populated."""
     token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
-    post_audit(token, "git_diff_stub__git_diff")
+    post_audit(token, "diff_proxy__git_diff")
     time.sleep(1)
 
     conn = get_dolt_conn()
@@ -228,7 +228,7 @@ def test_audit_policy_rule_recorded():
 def test_audit_dolt_commit_created():
     """After /audit, DOLT_LOG() shows a new commit with the tool name."""
     token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
-    post_audit(token, "git_diff_stub__git_diff")
+    post_audit(token, "diff_proxy__git_diff")
     time.sleep(1)
 
     conn = get_dolt_conn()
@@ -248,7 +248,7 @@ def test_audit_dolt_commit_created():
 def test_audit_dolt_history_queryable():
     """SELECT * FROM dolt_diff_audit_log returns at least one row after a commit."""
     token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
-    post_audit(token, "git_diff_stub__git_diff")
+    post_audit(token, "diff_proxy__git_diff")
     time.sleep(1)
 
     conn = get_dolt_conn()
@@ -323,5 +323,5 @@ def test_token_expiry():
         private_key,
         algorithm="RS256",
     )
-    resp = check_policy(expired, "git_diff_stub__git_diff")
+    resp = check_policy(expired, "diff_proxy__git_diff")
     assert resp.status_code == 401

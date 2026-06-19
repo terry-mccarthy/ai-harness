@@ -12,7 +12,7 @@ logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
-    "git_diff_stub",
+    "diff_proxy",
     host="0.0.0.0",
     port=9001,
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
@@ -29,7 +29,7 @@ def _fetch_github_pr_diff(github_repo: str, pr_number: int, token: str | None) -
         url,
         headers={
             "Accept": "application/vnd.github.v3.diff",
-            "User-Agent": "ai-harness-git-diff-stub",
+            "User-Agent": "ai-harness-diff-proxy",
         },
     )
     if token:
