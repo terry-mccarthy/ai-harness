@@ -156,7 +156,8 @@ services/
   prometheus/        — scrape config for governance /metrics
   dolt/              — Dolt init: audit_log + formulas + formula_pours + seed data
   postgres/          — PostgreSQL init: enables pgvector extension
-  review_server/     — FastMCP server wrapping CodeReviewerAgent
+  github_mcp/        — FastMCP server wrapping GitHub API (codebase_search, adr_read)
+  review_server/     — FastMCP server wrapping CodeReviewerAgent + architecture_review + execute_architecture_check
 
 security/
   owasp-review.md    — OWASP Agentic AI Top 10 review

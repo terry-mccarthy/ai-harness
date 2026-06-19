@@ -142,8 +142,29 @@ services:
       retries: 20
       start_period: 60s
 
-  # architect-stub removed in ADR-0036 slice 1 — replaced by host-side
-  # architect server at host.docker.internal:9006 (see `make architect-up`).
+  github-mcp:
+    build:
+      context: .
+      dockerfile: services/github_mcp/Dockerfile
+    ports: ["9010:9010"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      ARCHITECT_DEFAULT_REPO: ${ARCHITECT_DEFAULT_REPO:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9010)); s.close()\""]
+      interval: 5s
+      retries: 10
+
+  register-github-mcp:
+    image: mcpjungle/mcpjungle:latest
+    command: ["register", "--name", "github_mcp", "--url", "http://github-mcp:9010/mcp", "--registry", "http://mcpjungle:8080", "--force"]
+    depends_on:
+      mcpjungle:
+        condition: service_healthy
+      github-mcp:
+        condition: service_healthy
+    restart: "no"
 
   sre-stub:
     build:
@@ -160,15 +181,14 @@ services:
 
   register-architect:
     image: mcpjungle/mcpjungle:latest
-    # Registered name is intentionally architect_stub — kept post-retirement
-    # (ADR-0036 slice 8) to preserve TOOL_NAME_MAP entries and avoid churning
-    # every audit log, test, and runbook that references the prefix.
-    command: ["register", "--name", "architect_stub", "--url", "http://host.docker.internal:9006/mcp", "--registry", "http://mcpjungle:8080", "--force"]
+    # architect_stub now served by github-mcp (read-only codebase_search + adr_read).
+    # Write tools (adr_write, diagram_gen) removed — architect role is review-only.
+    command: ["register", "--name", "architect_stub", "--url", "http://github-mcp:9010/mcp", "--registry", "http://mcpjungle:8080", "--force"]
     depends_on:
       mcpjungle:
         condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      github-mcp:
+        condition: service_healthy
     restart: "no"
 
   register-sre:

@@ -29,7 +29,7 @@ Maintain code-health at >= 9
 
 ```bash
 # First time or after any changes to stub_servers/ or services/
-docker compose build git-diff-stub linter-stub architect-stub sre-stub review-server governance dolt
+docker compose build diff-proxy linter-stub github-mcp sre-stub review-server governance dolt
 docker compose down && docker compose up -d
 # wait ~30s for Dolt to init and MCP init containers to register servers
 docker compose ps   # all should show (healthy) or Exited (0)
@@ -69,7 +69,7 @@ Never hand-edit a service `requirements.txt` — it is always regenerated from t
 Agent / GatewayClient
     → POST /check          (governance :8090 — OPA policy decision)
     → POST /api/v0/tools/invoke   (MCPJungle :8080 or CF :4444 — direct)
-        → MCP server (architect-stub :9004 / sre-stub :9005 / etc.)
+        → MCP server (github-mcp :9010 / review-server :9003 / sre-stub :9005 / etc.)
     → POST /audit          (governance :8090 — async Dolt write, fire-and-forget)
 ```
 
