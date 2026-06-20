@@ -91,6 +91,60 @@ def _after_human_gate(state: HarnessState) -> str:
     return "error_handler"
 
 
+def _build_nodes(builder: StateGraph, llm_provider, fstore, gateway, architect, reviewer, sre):
+    builder.add_node("classify",        partial(classify_node,       llm_provider=llm_provider))
+    builder.add_node("formula_lookup",  partial(formula_lookup_node, formula_store=fstore))
+    builder.add_node("route",           route_span_node)
+    builder.add_node("architect",       partial(run_agent_node,      agent=architect))
+    builder.add_node("code_reviewer",   partial(run_agent_node,      agent=reviewer))
+    builder.add_node("sre",             partial(run_agent_node,      agent=sre))
+    builder.add_node("synthesise",      partial(synthesise_node,     formula_store=fstore, llm_provider=llm_provider))
+    builder.add_node("propose_formula", partial(propose_formula_node, formula_store=fstore))
+    builder.add_node("architectural_gate", partial(architectural_gate_node, gateway=gateway))
+    builder.add_node("human_gate",         _human_gate_node)
+    builder.add_node("error_handler",      error_handler_node)
+
+
+def _build_edges(builder: StateGraph):
+    builder.set_entry_point("classify")
+    builder.add_edge("classify", "formula_lookup")
+    builder.add_edge("formula_lookup", "route")
+    builder.add_conditional_edges("route", route_node, {
+        "architect": "architect", "code_reviewer": "code_reviewer", "sre": "sre",
+    })
+
+    builder.add_edge("architect", "architectural_gate")
+    builder.add_conditional_edges("architectural_gate", route_after_gate, {
+        "synthesise": "synthesise", "human_gate": "human_gate", "error_handler": "error_handler",
+    })
+
+    for agent_node in ("code_reviewer", "sre"):
+        builder.add_conditional_edges(agent_node, _should_propose_formula, {
+            "synthesise": "synthesise", "propose_formula": "propose_formula",
+            "human_gate": "human_gate", "error_handler": "error_handler",
+        })
+
+    builder.add_edge("propose_formula", "synthesise")
+    builder.add_conditional_edges("human_gate", _after_human_gate, {
+        "sre": "sre", "error_handler": "error_handler", END: END,
+    })
+    builder.add_edge("synthesise",    END)
+    builder.add_edge("error_handler", END)
+
+
+async def _setup_checkpointer(pg_dsn: str | None = None):
+    from psycopg_pool import AsyncConnectionPool
+    pool = AsyncConnectionPool(
+        conninfo=pg_dsn, max_size=5,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+        open=False,
+    )
+    await pool.open()
+    saver = AsyncPostgresSaver(pool)
+    await saver.setup()
+    return saver
+
+
 async def build_supervisor(
     llm_provider,
     gateway,
@@ -111,67 +165,11 @@ async def build_supervisor(
     sre       = SREAgent(gateway=gateway, llm_provider=llm_provider, memory_store=memory_store)
 
     builder = StateGraph(HarnessState)
-
-    # Node wiring with partial application for injected dependencies
-    builder.add_node("classify",        partial(classify_node,       llm_provider=llm_provider))
-    builder.add_node("formula_lookup",  partial(formula_lookup_node, formula_store=fstore))
-    builder.add_node("route",           route_span_node)
-    builder.add_node("architect",       partial(run_agent_node,      agent=architect))
-    builder.add_node("code_reviewer",   partial(run_agent_node,      agent=reviewer))
-    builder.add_node("sre",             partial(run_agent_node,      agent=sre))
-    builder.add_node("synthesise",      partial(synthesise_node,     formula_store=fstore, llm_provider=llm_provider))
-    builder.add_node("propose_formula", partial(propose_formula_node, formula_store=fstore))
-    builder.add_node("architectural_gate", partial(architectural_gate_node, gateway=gateway))
-    builder.add_node("human_gate",         _human_gate_node)
-    builder.add_node("error_handler",      error_handler_node)
-
-    # Edges
-    builder.set_entry_point("classify")
-    builder.add_edge("classify", "formula_lookup")
-    builder.add_edge("formula_lookup", "route")
-    builder.add_conditional_edges("route", route_node, {
-        "architect":     "architect",
-        "code_reviewer": "code_reviewer",
-        "sre":           "sre",
-    })
-
-    # Architect goes through architectural gate; other agents use formula routing
-    builder.add_edge("architect", "architectural_gate")
-    builder.add_conditional_edges("architectural_gate", route_after_gate, {
-        "synthesise":    "synthesise",
-        "human_gate":    "human_gate",
-        "error_handler": "error_handler",
-    })
-
-    for agent_node in ("code_reviewer", "sre"):
-        builder.add_conditional_edges(agent_node, _should_propose_formula, {
-            "synthesise":      "synthesise",
-            "propose_formula": "propose_formula",
-            "human_gate":      "human_gate",
-            "error_handler":   "error_handler",
-        })
-
-    builder.add_edge("propose_formula", "synthesise")
-    builder.add_conditional_edges("human_gate", _after_human_gate, {
-        "sre":           "sre",
-        "error_handler": "error_handler",
-        END:             END,
-    })
-    builder.add_edge("synthesise",    END)
-    builder.add_edge("error_handler", END)
+    _build_nodes(builder, llm_provider, fstore, gateway, architect, reviewer, sre)
+    _build_edges(builder)
 
     if checkpointer is None:
-        # Default: real PostgreSQL pool (used in production and durability tests)
-        from psycopg_pool import AsyncConnectionPool
-        pool = AsyncConnectionPool(
-            conninfo=pg_dsn,
-            max_size=5,
-            kwargs={"autocommit": True, "prepare_threshold": 0},
-            open=False,
-        )
-        await pool.open()
-        checkpointer = AsyncPostgresSaver(pool)
-        await checkpointer.setup()
+        checkpointer = await _setup_checkpointer(pg_dsn)
 
     return builder.compile(
         checkpointer=checkpointer,

@@ -110,10 +110,17 @@ class GatewayClient:
             return text
 
     def _extract_content(self, data: dict):
-        items = data.get("content") or data.get("result") or []
-        if not (items and isinstance(items[0], dict) and items[0].get("type") == "text"):
+        items = data.get("content")
+        if not items:
+            items = data.get("result")
+        if not items:
             return data
-        return self._parse_text_content(items[0]["text"])
+        first = items[0]
+        if not isinstance(first, dict):
+            return data
+        if first.get("type") != "text":
+            return data
+        return self._parse_text_content(first["text"])
 
     def _unwrap(self, data: dict, status: int, tool_name: str) -> dict:
         logger.debug("tool_call raw response: %s", data)

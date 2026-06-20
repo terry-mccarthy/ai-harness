@@ -239,12 +239,16 @@ def _handle_episodes(args, client: SkillsClient) -> None:
         _out(client.label_episode(args.id, args.outcome, json.loads(args.signal), args.labeler))
 
 
+def _propose(args, client: SkillsClient):
+    eids = [e.strip() for e in args.episodes.split(",")]
+    _out(client.propose_candidate(args.cluster_key, eids, json.loads(args.procedure)))
+
+
 def _handle_candidates(args, client: SkillsClient) -> None:
     if args.cand_cmd == "list":
         _out(client.list_candidates(status=args.status))
     elif args.cand_cmd == "propose":
-        eids = [e.strip() for e in args.episodes.split(",")]
-        _out(client.propose_candidate(args.cluster_key, eids, json.loads(args.procedure)))
+        _propose(args, client)
     elif args.cand_cmd == "promote":
         _out(client.promote_candidate(args.id))
     elif args.cand_cmd == "reject":

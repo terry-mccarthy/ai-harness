@@ -28,24 +28,27 @@ class SkillRunner:
         self.gateway = gateway
 
     async def execute(self, skill_id: str, inputs: dict | None = None) -> dict:
-        """Execute a promoted skill step-by-step with per-step OPA re-check."""
         if not self.gateway.governance_url:
             raise RuntimeError("SkillRunner requires gateway.governance_url to be set")
         skill = await self._fetch_skill(skill_id)
         steps = self._parse_steps(skill)
-        inputs = inputs or {}
-        results: list = []
+        resolved_inputs = inputs if inputs is not None else {}
+        results = await self._run_steps(steps, resolved_inputs)
+        return {
+            "skill_id": skill_id,
+            "steps_completed": self._count_completed(results),
+            "results": results,
+        }
+
+    async def _run_steps(self, steps: list, inputs: dict) -> list:
+        results = []
         for step in steps:
             try:
                 results.append(await self._execute_step(step, inputs))
             except ToolAccessDenied as exc:
                 if not await self._handle_step_failure(exc, step, inputs, results):
                     raise
-        return {
-            "skill_id": skill_id,
-            "steps_completed": self._count_completed(results),
-            "results": results,
-        }
+        return results
 
     async def _fetch_skill(self, skill_id: str) -> dict:
         token = await self.gateway.get_token()
@@ -72,12 +75,15 @@ class SkillRunner:
         action = step.get("action") or step.get("tool", "")
         result = await self.gateway.call_tool(action, inputs)
         expected = step.get("expected_signal")
-        if expected and isinstance(result, dict):
-            if not all(k in result for k in expected):
-                raise ToolAccessDenied(
-                    f"signal mismatch on step {action!r}: expected keys {list(expected)}"
-                )
+        missing = self._check_missing_keys(expected, result)
+        if missing:
+            raise ToolAccessDenied(f"signal mismatch on step {action!r}: missing keys {missing}")
         return {"step": action, "result": result}
+
+    def _check_missing_keys(self, expected, result):
+        if expected and isinstance(result, dict):
+            return [k for k in expected if k not in result]
+        return []
 
     async def _run_rollback(self, rollback_steps: list, inputs: dict) -> None:
         for rs in rollback_steps:

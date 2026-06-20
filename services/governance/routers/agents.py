@@ -104,6 +104,19 @@ async def _call_mcpjungle(tool_name: str, params: dict) -> dict:
     return data
 
 
+async def _check_or_raise(caller_role: str, target: str, correlation_id: str | None, claims: dict):
+    allowed_targets = await check_opa(
+        "harness/invoke_allowed",
+        {"role": caller_role, "action": "invoke", "target": target},
+    )
+    if target not in (allowed_targets or []):
+        write_audit(
+            claims["sub"], f"agent_invoke:{target}", target,
+            "", "", "deny", f"invoke_denied[{caller_role}->{target}]", 0, correlation_id,
+        )
+        raise HTTPException(403, "invoke_denied_by_policy")
+
+
 @router.post("/agent/invoke")
 async def agent_invoke(
     request: Request,
@@ -131,52 +144,22 @@ async def agent_invoke(
     if errors:
         raise HTTPException(422, {"errors": errors})
 
-    # OPA invoke check
-    allowed_targets = await check_opa(
-        "harness/invoke_allowed",
-        {"role": caller_role, "action": "invoke", "target": target},
-    )
-    if target not in (allowed_targets or []):
-        # Denied — write audit row synchronously (HTTPException cancels background tasks)
-        write_audit(
-            claims["sub"],
-            f"agent_invoke:{target}",
-            target,
-            "",
-            "",
-            "deny",
-            f"invoke_denied[{caller_role}->{target}]",
-            0,
-            correlation_id,
-        )
-        raise HTTPException(403, "invoke_denied_by_policy")
+    await _check_or_raise(caller_role, target, correlation_id, claims)
 
-    # Mint target's own token (do NOT forward caller's token)
     secret = os.environ.get(agent_spec["secret_env"], f"{agent_spec['client_id']}-secret")
     now = int(time.time())
-    target_token_payload = {
-        "sub": agent_spec["client_id"],
-        "role": agent_spec["role"],
-        "iat": now,
-        "exp": now + TOKEN_TTL,
-    }
-    target_token = jwt.encode(target_token_payload, PRIVATE_KEY, algorithm="RS256")
+    target_token = jwt.encode({
+        "sub": agent_spec["client_id"], "role": agent_spec["role"],
+        "iat": now, "exp": now + TOKEN_TTL,
+    }, PRIVATE_KEY, algorithm="RS256")
 
-    # Call MCPJungle entry tool using target's identity
     result = await _call_mcpjungle(agent_spec["entry_tool"], payload)
 
-    # Write audit as the target agent
     background_tasks.add_task(
         write_audit,
-        agent_spec["client_id"],
-        f"agent_invoke:{agent_spec['entry_tool']}",
-        agent_spec["entry_tool"],
-        "",
-        "",
-        "allow",
-        f"invoke_allowed[{caller_role}->{target}]",
-        0,
-        correlation_id,
+        agent_spec["client_id"], f"agent_invoke:{agent_spec['entry_tool']}",
+        agent_spec["entry_tool"], "", "", "allow",
+        f"invoke_allowed[{caller_role}->{target}]", 0, correlation_id,
     )
 
     return result

@@ -272,14 +272,17 @@ def _matches_ext(path: str, extensions: list[str]) -> bool:
     return False
 
 
+def _is_source_file(item: dict, extensions: list[str]) -> bool:
+    return item.get("type") == "blob" and _matches_ext(item["path"], extensions)
+
+
 def _filter_source_files(tree_data: dict, extensions: list[str]) -> list[str]:
     if not isinstance(tree_data, dict):
         return []
-    return [
-        item["path"]
-        for item in (tree_data.get("tree") or [])
-        if item.get("type") == "blob" and _matches_ext(item["path"], extensions)
-    ]
+    tree = tree_data.get("tree")
+    if not tree:
+        return []
+    return [item["path"] for item in tree if _is_source_file(item, extensions)]
 
 
 async def _score_file(

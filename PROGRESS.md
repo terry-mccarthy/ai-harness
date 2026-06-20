@@ -914,3 +914,20 @@ Replaced `execute_architecture_check` stub with subprocess-based deterministic c
 - `README.md`, `CLAUDE.md`, `ARCHITECTURE.md` — docs updated
 
 **Tests:** All existing governance, agent, and supervisor tests pass unchanged.
+
+---
+
+## Code Health Sprint — 7.9 → 9.0 ✅
+
+Four extractions reduced CCN in flagged hotspots, bringing overall score from **7.9 to 9.0**:
+
+| File | Before | Change | After |
+|---|---|---|---|
+| `skill_runner.py:_execute_step` | CCN 7 | Extracted `_check_missing_keys` (broke `all()` compound condition) | CCN 3 |
+| `code_analysis.py:_file_health_score` | CCN 10 | Extracted `_build_filter_expression` | CCN 3 |
+| `client.py:_extract_content` | CCN 10 | Extracted `_get_content_for_source` | CCN 3 |
+| `skills_cli.py:_handle_candidates` | CCN 6 | Extracted `_propose` (list comprehension out of elif chain) | CCN 5 |
+
+17 functions remain at CCN 6 (under threshold — all borderline `if`/`elif` chains with 4–5 branches). No further work planned.
+
+**Updated: 2026-06-20**
