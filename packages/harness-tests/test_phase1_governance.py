@@ -154,9 +154,9 @@ def test_reviewer_allowed_tool():
 
 @pytest.mark.integration
 def test_reviewer_denied_tool():
-    """code-reviewer token calling adr_write returns 403."""
+    """code-reviewer token calling issue_create returns 403 (architect-only)."""
     token = get_token("code-reviewer", os.environ["CODE_REVIEWER_SECRET"])
-    resp = check_policy(token, "architect_stub__adr_write")
+    resp = check_policy(token, "github_mcp__issue_create")
     assert resp.status_code == 403
 
 

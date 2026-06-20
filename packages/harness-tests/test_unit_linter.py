@@ -163,3 +163,41 @@ def test_semgrep_findings_bad_json_returns_empty():
 def test_severity_map_covers_all_semgrep_levels():
     for level in ("ERROR", "WARNING", "INFO"):
         assert level in _SEVERITY_MAP
+
+
+# ---------------------------------------------------------------------------
+# coverage_report — direct tool test (no mocking needed, synthetic data)
+# ---------------------------------------------------------------------------
+
+def test_coverage_report_returns_expected_structure():
+    from linter_server import coverage_report  # noqa: E402
+    result = coverage_report(file_paths=["auth.py", "db.py"])
+    assert isinstance(result, dict)
+    assert "files" in result
+    assert "overall_line_coverage" in result
+    assert "overall_statement_coverage" in result
+    assert len(result["files"]) == 2
+    assert result["files"][0]["path"] == "auth.py"
+    assert result["files"][1]["path"] == "db.py"
+    assert result["overall_line_coverage"] == 85.0
+    assert result["overall_statement_coverage"] == 82.4
+
+
+def test_coverage_report_file_entry_keys():
+    from linter_server import coverage_report  # noqa: E402
+    result = coverage_report(file_paths=["foo.py"])
+    entry = result["files"][0]
+    assert "path" in entry
+    assert "line_coverage" in entry
+    assert "statement_coverage" in entry
+    assert "uncovered_lines" in entry
+    assert "covered_lines_count" in entry
+    assert "total_lines_count" in entry
+
+
+def test_coverage_report_empty_file_list():
+    from linter_server import coverage_report  # noqa: E402
+    result = coverage_report(file_paths=[])
+    assert result["files"] == []
+    assert result["overall_line_coverage"] == 85.0
+    assert result["overall_statement_coverage"] == 82.4

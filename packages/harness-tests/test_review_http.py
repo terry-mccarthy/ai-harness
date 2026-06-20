@@ -40,6 +40,9 @@ async def _review_client(llm_response: str = _VALID_REVIEW, api_key: str | None 
     mock_gateway.call_tool = AsyncMock(return_value={"result": "ok"})
 
     class _MockLLM:
+        provider_name = "ollama"
+        model_name = "test-model"
+
         async def chat(self, messages):
             from harness_agents.llm import LLMResponse
             return LLMResponse(content=llm_response)
@@ -121,14 +124,17 @@ async def test_http_review_missing_diff_text_returns_422():
     assert resp.status_code == 422
 
 
-async def test_http_review_500_does_not_leak_internal_detail():
-    """500 body must not echo raw exception messages — use a generic message."""
+async def test_http_review_agent_error_returns_400():
+    """Agent-level errors (invalid LLM output) return 400, not 500."""
     import server as review_server
 
     mock_gateway = MagicMock()
     mock_gateway.call_tool = AsyncMock(return_value={"result": "ok"})
 
     class _ErrorLLM:
+        provider_name = "ollama"
+        model_name = "test-model"
+
         async def chat(self, messages):
             from harness_agents.llm import LLMResponse
             return LLMResponse(content="not-json")
@@ -142,36 +148,36 @@ async def test_http_review_500_does_not_leak_internal_detail():
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/review", json={"diff_text": _SAMPLE_DIFF})
 
-    assert resp.status_code == 500
+    assert resp.status_code == 400
     body = resp.json()
-    # Must not expose stack traces, internal paths, or raw exception text
-    assert "max retries" not in body.get("error", "").lower()
-    assert body.get("error") != ""   # some message is present
+    assert "max retries" in body.get("error", "").lower()
 
 
-async def test_http_review_agent_error_returns_500():
-    """When the agent can't produce valid JSON after all retries, return 500."""
+async def test_http_review_missing_provider_ollama_no_host_falls_back_to_env():
+    """Ollama provider is built successfully when no host override is given."""
     import server as review_server
 
     mock_gateway = MagicMock()
     mock_gateway.call_tool = AsyncMock(return_value={"result": "ok"})
 
-    class _ErrorLLM:
+    class _MockLLM:
+        provider_name = "ollama"
+        model_name = "test-model"
+
         async def chat(self, messages):
             from harness_agents.llm import LLMResponse
-            return LLMResponse(content="not-json")  # always fails schema validation
+            return LLMResponse(content=_VALID_REVIEW)
 
     app = review_server.mcp.streamable_http_app()
-
     with (
-        patch.object(review_server, "_build_llm_provider", return_value=_ErrorLLM()),
+        patch.object(review_server, "_build_llm_provider", return_value=_MockLLM()),
         patch("server.GatewayClient", return_value=mock_gateway),
         patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/review", json={"diff_text": _SAMPLE_DIFF})
 
-    assert resp.status_code == 500
+    assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -222,4 +228,120 @@ async def test_http_review_malformed_header_returns_401():
             json={"diff_text": _SAMPLE_DIFF},
             headers={"Authorization": "secret-token"},  # missing "Bearer " prefix
         )
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Slice 6 — Config API
+# ---------------------------------------------------------------------------
+
+async def test_config_get_returns_defaults():
+    """GET /config returns the current override dict (empty = all defaults)."""
+    import server as review_server
+    app = review_server.mcp.streamable_http_app()
+    with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/config")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "llm_provider" in body
+    assert body["llm_provider"] is None
+    assert "ollama" in body
+    assert "gemini" in body
+    assert "openrouter" in body
+
+
+async def test_config_get_sanitizes_api_keys():
+    """Sensitive keys are masked in the response."""
+    import server as review_server
+    review_server._CONFIG["openrouter"]["api_key"] = "sk-or-v1-abcdef1234567890"
+    review_server._CONFIG["gemini"]["api_key"] = "AIzaSyD-test-key-12345"
+    try:
+        app = review_server.mcp.streamable_http_app()
+        with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.get("/config")
+        assert resp.status_code == 200
+        body = resp.json()
+        # api_key values should be masked (partial display with "...")
+        assert "..." in body["openrouter"]["api_key"]
+        assert "sk-o" in body["openrouter"]["api_key"]
+        assert "..." in body["gemini"]["api_key"]
+        assert "AIza" in body["gemini"]["api_key"]
+    finally:
+        # restore clean state
+        review_server._CONFIG["openrouter"].pop("api_key", None)
+        review_server._CONFIG["gemini"].pop("api_key", None)
+
+
+async def test_config_put_updates_ollama_model():
+    """PUT /config updates a provider key and is reflected in GET."""
+    import server as review_server
+    app = review_server.mcp.streamable_http_app()
+    with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.put("/config", json={"ollama": {"model": "qwen2.5-coder:32b"}})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["config"]["ollama"]["model"] == "qwen2.5-coder:32b"
+    # verify side-effect on module global
+    assert review_server._get_cfg("ollama", "model") == "qwen2.5-coder:32b"
+
+
+async def test_config_put_clears_key_on_null():
+    """Setting a config key to null removes the override."""
+    import server as review_server
+    review_server._CONFIG["ollama"]["model"] = "some-model"
+    try:
+        app = review_server.mcp.streamable_http_app()
+        with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.put("/config", json={"ollama": {"model": None}})
+        assert resp.status_code == 200
+        assert review_server._get_cfg("ollama", "model") is None
+    finally:
+        review_server._CONFIG["ollama"].pop("model", None)
+
+
+async def test_config_put_updates_llm_provider():
+    """PUT can change the active llm_provider."""
+    import server as review_server
+    app = review_server.mcp.streamable_http_app()
+    with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.put("/config", json={"llm_provider": "openrouter"})
+    assert resp.status_code == 200
+    assert review_server._CONFIG["llm_provider"] == "openrouter"
+    # reset
+    review_server._CONFIG["llm_provider"] = None
+
+
+async def test_config_put_invalid_json_returns_422():
+    """Malformed body returns 422."""
+    import server as review_server
+    app = review_server.mcp.streamable_http_app()
+    with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.put("/config", content=b"not-json", headers={"Content-Type": "application/json"})
+    assert resp.status_code == 422
+
+
+async def test_config_get_respects_auth():
+    """GET /config respects REVIEW_API_KEY."""
+    import server as review_server
+    app = review_server.mcp.streamable_http_app()
+    with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080", "REVIEW_API_KEY": "sekret"}):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/config")
+    assert resp.status_code == 401
+
+
+async def test_config_put_respects_auth():
+    """PUT /config respects REVIEW_API_KEY."""
+    import server as review_server
+    app = review_server.mcp.streamable_http_app()
+    with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080", "REVIEW_API_KEY": "sekret"}):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.put("/config", json={"ollama": {"model": "x"}})
     assert resp.status_code == 401

@@ -148,7 +148,7 @@ VALUES
         'architect:write-adr', 'Write Architecture Decision Record', 'architect', 1, 'active',
         'Research and document an architecture decision record for a significant technical choice',
         '{"type":"object","properties":{"decision":{"type":"string"}}}',
-        '[{"action":"codebase_search"},{"action":"adr_read"},{"action":"adr_write"}]',
+        '[{"action":"codebase_search"},{"action":"adr_read"},{"action":"issue_create"}]',
         '{"type":"object","properties":{"adr_path":{"type":"string"}}}',
         'seed', NULL, DATE_ADD(NOW(), INTERVAL 10 YEAR), NOW()
     );

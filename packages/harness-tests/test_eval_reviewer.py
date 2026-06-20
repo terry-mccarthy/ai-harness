@@ -150,6 +150,59 @@ async def test_reviewer_fixture(diff_path: Path, label_path: Path):
 # Aggregate score report across all fixtures
 # ---------------------------------------------------------------------------
 
+async def _run_fixture(label_path: Path, diff_path: Path, llm) -> dict | None:
+    diff_text = diff_path.read_text()
+    label = json.loads(label_path.read_text())
+    agent = CodeReviewerAgent(gateway=_MockGateway(diff_text), llm_provider=llm)
+    state = {
+        "task": "Security review",
+        "diff": diff_text,
+        "thread_id": "eval",
+        "agent_output": None,
+        "requires_human_approval": False,
+        "error": None,
+        "human_approval_token": None,
+        "memory_context": None,
+    }
+    result = await agent.run(state)
+    if result.get("error"):
+        return None
+    return _score_fixture(label, result["agent_output"])
+
+
+async def _score_all_fixtures(llm) -> list[dict]:
+    scores = []
+    for label_path in sorted(LABELS_DIR.glob("*.json")):
+        diff_path = DIFFS_DIR / label_path.with_suffix(".diff").name
+        if not diff_path.exists():
+            continue
+        score = await _run_fixture(label_path, diff_path, llm)
+        if score is not None:
+            scores.append(score)
+    return scores
+
+
+def _compute_aggregates(scores: list[dict]) -> tuple[float, float]:
+    verdict_accuracy = sum(s["correct_verdict"] for s in scores) / len(scores)
+    recall_scores = [s["recall"] for s in scores if s["must_flag_count"] > 0]
+    avg_recall = sum(recall_scores) / len(recall_scores) if recall_scores else 1.0
+    return verdict_accuracy, avg_recall
+
+
+def _print_aggregate_report(scores: list[dict], verdict_accuracy: float, avg_recall: float) -> None:
+    print(f"\n  Fixtures scored: {len(scores)}")
+    print(f"  Verdict accuracy: {verdict_accuracy:.0%}  (pass bar: 80%)")
+    print(f"  Avg recall:       {avg_recall:.0%}  (pass bar: 60%)")
+    for s in scores:
+        mark = "✓" if s["correct_verdict"] else "✗"
+        print(f"    {mark} {s['expected']:4} → {s['predicted']:4}  recall={s['recall']:.0%}")
+
+
+def _assert_scores(verdict_accuracy: float, avg_recall: float) -> None:
+    assert verdict_accuracy >= 0.80
+    assert avg_recall >= 0.60
+
+
 @pytest.mark.eval
 async def test_reviewer_aggregate_score():
     """Run all fixtures and assert minimum aggregate recall and verdict accuracy."""
@@ -158,43 +211,8 @@ async def test_reviewer_aggregate_score():
         model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"),
         num_ctx=int(os.environ.get("OLLAMA_NUM_CTX", "8192")),
     )
-
-    scores = []
-    for label_path in sorted(LABELS_DIR.glob("*.json")):
-        diff_path = DIFFS_DIR / label_path.with_suffix(".diff").name
-        if not diff_path.exists():
-            continue
-        diff_text = diff_path.read_text()
-        label = json.loads(label_path.read_text())
-
-        agent = CodeReviewerAgent(gateway=_MockGateway(diff_text), llm_provider=llm)
-        state = {
-            "task": "Security review",
-            "diff": diff_text,
-            "thread_id": "eval",
-            "agent_output": None,
-            "requires_human_approval": False,
-            "error": None,
-            "human_approval_token": None,
-            "memory_context": None,
-        }
-        result = await agent.run(state)
-        if result.get("error"):
-            continue
-        scores.append(_score_fixture(label, result["agent_output"]))
-
-    assert scores, "No fixtures scored"
-
-    verdict_accuracy = sum(s["correct_verdict"] for s in scores) / len(scores)
-    recall_scores = [s["recall"] for s in scores if s["must_flag_count"] > 0]
-    avg_recall = sum(recall_scores) / len(recall_scores) if recall_scores else 1.0
-
-    print(f"\n  Fixtures scored: {len(scores)}")
-    print(f"  Verdict accuracy: {verdict_accuracy:.0%}  (pass bar: 80%)")
-    print(f"  Avg recall:       {avg_recall:.0%}  (pass bar: 60%)")
-    for s in scores:
-        mark = "✓" if s["correct_verdict"] else "✗"
-        print(f"    {mark} {s['expected']:4} → {s['predicted']:4}  recall={s['recall']:.0%}")
-
-    assert verdict_accuracy >= 0.80, f"Verdict accuracy {verdict_accuracy:.0%} below 80% threshold"
-    assert avg_recall >= 0.60, f"Average recall {avg_recall:.0%} below 60% threshold"
+    scores = await _score_all_fixtures(llm)
+    assert scores
+    verdict_accuracy, avg_recall = _compute_aggregates(scores)
+    _print_aggregate_report(scores, verdict_accuracy, avg_recall)
+    _assert_scores(verdict_accuracy, avg_recall)

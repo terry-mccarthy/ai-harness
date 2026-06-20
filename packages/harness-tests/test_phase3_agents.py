@@ -5,6 +5,7 @@ Integration tests (marked integration) run against the live Docker stack.
 """
 import inspect
 import json
+import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,12 +19,15 @@ pytestmark = pytest.mark.asyncio
 # ---------------------------------------------------------------------------
 
 class MockLLMProvider:
-    def __init__(self, response: str):
-        self._response = response
+    def __init__(self, response: str | list[str]):
+        if isinstance(response, list):
+            self._responses = list(reversed(response))
+        else:
+            self._responses = [response]
 
     async def chat(self, messages):
         from harness_agents.llm import LLMResponse
-        return LLMResponse(content=self._response)
+        return LLMResponse(content=self._responses[-1] if len(self._responses) == 1 else self._responses.pop())
 
 
 def _mock_gateway(tool_responses: dict | None = None):
@@ -49,6 +53,47 @@ _VALID_ADR = json.dumps({
     "alternatives_considered": [
         {"option": "Redis only", "reason_rejected": "No persistence"}
     ],
+})
+
+_PHASE_RECON = json.dumps({
+    "phase": "reconnaissance",
+    "domain": "AI code review system",
+    "architectural_style": "Microservices",
+    "dependencies": [{"name": "PostgreSQL", "role": "database"}],
+    "red_flags": [],
+    "critical_path_suggestion": "code review submission flow",
+    "interfaces_to_examine": ["gateway/client.py"],
+})
+
+_PHASE_FLOW = json.dumps({
+    "phase": "flow_trace",
+    "critical_path": "code review submission flow",
+    "flow_summary": "Request enters via MCP tool",
+    "structural_violations": [],
+    "coupling_issues": [],
+    "layering_assessment": "isolated",
+    "domain_isolation_score": 8,
+})
+
+_PHASE_ABSTRACTION = json.dumps({
+    "phase": "abstraction_analysis",
+    "interface_findings": [],
+    "leaky_abstractions": [],
+    "isp_violations": [],
+    "swap_difficulty": "moderate",
+    "abstraction_score": 8,
+})
+
+_PHASE_SYNTHESIS = json.dumps({
+    "title": "Architecture Review: AI Harness",
+    "status": "completed",
+    "summary": "System is well-architected",
+    "current_state_assessment": "Layered microservices with clear boundaries",
+    "findings": [{"severity": "LOW", "category": "modularity", "title": "minor concern", "message": "", "location": "", "phase_origin": "reconnaissance"}],
+    "technical_debt_hotspots": [{"rank": 1, "area": "gateway", "description": "coupling", "impact": "medium"}],
+    "nfr_risks": [{"concern": "scalability", "risk": "potential bottleneck", "severity": "LOW"}],
+    "recommendations": [{"priority": 1, "action": "refactor gateway", "rationale": "reduce coupling", "roi": "high"}],
+    "alternatives_considered": [],
 })
 
 _VALID_INCIDENT = json.dumps({
@@ -107,13 +152,15 @@ def test_agent_node_contract_compliance():
 # Slice 2 — ArchitectAgent
 # ---------------------------------------------------------------------------
 
-async def test_architect_produces_adr():
-    """Given a feature request, architect returns a dict matching the ADR contract."""
+async def test_architect_produces_review():
+    """Given a feature request, architect returns a multi-phase architecture review report."""
     from harness_agents.architect import ArchitectAgent
-    from harness_agents.types import AgentState, ARCHITECT_OUTPUT_SCHEMA
-    import jsonschema
+    from harness_agents.types import AgentState
 
-    agent = ArchitectAgent(gateway=_mock_gateway(), llm_provider=MockLLMProvider(_VALID_ADR))
+    agent = ArchitectAgent(
+        gateway=_mock_gateway(),
+        llm_provider=MockLLMProvider([_PHASE_RECON, _PHASE_FLOW, _PHASE_ABSTRACTION, _PHASE_SYNTHESIS]),
+    )
     state: AgentState = {
         "task": "Design the persistent memory layer",
         "diff": "",
@@ -127,7 +174,15 @@ async def test_architect_produces_adr():
     result = await agent.run(state)
 
     assert result["error"] is None
-    jsonschema.validate(result["agent_output"], ARCHITECT_OUTPUT_SCHEMA)
+    output = result["agent_output"]
+    assert output["title"] == "Architecture Review: AI Harness"
+    assert output["status"] == "completed"
+    assert len(output["findings"]) > 0
+    assert len(output["recommendations"]) > 0
+    assert "_phases" in output
+    assert "reconnaissance" in output["_phases"]
+    assert "flow_trace" in output["_phases"]
+    assert "abstraction_analysis" in output["_phases"]
 
 
 async def test_architect_reads_past_adrs(mock_memory_store):
@@ -214,12 +269,11 @@ async def test_architect_tool_calls_go_via_gateway():
 
 @pytest.mark.integration
 async def test_architect_codebase_search_returns_real_chunks():
-    """codebase_search returns real BM25-ranked chunks from the friday repo, not stub echo.
+    """codebase_search returns real GitHub code search results from the friday repo.
 
     Proves ADR-0036 slice 1: the host-side architect server is registered with MCPJungle
     and the architect role can reach it through the governance + gateway path.
     """
-    import os
     from harness_gateway.client import GatewayClient
 
     gw = GatewayClient(
@@ -228,15 +282,18 @@ async def test_architect_codebase_search_returns_real_chunks():
         client_id="architect",
         client_secret=os.environ.get("ARCHITECT_SECRET", "architect-secret"),
     )
-    result = await gw.call_tool("codebase_search", {"query": "audit log dolt commit", "top_k": 3})
+    result = await gw.call_tool("codebase_search", {
+        "query": "import ast",
+        "repo": "https://github.com/psf/black",
+        "top_k": 3,
+    })
 
-    assert "chunks" in result, f"expected real response shape, got {result!r}"
-    chunks = result["chunks"]
-    assert chunks, "expected at least one chunk for a query that matches real repo content"
-    first = chunks[0]
-    for field in ("file", "start_line", "end_line", "text", "score"):
-        assert field in first, f"chunk missing field {field!r}: {first!r}"
-    assert first["score"] > 0
+    assert "results" in result, f"expected real response shape, got {result!r}"
+    results = result["results"]
+    assert results, "expected at least one result for a query that matches real repo content"
+    first = results[0]
+    for field in ("path", "repo", "html_url"):
+        assert field in first, f"result missing field {field!r}: {first!r}"
 
 
 @pytest.mark.integration
@@ -246,7 +303,6 @@ async def test_architect_adr_read_returns_real_records():
     Proves ADR-0036 slice 2: the host-side architect server can read ADRs from
     a passed-in repo path through the governance + gateway path.
     """
-    import os
     from harness_gateway.client import GatewayClient
 
     gw = GatewayClient(
@@ -257,7 +313,7 @@ async def test_architect_adr_read_returns_real_records():
     )
     result = await gw.call_tool(
         "adr_read",
-        {"query": "architect mcp server", "repo": "/Users/terry/personal/friday"},
+        {"query": "architect", "repo": "https://github.com/terry-mccarthy/ai-harness"},
     )
 
     assert "adrs" in result, f"expected real response shape, got {result!r}"

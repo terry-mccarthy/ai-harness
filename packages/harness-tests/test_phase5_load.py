@@ -54,19 +54,35 @@ async def _submit_one(client: httpx.AsyncClient, i: int) -> dict:
 
 @pytest.mark.asyncio
 @pytest.mark.load
+async def _run_concurrent(concurrency: int) -> list[dict]:
+    async with httpx.AsyncClient() as client:
+        return await asyncio.gather(*[_submit_one(client, i) for i in range(concurrency)])
+
+
+def _count_status(statuses: list[int], target: int) -> int:
+    return sum(1 for s in statuses if s == target)
+
+
+def _count_5xx(statuses: list[int]) -> int:
+    count = 0
+    for s in statuses:
+        if isinstance(s, int) and 500 <= s < 600:
+            count += 1
+    return count
+
+
 async def test_load_50_concurrent():
     """50 concurrent tool submissions.  p99 latency must be under P99_THRESHOLD_MS.
     5xx errors are failures; 429s (rate-limited) are acceptable."""
-    async with httpx.AsyncClient() as client:
-        results = await asyncio.gather(*[_submit_one(client, i) for i in range(CONCURRENCY)])
+    results = await _run_concurrent(CONCURRENCY)
 
     latencies = [r["latency_ms"] for r in results]
     statuses = [r["status"] for r in results]
 
-    ok = sum(1 for s in statuses if s == 200)
-    rate_limited = sum(1 for s in statuses if s == 429)
-    errors_5xx = sum(1 for s in statuses if isinstance(s, int) and 500 <= s < 600)
-    conn_errors = sum(1 for s in statuses if s == -1)
+    ok = _count_status(statuses, 200)
+    rate_limited = _count_status(statuses, 429)
+    errors_5xx = _count_5xx(statuses)
+    conn_errors = _count_status(statuses, -1)
 
     latencies.sort()
     p50 = latencies[int(CONCURRENCY * 0.50)]
@@ -83,9 +99,7 @@ async def test_load_50_concurrent():
     print(f"  mean latency:  {mean:.0f}ms")
     print(f"  p99 threshold: {P99_THRESHOLD_MS}ms")
 
-    assert errors_5xx == 0, f"{errors_5xx} requests returned 5xx — data isolation failure"
-    assert conn_errors == 0, f"{conn_errors} requests failed with connection error"
-    assert p99 <= P99_THRESHOLD_MS, (
-        f"p99 latency {p99:.0f}ms exceeds threshold {P99_THRESHOLD_MS}ms"
-    )
+    assert errors_5xx == 0
+    assert conn_errors == 0
+    assert p99 <= P99_THRESHOLD_MS
     print(f"\nPASS — p99={p99:.0f}ms, 200s={ok}, 429s={rate_limited}")
