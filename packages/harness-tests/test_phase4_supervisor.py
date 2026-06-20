@@ -371,6 +371,39 @@ async def test_agent_executes_formula_steps():
 
 
 # ---------------------------------------------------------------------------
+# Slice 6.5 — _after_human_gate routing (1 unit test)
+# ---------------------------------------------------------------------------
+
+
+async def test_after_human_gate_architect_gate_does_not_route_to_sre():
+    """_after_human_gate with gate_signal + valid token → synthesise, not sre.
+
+    When the human gate is reached via architect → architectural_gate → FAIL,
+    a valid approval token should NOT resume the SRE agent.
+    """
+    from unittest.mock import patch
+    from harness_supervisor.graph import _after_human_gate
+
+    state = {
+        **_base_state("Design the auth service"),
+        "gate_signal": {
+            "result": "FAIL",
+            "violations": [
+                {"rule": "layer-violation", "severity": "HARD", "file": "a.py", "message": "bad"}
+            ],
+            "action": "STOP_AND_SURFACE",
+        },
+        "human_approval_token": "valid-token",
+    }
+
+    with patch("harness_supervisor.graph.validate_approval_token", return_value=True):
+        result = _after_human_gate(state)
+
+    assert result != "sre", "_after_human_gate must not route to sre when gate_signal is present"
+    assert result == "synthesise", f"Expected 'synthesise', got {result!r}"
+
+
+# ---------------------------------------------------------------------------
 # Slice 7 — human gate (4 integration tests)
 # ---------------------------------------------------------------------------
 
