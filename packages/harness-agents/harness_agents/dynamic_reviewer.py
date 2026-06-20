@@ -45,10 +45,57 @@ class DynamicCodeReviewerAgent:
         self.llm = llm_provider
         self.memory = memory_store
 
+    def _init_token_usage(self, state: AgentState) -> dict:
+        current = state.get("token_usage")
+        if current:
+            return dict(current)
+        return {"prompt_tokens": 0, "completion_tokens": 0}
+
+    async def _llm_chat(self, messages: list[dict], token_usage: dict) -> tuple | None:
+        try:
+            response = await self.llm.chat(messages=messages)
+            return response, None
+        except Exception as e:
+            return None, str(e)
+
+    def _handle_respond_action(self, result: dict, raw: str, messages: list[dict]) -> dict | None:
+        try:
+            jsonschema.validate(result, REVIEWER_OUTPUT_SCHEMA)
+            return result
+        except jsonschema.ValidationError as e:
+            messages.append({"role": "assistant", "content": raw})
+            messages.append({"role": "user", "content": f"Invalid result schema: {e.message}. Try again."})
+            return None
+
+    async def _handle_tool_call(
+        self, tool: str, params: dict, raw: str, messages: list[dict], state: AgentState, token_usage: dict
+    ) -> AgentState | None:
+        try:
+            result = await self.gateway.call_tool(tool, params)
+        except ToolAccessDenied as e:
+            return {**state, "token_usage": token_usage, "error": {"code": "tool_access_denied", "reason": str(e)}}
+        messages.append({"role": "assistant", "content": raw})
+        messages.append({"role": "user", "content": f"Tool result:\n{json.dumps(result, indent=2)}"})
+        return None
+
+    async def _dispatch_action(
+        self, action_type: str, action: dict, raw: str, messages: list[dict], state: AgentState, token_usage: dict
+    ) -> AgentState | None:
+        if action_type == "respond":
+            result = self._handle_respond_action(action.get("result", {}), raw, messages)
+            if result is not None:
+                return {**state, "agent_output": result, "token_usage": token_usage}
+            return None
+        if action_type == "call_tool":
+            return await self._handle_tool_call(action.get("tool", ""), action.get("params", {}), raw, messages, state, token_usage)
+        messages.append({"role": "assistant", "content": raw})
+        messages.append({"role": "user", "content": "Unrecognised action. Use 'call_tool' or 'respond'."})
+        return None
+
     async def run(self, state: AgentState) -> AgentState:
         diff_text = state.get("diff", "")
         task = state.get("task", "Security review")
-        token_usage = dict(state.get("token_usage") or {"prompt_tokens": 0, "completion_tokens": 0})
+        token_usage = self._init_token_usage(state)
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -56,10 +103,9 @@ class DynamicCodeReviewerAgent:
         ]
 
         for turn in range(MAX_TURNS):
-            try:
-                response = await self.llm.chat(messages=messages)
-            except Exception as e:
-                return {**state, "token_usage": token_usage, "error": {"code": "provider_error", "reason": str(e)}}
+            response, error = await self._llm_chat(messages, token_usage)
+            if error:
+                return {**state, "token_usage": token_usage, "error": {"code": "provider_error", "reason": error}}
 
             raw = _clean_raw(response.content)
             token_usage["prompt_tokens"] += response.prompt_tokens
@@ -73,34 +119,9 @@ class DynamicCodeReviewerAgent:
                 messages.append({"role": "user", "content": "Invalid JSON. Respond with exactly one JSON object."})
                 continue
 
-            if action.get("action") == "respond":
-                result = action.get("result", {})
-                try:
-                    jsonschema.validate(result, REVIEWER_OUTPUT_SCHEMA)
-                    return {**state, "agent_output": result, "token_usage": token_usage}
-                except jsonschema.ValidationError as e:
-                    messages.append({"role": "assistant", "content": raw})
-                    messages.append({"role": "user", "content": f"Invalid result schema: {e.message}. Try again."})
-                    continue
-
-            if action.get("action") == "call_tool":
-                tool = action.get("tool", "")
-                params = action.get("params", {})
-                logger.info("react turn=%d tool=%s", turn + 1, tool)
-
-                try:
-                    result = await self.gateway.call_tool(tool, params)
-                except ToolAccessDenied as e:
-                    logger.warning("tool_access_denied in react loop turn=%d tool=%s: %s", turn + 1, tool, e)
-                    return {**state, "token_usage": token_usage, "error": {"code": "tool_access_denied", "reason": str(e)}}
-
-                messages.append({"role": "assistant", "content": raw})
-                messages.append({"role": "user", "content": f"Tool result:\n{json.dumps(result, indent=2)}"})
-                continue
-
-            # Unrecognised action — nudge the LLM
-            messages.append({"role": "assistant", "content": raw})
-            messages.append({"role": "user", "content": "Unrecognised action. Use 'call_tool' or 'respond'."})
+            handled = await self._dispatch_action(action.get("action"), action, raw, messages, state, token_usage)
+            if handled is not None:
+                return handled
 
         return {**state, "token_usage": token_usage, "error": {
             "code": "max_turns_exceeded",

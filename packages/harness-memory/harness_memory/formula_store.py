@@ -18,14 +18,26 @@ _STOP_WORDS = frozenset({
 })
 
 
+def _tokenize(text: str) -> list[str]:
+    return [w for w in re.findall(r"\w+", text.lower()) if w not in _STOP_WORDS]
+
+
+def _count_hits(q_words: set[str], d_counter: Counter) -> int:
+    total = 0
+    for w in q_words:
+        if w in d_counter:
+            total += d_counter[w]
+    return total
+
+
 def _tfidf_score(query: str, doc: str) -> float:
     """Keyword overlap score — no ML needed for formula matching."""
-    q_words = set(re.findall(r"\w+", query.lower())) - _STOP_WORDS
-    d_words = [w for w in re.findall(r"\w+", doc.lower()) if w not in _STOP_WORDS]
+    q_words = set(_tokenize(query))
+    d_words = _tokenize(doc)
     if not q_words or not d_words:
         return 0.0
     d_counter = Counter(d_words)
-    hits = sum(d_counter[w] for w in q_words if w in d_counter)
+    hits = _count_hits(q_words, d_counter)
     denom = len(q_words) + len(set(d_words))
     return hits / denom if denom else 0.0
 

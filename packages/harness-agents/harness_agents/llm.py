@@ -12,10 +12,15 @@ class LLMResponse:
     completion_tokens: int = 0
 
 class LLMProvider(Protocol):
+    provider_name: str
+    model_name: str
+
     async def chat(self, messages: List[Dict[str, str]]) -> LLMResponse:
         ...
 
 class OllamaProvider:
+    provider_name = "ollama"
+
     def __init__(
         self,
         host: str,
@@ -27,6 +32,7 @@ class OllamaProvider:
     ):
         from ollama import AsyncClient
         self.client = AsyncClient(host=host, timeout=timeout)
+        self.model_name = model
         self.model = model
         self._options = {
             "temperature": temperature,
@@ -47,6 +53,8 @@ class OllamaProvider:
         )
 
 class GeminiProvider:
+    provider_name = "gemini"
+
     def __init__(
         self,
         model: str = "gemini-2.5-flash",
@@ -56,6 +64,7 @@ class GeminiProvider:
     ):
         from google import genai
         self.client = genai.Client(api_key=api_key)
+        self.model_name = model
         self.model = model
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
@@ -106,6 +115,7 @@ class OpenRouterProvider:
     available by setting OPENROUTER_MODEL.
     """
 
+    provider_name = "openrouter"
     _BASE_URL = "https://openrouter.ai/api/v1"
 
     def __init__(
@@ -123,6 +133,7 @@ class OpenRouterProvider:
             base_url=self._BASE_URL,
             timeout=timeout,
         )
+        self.model_name = model
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens

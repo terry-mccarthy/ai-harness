@@ -205,13 +205,21 @@ def _check_count_criteria(n_total: int, disqualified: list[str]) -> list[str]:
     return errors
 
 
+def _count_recent_episodes(qualified: list[dict], cutoff: datetime) -> int:
+    count = 0
+    for r in qualified:
+        if r.get("outcome_labeled_at") and r["outcome_labeled_at"] > cutoff:
+            count += 1
+    return count
+
+
 def _check_diversity_criteria(qualified: list[dict]) -> list[str]:
     errors = []
     principals = {r["agent_principal"] for r in qualified}
     if len(principals) < _K_MIN:
         errors.append(f"need at least {_K_MIN} distinct agent_principals, got {len(principals)}")
     cutoff = datetime.utcnow() - timedelta(days=RECENT_DAYS)
-    recent = sum(1 for r in qualified if r["outcome_labeled_at"] and r["outcome_labeled_at"] > cutoff)
+    recent = _count_recent_episodes(qualified, cutoff)
     if recent < _M_MIN:
         errors.append(f"need at least {_M_MIN} episodes within last {RECENT_DAYS} days, got {recent}")
     return errors

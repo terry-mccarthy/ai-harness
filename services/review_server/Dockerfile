@@ -14,6 +14,7 @@ COPY prompts /app/prompts
 COPY services/review_server/metrics.py /app/metrics.py
 COPY services/review_server/server.py /app/server.py
 COPY services/review_server/architecture_review.py /app/architecture_review.py
+COPY services/review_server/code_analysis.py /app/code_analysis.py
 COPY services/review_server/architecture_gate/ /app/architecture_gate/
 
 CMD ["python", "server.py"]

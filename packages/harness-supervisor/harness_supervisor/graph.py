@@ -49,21 +49,29 @@ def _should_propose_formula(state: HarnessState) -> str:
     return "synthesise"
 
 
+def _has_violation(violations: list, severity: str) -> bool:
+    for v in violations:
+        if v.get("severity") == severity:
+            return True
+    return False
+
+
 def route_after_gate(state: HarnessState) -> str:
     signal = state.get("gate_signal")
     if not signal:
         return "error_handler"
-    if signal["result"] == "PASS":
+    result = signal.get("result")
+    if result == "PASS":
         return "synthesise"
-    if signal["result"] == "FAIL":
-        has_hard = any(v.get("severity") == "HARD" for v in signal.get("violations", []))
-        has_soft = any(v.get("severity") == "SOFT" for v in signal.get("violations", []))
-        if has_hard:
-            return "human_gate"
-        if has_soft and not state.get("human_justification"):
-            return "human_gate"
-        return "synthesise"
-    return "error_handler"
+    if result != "FAIL":
+        return "error_handler"
+
+    violations = signal.get("violations", [])
+    if _has_violation(violations, "HARD"):
+        return "human_gate"
+    if _has_violation(violations, "SOFT") and not state.get("human_justification"):
+        return "human_gate"
+    return "synthesise"
 
 
 def _after_human_gate(state: HarnessState) -> str:

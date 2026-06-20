@@ -50,11 +50,13 @@ def _parse_task_type(raw: str) -> str | None:
 async def classify_node(state: HarnessState, llm_provider: LLMProvider) -> dict:
     tracer = trace.get_tracer(__name__)
     with tracer.start_as_current_span("classify"):
+        tokens_used = state.get("tokens_used", 0)
         try:
             response = await llm_provider.chat([
                 {"role": "system", "content": _CLASSIFY_SYSTEM},
                 {"role": "user", "content": state["task"]},
             ])
+            tokens_used += response.prompt_tokens + response.completion_tokens
             task_type = _parse_task_type(response.content)
         except Exception:
             logger.warning("classify: LLM call failed, falling back to keywords", exc_info=True)
@@ -62,7 +64,7 @@ async def classify_node(state: HarnessState, llm_provider: LLMProvider) -> dict:
         if task_type is None:
             task_type = _classify_by_keywords(state["task"]) or "review"
         logger.info("classify: %s → %s", state["task"][:40], task_type)
-        return {"task_type": task_type}
+        return {"task_type": task_type, "tokens_used": tokens_used}
 
 
 def route_node(state: dict) -> str:
@@ -93,6 +95,28 @@ async def formula_lookup_node(state: HarnessState, formula_store) -> dict:
         return {"formula_id": None, "formula_instance_id": None}
 
 
+def _check_token_budget(state: HarnessState, thread_id: str) -> dict | None:
+    token_budget = state.get("token_budget")
+    tokens_used = state.get("tokens_used", 0)
+    if token_budget is not None and tokens_used >= token_budget:
+        logger.warning("token_budget exceeded: used=%d budget=%d thread=%s", tokens_used, token_budget, thread_id)
+        return {"error": {"code": "budget_exceeded", "reason": f"token budget exhausted (used={tokens_used}, budget={token_budget})"}}
+    return None
+
+
+def _needs_approval(result: dict, agent_output: dict) -> bool:
+    if result.get("requires_human_approval", False):
+        return True
+    if isinstance(agent_output, dict) and agent_output.get("requires_human_approval", False):
+        return True
+    return False
+
+
+def _sum_tokens(state: HarnessState, result: dict) -> int:
+    agent_tokens = result.get("token_usage") or {}
+    return state.get("tokens_used", 0) + agent_tokens.get("prompt_tokens", 0) + agent_tokens.get("completion_tokens", 0)
+
+
 async def run_agent_node(state: HarnessState, agent, formula=None) -> dict:
     """Run a specialist agent node, optionally guided by formula steps."""
     tracer = trace.get_tracer(__name__)
@@ -103,24 +127,12 @@ async def run_agent_node(state: HarnessState, agent, formula=None) -> dict:
         span.set_attribute("agent_role", agent_role)
         span.set_attribute("thread_id", thread_id)
 
-        # Token budget check — terminate gracefully before running if over budget
-        token_budget = state.get("token_budget")
-        tokens_used = state.get("tokens_used", 0)
-        if token_budget is not None and tokens_used >= token_budget:
-            logger.warning(
-                "token_budget exceeded: used=%d budget=%d thread=%s",
-                tokens_used, token_budget, thread_id,
-            )
-            return {
-                "error": {
-                    "code": "budget_exceeded",
-                    "reason": f"token budget exhausted (used={tokens_used}, budget={token_budget})",
-                }
-            }
+        budget_error = _check_token_budget(state, thread_id)
+        if budget_error:
+            return budget_error
 
         from harness_agents.types import AgentState
 
-        # If formula is given, prime the gateway mock to call steps in order
         if formula:
             logger.info("run_agent: executing formula %s (%d steps)", formula.id, len(formula.steps))
 
@@ -136,17 +148,15 @@ async def run_agent_node(state: HarnessState, agent, formula=None) -> dict:
         }
         result = await agent.run(agent_state)
         agent_output = result.get("agent_output") or {}
-        # Propagate requires_human_approval from agent_output (SRE sets it there)
-        # as well as from the top-level state key, whichever is True.
-        requires_approval = (
-            result.get("requires_human_approval", False)
-            or (isinstance(agent_output, dict) and agent_output.get("requires_human_approval", False))
-        )
+        requires_approval = _needs_approval(result, agent_output)
+        tokens_used = _sum_tokens(state, result)
+
         return {
             "agent_output": agent_output,
             "requires_human_approval": requires_approval,
             "error": result.get("error"),
             "active_agent": getattr(agent, "name", "unknown"),
+            "tokens_used": tokens_used,
         }
 
 
@@ -154,6 +164,7 @@ async def synthesise_node(state: HarnessState, formula_store=None, llm_provider=
     tracer = trace.get_tracer(__name__)
     with tracer.start_as_current_span("synthesise"):
         output = state.get("agent_output") or {}
+        tokens_used = state.get("tokens_used", 0)
 
         if llm_provider:
             user_msg = (
@@ -166,6 +177,7 @@ async def synthesise_node(state: HarnessState, formula_store=None, llm_provider=
                     {"role": "system", "content": _SYNTHESISE_SYSTEM},
                     {"role": "user", "content": user_msg},
                 ])
+                tokens_used += resp.prompt_tokens + resp.completion_tokens
                 final_response = resp.content.strip()
             except Exception:
                 logger.warning("synthesise: LLM call failed, falling back to summary field", exc_info=True)
@@ -173,7 +185,7 @@ async def synthesise_node(state: HarnessState, formula_store=None, llm_provider=
         else:
             final_response = _fallback_summary(state, output)
 
-        return {"final_response": final_response}
+        return {"final_response": final_response, "tokens_used": tokens_used}
 
 
 def _fallback_summary(state: HarnessState, output: dict) -> str:
