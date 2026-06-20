@@ -2,7 +2,7 @@
   "title": "AI Harness — Cost per Agent Role",
   "uid": "harness-cost",
   "schemaVersion": 38,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": {"from": "now-1h", "to": "now"},
   "panels": [
@@ -32,21 +32,9 @@
     },
     {
       "id": 3,
-      "title": "Rate limit rejections",
-      "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 8},
-      "targets": [
-        {
-          "expr": "sum(increase(harness_rate_limit_rejections_total[1h]))",
-          "legendFormat": "Rejections (1h)"
-        }
-      ]
-    },
-    {
-      "id": 4,
       "title": "Policy denies",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 8},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 8},
       "targets": [
         {
           "expr": "sum by (agent_role) (increase(harness_tool_calls_total{decision=\"deny\"}[1h]))",
@@ -55,14 +43,62 @@
       ]
     },
     {
-      "id": 5,
+      "id": 4,
       "title": "Gateway backend in use",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 8},
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 8},
       "targets": [
         {
           "expr": "count by (backend) (harness_tool_calls_total)",
           "legendFormat": "{{backend}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "LLM calls per model (last 1h)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "targets": [
+        {
+          "expr": "sum by (provider, model) (increase(harness_llm_calls_total[5m]))",
+          "legendFormat": "{{provider}} / {{model}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "LLM tokens per model (last 1h)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "targets": [
+        {
+          "expr": "sum by (model, token_type) (increase(harness_llm_tokens_total[5m]))",
+          "legendFormat": "{{model}} / {{token_type}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "LLM request latency p99 (s)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (provider, model, le) (rate(harness_llm_latency_seconds_bucket[5m])))",
+          "legendFormat": "{{provider}} / {{model}} p99"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Total tokens this hour",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 8},
+      "targets": [
+        {
+          "expr": "sum(increase(harness_llm_tokens_total[1h]))",
+          "legendFormat": "Total tokens (1h)"
         }
       ]
     }

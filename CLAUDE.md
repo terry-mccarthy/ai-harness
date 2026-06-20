@@ -261,6 +261,7 @@ environment:
 4. Add the short-name → `server__tool` mapping to `TOOL_NAME_MAP` in `client.py`.
 5. If the `CodeReviewerAgent` should call it, add the name to `allowed_tools`.
 6. Add the tool to the appropriate role in `policies/harness.rego`; restart OPA or send a `PUT /v1/policies/harness` request.
+7. If the OPA policy already lists the tool but it has no server or `TOOL_NAME_MAP` entry (e.g. `coverage_report`, `repo_conventions_read` — which were documented but unreachable), implement it rather than removing the OPA rule. A tool in OPA without a mapping is dead policy: `_resolve_name()` raises `ToolAccessDenied` before OPA is ever reached.
 
 ## Adding a new MCP server (service)
 
@@ -320,7 +321,7 @@ The `human_approval_token` is a short-lived JWT (10-min TTL) scoped to a specifi
 - **`human_gate` now has two resume paths:** `human_justification` (gate soft-fail) → resume to `synthesise`; `human_approval_token` (shell_exec) → resume to `sre`. The justification check comes first.
 - **`execute_architecture_check` is a stub:** Mapped to `review_server__execute_architecture_check` in the TOOL_NAME_MAP. The actual sandbox isolation (Docker-in-Docker) is not implemented. The graph wiring, OPA policy, Dolt schema, and governance endpoint are all functional — only the stub handler needs to be replaced when sandboxes are built.
 - **`architecture_review` moved to review server:** Mapped to `review_server__architecture_review`. The host-side architect server (which previously provided this tool) has been retired. The review server uses the GitHub API to fetch invariants directly.
-- **Architect read-only:** `architect_stub` is now served by `github-mcp` with only `codebase_search` and `adr_read`. `adr_write` and `diagram_gen` were removed. The architect role is review-only.
+- **Architect read-only + issue filing:** `architect_stub` is now served by `github-mcp` with `codebase_search`, `adr_read`, and `issue_create`. `adr_write` and `diagram_gen` were removed. The architect files GitHub issues for CRITICAL/HIGH findings instead of writing ADRs.
 - **Docker build for github-mcp:** `docker compose build github-mcp` builds the new service. No separate `register` init container needed — `register-architect` points to `github-mcp:9010`.
 - **Dolt migration for gate failures:** The `architectural_gate_failures` table must exist before integration tests pass. Use `docker compose exec dolt mysql ... -e "CREATE TABLE IF NOT EXISTS ..."` against the running Dolt container (see `services/dolt/init.sh` for the full schema).
 

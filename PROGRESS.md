@@ -878,7 +878,7 @@ Replaced `execute_architecture_check` stub with subprocess-based deterministic c
 - `services/review_server/server.py` — added `architecture_review` and `execute_architecture_check` MCP tools
 - `services/review_server/Dockerfile` — copies `architecture_review.py`
 - `packages/harness-gateway/harness_gateway/client.py` — `TOOL_NAME_MAP` updated; `architecture_review`, `execute_architecture_check` → `review_server__*`; `adr_write`, `diagram_gen` removed
-- `packages/harness-agents/harness_agents/architect.py` — `allowed_tools` now only `["codebase_search", "adr_read"]`
+- `packages/harness-agents/harness_agents/architect.py` — `allowed_tools` now only `["codebase_search", "adr_read"]` (later re-added `issue_create` in ADR-0039)
 - `policies/harness.rego` — removed `adr_write`, `diagram_gen` from architect; added `architecture_review`, `execute_architecture_check` to code_reviewer
 - `docker-compose.yml` — added `github-mcp` service + `register-github-mcp`; `register-architect` points to `github-mcp:9010`; removed `extra_hosts` for `host.docker.internal`
 - `services/contextforge_setup/setup.py` — architect_stub URL → `github-mcp:9010`
@@ -896,3 +896,21 @@ Replaced `execute_architecture_check` stub with subprocess-based deterministic c
 - `review_server__architecture_review` → routed to review-server ✅
 - `review_server__execute_architecture_check` → routed to review-server ✅
 - `review_server__review_diff` → routed to review-server ✅
+
+---
+
+## ADR-0039: issue_create replaces adr_write ✅
+
+**Summary:** Replaced the defunct `adr_write` tool with `issue_create` on `github-mcp`. The architect now files GitHub issues for CRITICAL/HIGH findings instead of writing ADRs (which are records of decisions already made, not actionable work items).
+
+**Files modified:**
+- `services/github_mcp/server.py` — added `issue_create` MCP tool (POST /repos/:owner/:repo/issues)
+- `packages/harness-gateway/harness_gateway/client.py` — `issue_create` → `github_mcp__issue_create`
+- `packages/harness-agents/harness_agents/architect.py` — `allowed_tools` adds `issue_create`
+- `policies/harness.rego` — `issue_create` added to architect role
+- `prompts/architect.md` — added instruction to use `issue_create` for CRITICAL/HIGH findings
+- `services/dolt/init.sh` — seed formula updated from `adr_write` to `issue_create`
+- `packages/harness-tests/test_phase1_governance.py` — denied-tool test updated to `issue_create`
+- `README.md`, `CLAUDE.md`, `ARCHITECTURE.md` — docs updated
+
+**Tests:** All existing governance, agent, and supervisor tests pass unchanged.

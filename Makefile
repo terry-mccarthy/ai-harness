@@ -3,10 +3,10 @@ SHELL := /bin/bash
 .PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e test-load review consolidate alembic-upgrade monitoring-up
 
 stack-up:
-	docker compose up -d --wait
+	docker compose up -d --wait --remove-orphans
 
 stack-down:
-	docker compose down -v
+	docker compose down -v --remove-orphans
 
 venv:
 	uv sync --all-packages

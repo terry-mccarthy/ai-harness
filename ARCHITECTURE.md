@@ -132,7 +132,7 @@ Every tool call the agent makes produces:
 | `governance`     | local build                    | 8090 | OAuth token issuance (`/oauth/token`), OPA policy check (`/check`), async Dolt audit (`/audit`) |
 | `diff-proxy`     | local build                    | 9001 | Real `git diff` MCP server (baked sample repo)               |
 | `linter-stub`    | local build                    | 9002 | Semgrep-based `run_linter` MCP server (`semgrep-rules.yml`)  |
-| `github-mcp`     | local build                    | 9010 | GitHub API MCP server — `codebase_search` + `adr_read` (read-only) |
+| `github-mcp`     | local build                    | 9010 | GitHub API MCP server — `codebase_search`, `adr_read`, `issue_create` |
 | `sre-stub`       | local build                    | 9005 | Stub MCP server for SRE-role tools                           |
 | `review-server`  | local build                    | 9003 | `review_diff`, `architecture_review`, `execute_architecture_check` MCP tools — runs full code-reviewer agent, architecture review, and architectural gate |
 | `register-*`     | mcpjungle image                | —    | One-shot init containers that register MCP servers           |
@@ -156,7 +156,7 @@ services/
   prometheus/        — scrape config for governance /metrics
   dolt/              — Dolt init: audit_log + formulas + formula_pours + seed data
   postgres/          — PostgreSQL init: enables pgvector extension
-  github_mcp/        — FastMCP server wrapping GitHub API (codebase_search, adr_read)
+  github_mcp/        — FastMCP server wrapping GitHub API (codebase_search, adr_read, issue_create)
   review_server/     — FastMCP server wrapping CodeReviewerAgent + architecture_review + execute_architecture_check
 
 security/
@@ -216,7 +216,7 @@ Violations are recorded in a dedicated Dolt table `architectural_gate_failures` 
 
 | Role             | Allowed tools / scopes                                                                |
 |------------------|---------------------------------------------------------------------------------------|
-| `architect`      | `codebase_search`, `adr_read`, `architecture_review`, `execute_architecture_check` |
+| `architect`      | `codebase_search`, `adr_read`, `architecture_review`, `execute_architecture_check`, `issue_create` |
 | `code_reviewer`  | `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`, `architecture_review`, `execute_architecture_check` |
 | `sre`            | `observability_query`, `runbook_read`, `log_search`, `shell_exec`                     |
 | `sre` + `code_reviewer` | `episode:label` scope, `candidate:propose` scope                           |
@@ -672,3 +672,4 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0036 | Architect MCP server replicates semble's pattern — host-side FastMCP streamable-HTTP, `repo`-per-call (v1: local path / `https://`; v2: `s3://` + `upload://` for ECS), LRU cache keyed by commit SHA, hybrid BM25+dense via Ollama `nomic-embed-text`; ADRs live in `<repo>/docs/adr/`; new `architecture_review(target_mode)` tool covers codebase + diff modes; same tool signature in host and AWS modes — only resolvers change. See [docs/adr/0036-architect-mcp-server.md](docs/adr/0036-architect-mcp-server.md) | Accepted |
 | 0037 | Architectural gate (AaC engine) — `architectural_gate_node` between architect and synthesise calls `execute_architecture_check` via gateway; `route_after_gate` routes PASS → synthesise, FAIL (HARD or SOFT without justification) → human_gate, SOFT with justification → synthesise; failures recorded in dedicated `architectural_gate_failures` Dolt table with DOLT_COMMIT per write; `POST /audit/architectural-gate` endpoint on governance; container sandbox stub deferred to follow-up | Accepted |
 | 0038 | Replace host-side architect server with review-server and github-mcp — `architecture_review` + `execute_architecture_check` moved to review-server (has multi-provider LLM, already in Docker); `codebase_search` + `adr_read` served by new github-mcp service wrapping GitHub API (read-only); `adr_write` and `diagram_gen` removed (review-only); host-side retired, all services now run in Docker | Accepted |
+| 0039 | `issue_create` replaces `adr_write` on `github-mcp` — ADRs are records of decisions already made, not actionable work items; the architect now files GitHub issues for CRITICAL/HIGH findings instead of writing ADRs, making violations trackable and assignable through the normal issue lifecycle | Accepted |

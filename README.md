@@ -39,7 +39,7 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 - **Ollama** (`qwen2.5-coder:32b` default) — local LLM for reviews and vector embeddings; no API key needed
 - **diff-proxy** — real `git diff` on the baked sample repo, or fetches a PR diff from the GitHub API (`pr_number` + `github_repo`; reads `GITHUB_TOKEN` from env)
 - **linter-stub** — semgrep-based linter (`semgrep-rules.yml`); catches SQL f-string injection, hardcoded credentials, `subprocess shell=True`, `open()` f-string paths, and `eval()`
-- **architect-stub** — stub MCP server for architect-role tools (`codebase_search`, `adr_read`, `adr_write`, `diagram_gen`)
+- **github-mcp** — MCP server wrapping GitHub API for architect-role tools (`codebase_search`, `adr_read`, `issue_create`)
 - **sre-stub** — stub MCP server for SRE-role tools (`observability_query`, `runbook_read`, `log_search`, `shell_exec`)
 - **review-server** — FastMCP service wrapping the full code-reviewer agent; callable from Claude Code via MCP and from CI pipelines via `POST /review` (plain HTTP, optional bearer-token auth via `REVIEW_API_KEY`)
 - **ContextForge** (`ghcr.io/ibm/mcp-context-forge`, `:4444`) — production MCP gateway; alternative to MCPJungle, enabled via `GATEWAY_BACKEND=contextforge`
@@ -56,7 +56,7 @@ cp .env.example .env
 # JWT_PRIVATE_KEY_FILE defaults to test-fixtures/jwt-test-key.pem (dev only; set ENV=test)
 
 # 2. Build and start the stack
-docker compose build diff-proxy linter-stub architect-stub sre-stub review-server governance dolt
+docker compose build diff-proxy linter-stub github-mcp sre-stub review-server governance dolt
 docker compose up -d
 sleep 30  # wait for Dolt to init and MCP init containers to register servers
 
@@ -99,6 +99,28 @@ To enable debug logging without restarting the whole stack:
 LOG_LEVEL=DEBUG docker compose up -d diff-proxy linter-stub review-server governance
 ```
 
+### Review-server runtime config
+
+`GET /config` and `PUT /config` on the review-server (`:9003`) let you change LLM provider settings at runtime without rebuilding or restarting. Changes are persisted in PostgreSQL (`server_config` table) and survive container restarts. Auth via `Authorization: Bearer <REVIEW_API_KEY>` (unset key = open in dev).
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/config` | Return current runtime overrides (api keys masked). |
+| `PUT` | `/config` | Update runtime overrides. Returns merged config. |
+
+**`PUT /config` body:**
+
+```json
+{
+  "llm_provider": "openrouter",
+  "ollama": { "model": "qwen2.5-coder:32b", "num_ctx": 24000 },
+  "gemini": { "model": "gemini-2.5-flash", "temperature": 0.2 },
+  "openrouter": { "model": "anthropic/claude-sonnet-4-6", "max_tokens": 2048 }
+}
+```
+
+Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`, `num_ctx` (Ollama only), `host` (Ollama only). Set a key to `null` to remove the override and fall back to the env var or default. Only changed keys need to be sent.
+
 ## Tests
 
 ### Integration suite (229 tests: all green) — `make test-integration`
@@ -127,7 +149,7 @@ LOG_LEVEL=DEBUG docker compose up -d diff-proxy linter-stub review-server govern
 | `test_architect_allowed_tool` | Architect token can call `codebase_search` |
 | `test_architect_denied_tool` | Architect token cannot call `shell_exec` (403) |
 | `test_reviewer_allowed_tool` | code-reviewer token can call `git_diff` |
-| `test_reviewer_denied_tool` | code-reviewer token cannot call `adr_write` (403) |
+| `test_reviewer_denied_tool` | code-reviewer token cannot call `issue_create` (403) |
 | `test_sre_allowed_tool` | sre token can call `runbook_read` |
 | `test_unknown_token_rejected` | Invalid bearer token returns 401 |
 | `test_audit_row_written` | Tool call writes a row to `audit_log` in Dolt |
