@@ -235,7 +235,11 @@ class DoltFormulaStore:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _row_to_formula(row: dict) -> Formula:
+    def _parse_json_field(row: dict, field: str) -> dict | list:
+        val = row[field]
+        return json.loads(val) if isinstance(val, str) else val
+
+    def _row_to_formula(self, row: dict) -> Formula:
         return Formula(
             id=row["id"],
             name=row["name"],
@@ -243,9 +247,9 @@ class DoltFormulaStore:
             version=row["version"],
             status=row["status"],
             description=row.get("description") or "",
-            input_schema=json.loads(row["input_schema"]) if isinstance(row["input_schema"], str) else row["input_schema"],
-            steps=json.loads(row["steps"]) if isinstance(row["steps"], str) else row["steps"],
-            output_contract=json.loads(row["output_contract"]) if isinstance(row["output_contract"], str) else row["output_contract"],
+            input_schema=DoltFormulaStore._parse_json_field(row, "input_schema"),
+            steps=DoltFormulaStore._parse_json_field(row, "steps"),
+            output_contract=DoltFormulaStore._parse_json_field(row, "output_contract"),
             promoted_by=row.get("promoted_by") or "",
             source_candidate_id=row.get("source_candidate_id"),
             expires_at=row.get("expires_at"),

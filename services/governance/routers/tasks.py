@@ -32,41 +32,44 @@ def _resolve_idempotent_complete(conn, idem_key: str) -> dict | None:
     return {"status": "done", "result": stored}
 
 
+def _close_task(conn, task_id: str, result: dict, idem_key: str | None, worker: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status='done', result=%s, idempotency_key=%s "
+            "WHERE id=%s AND status='claimed' AND claimed_by=%s",
+            (json.dumps(result), idem_key, task_id, worker),
+        )
+        return cur.rowcount == 1
+
+
+def _commit_task_complete(conn, task_id: str, worker: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("CALL DOLT_COMMIT('-Am', %s)", (f"task_complete: {task_id[:8]} by {worker}",))
+
+
 @router.post("/tasks/complete")
 async def task_complete(
     request: Request,
     authorization: str | None = Header(default=None),
 ):
-    """Idempotently close a claimed task with a result."""
     claims = decode_jwt(authorization)
     body = await request.json()
     task_id = body.get("task_id")
-    result = body.get("result", {})
-    idem_key = body.get("idempotency_key")
-
     if not task_id:
         raise HTTPException(422, "task_id is required")
 
     conn = get_dolt_conn()
     try:
+        idem_key = body.get("idempotency_key")
         if idem_key:
             cached = _resolve_idempotent_complete(conn, idem_key)
             if cached:
                 return cached
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE tasks SET status='done', result=%s, idempotency_key=%s "
-                "WHERE id=%s AND status='claimed' AND claimed_by=%s",
-                (json.dumps(result), idem_key, task_id, claims["sub"]),
-            )
-            affected = cur.rowcount
-
-        if affected == 0:
+        if not _close_task(conn, task_id, body.get("result", {}), idem_key, claims["sub"]):
             raise HTTPException(403, "task not claimable by this worker or already done")
 
-        with conn.cursor() as cur:
-            cur.execute("CALL DOLT_COMMIT('-Am', %s)", (f"task_complete: {task_id[:8]} by {claims['sub']}",))
+        _commit_task_complete(conn, task_id, claims["sub"])
     finally:
         conn.close()
 
@@ -108,12 +111,58 @@ async def task_post(
     return {"task_id": task_id, "status": "pending"}
 
 
+def _reap_stale_leases(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status='pending', claimed_by=NULL, lease_expires=NULL "
+            "WHERE status='claimed' AND lease_expires < %s",
+            (datetime.utcnow(),),
+        )
+
+
+def _pick_pending(conn, role: str) -> str | None:
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            "SELECT id FROM tasks "
+            "WHERE status='pending' AND required_role=%s "
+            "ORDER BY priority DESC, created_at ASC LIMIT 1",
+            (role,),
+        )
+        row = cur.fetchone()
+    return row["id"] if row else None
+
+
+def _try_claim(conn, candidate_id: str, worker_id: str, lease_expires: datetime) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status='claimed', claimed_by=%s, lease_expires=%s "
+            "WHERE id=%s AND status='pending'",
+            (worker_id, lease_expires, candidate_id),
+        )
+        return cur.rowcount == 1
+
+
+def _fetch_task_payload(conn, task_id: str) -> dict:
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute("SELECT payload FROM tasks WHERE id=%s", (task_id,))
+        row = cur.fetchone()
+    payload = row["payload"]
+    return json.loads(payload) if isinstance(payload, str) else payload
+
+
+def _commit_claim(conn, task_id: str, worker_id: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "CALL DOLT_COMMIT('-Am', %s)",
+            (f"task_claim: {task_id[:8]} by {worker_id}",),
+        )
+
+
 @router.post("/tasks/claim")
 async def task_claim(
     request: Request,
     authorization: str | None = Header(default=None),
 ):
-    """Atomically claim the highest-priority pending task for the caller's role."""
     claims = decode_jwt(authorization)
     role = claims["role"]
     body = await request.json()
@@ -123,50 +172,16 @@ async def task_claim(
 
     conn = get_dolt_conn()
     try:
-        # Reap stale leases first (on-claim sweep)
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE tasks SET status='pending', claimed_by=NULL, lease_expires=NULL "
-                "WHERE status='claimed' AND lease_expires < %s",
-                (datetime.utcnow(),),
-            )
+        _reap_stale_leases(conn)
 
-        # Atomic select-then-update loop
         for _ in range(5):
-            with conn.cursor(pymysql.cursors.DictCursor) as cur:
-                cur.execute(
-                    "SELECT id FROM tasks "
-                    "WHERE status='pending' AND required_role=%s "
-                    "ORDER BY priority DESC, created_at ASC LIMIT 1",
-                    (role,),
-                )
-                row = cur.fetchone()
-
-            if row is None:
+            candidate_id = _pick_pending(conn, role)
+            if candidate_id is None:
                 return {"task_id": None}
-
-            candidate_id = row["id"]
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE tasks SET status='claimed', claimed_by=%s, lease_expires=%s "
-                    "WHERE id=%s AND status='pending'",
-                    (worker_id, lease_expires, candidate_id),
-                )
-                affected = cur.rowcount
-
-            if affected == 1:
-                # Win — fetch payload and commit
-                with conn.cursor(pymysql.cursors.DictCursor) as cur:
-                    cur.execute("SELECT payload FROM tasks WHERE id=%s", (candidate_id,))
-                    task_row = cur.fetchone()
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "CALL DOLT_COMMIT('-Am', %s)",
-                        (f"task_claim: {candidate_id[:8]} by {worker_id}",),
-                    )
-                payload = json.loads(task_row["payload"]) if isinstance(task_row["payload"], str) else task_row["payload"]
+            if _try_claim(conn, candidate_id, worker_id, lease_expires):
+                payload = _fetch_task_payload(conn, candidate_id)
+                _commit_claim(conn, candidate_id, worker_id)
                 return {"task_id": candidate_id, "payload": payload}
-            # else: lost the race — retry
 
         return {"task_id": None}
     finally:

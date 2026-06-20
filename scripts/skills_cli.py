@@ -123,23 +123,22 @@ class SkillsClient:
 
     # --- pipeline summary ---
 
+    def _count_by_status(self, items: list[dict], key: str) -> dict[str, int]:
+        by_status: dict[str, int] = {}
+        for item in items:
+            s = (item.get(key) or "unknown").lower()
+            by_status[s] = by_status.get(s, 0) + 1
+        return by_status
+
     def pipeline_summary(self) -> dict:
         episodes = self.list_episodes(limit=10000)
         unlabeled = sum(1 for e in episodes if not e.get("outcome_labeled_at"))
         candidates = self.list_candidates()
-        by_status: dict[str, int] = {}
-        for c in candidates:
-            s = (c.get("status") or "unknown").lower()
-            by_status[s] = by_status.get(s, 0) + 1
         skills = self.list_skills()
-        by_skill_status: dict[str, int] = {}
-        for sk in skills:
-            s = (sk.get("status") or "unknown").lower()
-            by_skill_status[s] = by_skill_status.get(s, 0) + 1
         return {
             "episodes": {"total": len(episodes), "unlabeled": unlabeled},
-            "candidates": by_status,
-            "skills": by_skill_status,
+            "candidates": self._count_by_status(candidates, "status"),
+            "skills": self._count_by_status(skills, "status"),
         }
 
 
@@ -273,16 +272,16 @@ _HANDLERS = {
 def main() -> None:
     p = _build_parser()
     args = p.parse_args()
-    url = args.url
 
     if args.command == "token":
+        url = args.url
         client_id = args.tok_client or args.client
         secret = _resolve_secret(client_id, args.tok_secret or args.secret)
         _out(SkillsClient.get_token_response(url, client_id, secret))
         return
 
     secret = _resolve_secret(args.client, args.secret)
-    client = SkillsClient.from_client_credentials(url, args.client, secret)
+    client = SkillsClient.from_client_credentials(args.url, args.client, secret)
 
     if args.command == "pipeline":
         _out(client.pipeline_summary())

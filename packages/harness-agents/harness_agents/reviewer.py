@@ -38,8 +38,19 @@ class CodeReviewerAgent:
         self.llm = llm_provider
         self.memory = memory_store
 
+    def _check_token_budget(self, token_usage: dict, token_budget: int | None) -> dict | None:
+        if token_budget is None or token_usage["completion_tokens"] < token_budget:
+            return None
+        logger.warning(
+            "token_budget_exceeded: completion_tokens=%d budget=%d",
+            token_usage["completion_tokens"], token_budget,
+        )
+        return {
+            "code": "token_budget_exceeded",
+            "reason": f"completion tokens {token_usage['completion_tokens']} exceeded budget {token_budget}",
+        }
+
     async def _retry_until_valid(self, messages: list, token_usage: dict, token_budget: int | None):
-        """Run the LLM retry loop. Returns (parsed_output, token_usage, error_dict | None)."""
         for attempt in range(MAX_ITERATIONS):
             try:
                 response = await self.llm.chat(messages=messages)
@@ -57,17 +68,9 @@ class CodeReviewerAgent:
                 return parsed, token_usage, None
             except (json.JSONDecodeError, jsonschema.ValidationError) as e:
                 logger.warning("attempt %d: invalid output: %s", attempt + 1, e)
-
-                if token_budget is not None and token_usage["completion_tokens"] >= token_budget:
-                    logger.warning(
-                        "token_budget_exceeded: completion_tokens=%d budget=%d",
-                        token_usage["completion_tokens"], token_budget,
-                    )
-                    return None, token_usage, {
-                        "code": "token_budget_exceeded",
-                        "reason": f"completion tokens {token_usage['completion_tokens']} exceeded budget {token_budget}",
-                    }
-
+                budget_error = self._check_token_budget(token_usage, token_budget)
+                if budget_error:
+                    return None, token_usage, budget_error
                 messages.append({"role": "assistant", "content": raw})
                 messages.append({
                     "role": "user",
@@ -76,26 +79,29 @@ class CodeReviewerAgent:
 
         return None, token_usage, {"code": "invalid_output", "reason": "max retries exceeded"}
 
-    async def run(self, state: AgentState) -> AgentState:
-        diff_text = state["diff"]
-        task = state["task"]
+    async def _gather_tool_results(self, diff_text: str) -> tuple[dict, dict] | None:
+        try:
+            diff_result = await self.gateway.call_tool("git_diff", {"diff_text": diff_text})
+            lint_result = await self.gateway.call_tool("run_linter", {"diff_text": diff_text})
+            return diff_result, lint_result
+        except ToolAccessDenied as e:
+            logger.error("tool_access_denied: %s", e)
+            return None
+
+    async def _build_user_message(self, task: str, diff_text: str) -> str:
+        tool_results = await self._gather_tool_results(diff_text)
+        if tool_results is None:
+            return None
+        diff_result, lint_result = tool_results
 
         conventions = []
         if self.memory:
             conventions = await self.memory.search(self.memory_namespace, "repo conventions coding style", top_k=3)
-
-        try:
-            diff_result = await self.gateway.call_tool("git_diff", {"diff_text": diff_text})
-            lint_result = await self.gateway.call_tool("run_linter", {"diff_text": diff_text})
-        except ToolAccessDenied as e:
-            logger.error("tool_access_denied: %s", e)
-            return {**state, "error": {"code": "tool_access_denied", "reason": str(e)}}
-
         conventions_block = ""
         if conventions:
             conventions_block = f"\nRepo conventions from memory:\n{json.dumps(conventions, indent=2)}\n"
 
-        user_message = f"""Task: {task}
+        return f"""Task: {task}
 {conventions_block}
 Diff tool result:
 {json.dumps(diff_result, indent=2)}
@@ -105,11 +111,15 @@ Linter result:
 
 Return your structured review as raw JSON."""
 
+    async def run(self, state: AgentState) -> AgentState:
+        user_message = await self._build_user_message(state["task"], state["diff"])
+        if user_message is None:
+            return {**state, "error": {"code": "tool_access_denied", "reason": "Failed to gather tool results"}}
+
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
         ]
-        logger.debug("llm user_message:\n%s", user_message)
 
         token_usage = dict(state.get("token_usage") or {"prompt_tokens": 0, "completion_tokens": 0})
         token_budget = state.get("token_budget")

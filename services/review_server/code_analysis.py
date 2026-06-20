@@ -108,39 +108,27 @@ def _hotspot_sort_key(r: dict) -> float:
     return r["hotspot_score"]
 
 
+_CC_SCORE_TABLE = [(5, 10), (10, 8), (15, 6), (20, 4), (30, 2)]
+
+
 def _complexity_score(cc: int) -> int:
-    """Map cyclomatic complexity to a 0-10 health score (higher = healthier)."""
-    if cc <= 5:
-        return 10
-    if cc <= 10:
-        return 8
-    if cc <= 15:
-        return 6
-    if cc <= 20:
-        return 4
-    if cc <= 30:
-        return 2
+    for threshold, score in _CC_SCORE_TABLE:
+        if cc <= threshold:
+            return score
     return 1
 
 
-def _file_health_score(source: str) -> dict[str, Any]:
-    """Analyze a single file's source code with radon.
-
-    Returns a dict with overall score 0-10 and per-function breakdown.
-    Falls back to line-count heuristics when radon is unavailable.
-    """
+def _load_radon():
+    """Lazy-import radon; returns (cc_visit, analyze) or None."""
     try:
         from radon.complexity import cc_visit
         from radon.raw import analyze
+        return cc_visit, analyze
     except ImportError:
-        return _fallback_health(source)
+        return None, None
 
-    try:
-        blocks = cc_visit(source)
-        raw = analyze(source)
-    except Exception:
-        return _fallback_health(source)
 
+def _build_function_list(blocks) -> list[dict]:
     functions = []
     complexities = []
     for b in blocks:
@@ -153,6 +141,21 @@ def _file_health_score(source: str) -> dict[str, Any]:
             "cyclomatic_complexity": c,
             "score": _complexity_score(c),
         })
+    return functions, complexities
+
+
+def _file_health_score(source: str) -> dict[str, Any]:
+    cc_visit, analyze = _load_radon()
+    if cc_visit is None:
+        return _fallback_health(source)
+
+    try:
+        blocks = cc_visit(source)
+        raw = analyze(source)
+    except Exception:
+        return _fallback_health(source)
+
+    functions, complexities = _build_function_list(blocks)
 
     if not complexities:
         return {
@@ -164,10 +167,9 @@ def _file_health_score(source: str) -> dict[str, Any]:
 
     avg_cc = sum(complexities) / len(complexities)
     max_cc = max(complexities)
-    overall = _complexity_score(max_cc)  # score by worst offender
 
     return {
-        "score": overall,
+        "score": _complexity_score(max_cc),
         "nloc": raw.loc if raw else 0,
         "avg_cyclomatic_complexity": round(avg_cc, 1),
         "max_cyclomatic_complexity": max_cc,
@@ -263,18 +265,21 @@ async def _fetch_file_tree(
         return None, f"Cannot fetch file tree for branch '{branch}': {e}"
 
 
+def _matches_ext(path: str, extensions: list[str]) -> bool:
+    for ext in extensions:
+        if path.endswith(ext):
+            return True
+    return False
+
+
 def _filter_source_files(tree_data: dict, extensions: list[str]) -> list[str]:
     if not isinstance(tree_data, dict):
         return []
-    files = []
-    for item in tree_data.get("tree") or []:
-        if item.get("type") != "blob":
-            continue
-        for ext in extensions:
-            if item["path"].endswith(ext):
-                files.append(item["path"])
-                break
-    return files
+    return [
+        item["path"]
+        for item in (tree_data.get("tree") or [])
+        if item.get("type") == "blob" and _matches_ext(item["path"], extensions)
+    ]
 
 
 async def _score_file(

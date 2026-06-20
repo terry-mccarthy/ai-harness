@@ -225,6 +225,32 @@ def _check_diversity_criteria(qualified: list[dict]) -> list[str]:
     return errors
 
 
+def _load_episode_ids(candidate: dict) -> list[str]:
+    eids = candidate.get("member_episode_ids", [])
+    if isinstance(eids, str):
+        return json.loads(eids)
+    return eids
+
+
+def _compute_promotion_result(prior: dict | None, candidate: dict) -> tuple:
+    new_version = (prior["version"] + 1) if prior else 1
+    prior_proc = prior.get("steps") if prior else None
+    proc_diff = _compute_procedure_diff(prior_proc, candidate.get("proposed_procedure"))
+    return new_version, proc_diff
+
+
+def _promote_and_commit(conn, candidate_id: str, claims: dict) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE candidates SET status='PROMOTED' WHERE candidate_id=%s",
+            (candidate_id,),
+        )
+        cur.execute(
+            "CALL DOLT_COMMIT('-Am', %s)",
+            (f"skill: promoted from candidate {candidate_id[:8]} by {claims['sub']}",),
+        )
+
+
 def _check_candidate_criteria(
     qualified: list[dict],
     disqualified: list[str],
@@ -383,9 +409,7 @@ async def promote_candidate(
         if candidate["status"] == "PROMOTED":
             raise HTTPException(409, "candidate_already_promoted")
 
-        episode_ids = candidate["member_episode_ids"]
-        if isinstance(episode_ids, str):
-            episode_ids = json.loads(episode_ids)
+        episode_ids = _load_episode_ids(candidate)
         qualified, disqualified = _fetch_and_qualify_episodes(conn, episode_ids)
         errors = _check_candidate_criteria(qualified, disqualified, len(episode_ids))
         if errors:
@@ -393,20 +417,10 @@ async def promote_candidate(
 
         cluster_key = candidate["cluster_key"]
         prior = _fetch_latest_skill(conn, cluster_key)
-        new_version = (prior["version"] + 1) if prior else 1
-        prior_proc = prior["steps"] if prior else None
-        proc_diff = _compute_procedure_diff(prior_proc, candidate["proposed_procedure"])
+        new_version, proc_diff = _compute_promotion_result(prior, candidate)
 
         _insert_skill(conn, cluster_key, candidate, new_version, claims["sub"])
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE candidates SET status='PROMOTED' WHERE candidate_id=%s",
-                (candidate_id,),
-            )
-            cur.execute(
-                "CALL DOLT_COMMIT('-Am', %s)",
-                (f"skill: promoted from candidate {candidate_id[:8]} by {claims['sub']}",),
-            )
+        _promote_and_commit(conn, candidate_id, claims)
     finally:
         conn.close()
 

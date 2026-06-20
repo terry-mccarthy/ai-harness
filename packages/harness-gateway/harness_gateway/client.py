@@ -60,12 +60,7 @@ class GatewayClient:
     def _auth_url(self) -> str:
         return self.governance_url or self.gateway_url
 
-    async def get_token(self) -> str | None:
-        """Fetch a bearer token from the governance (or gateway) /oauth/token endpoint."""
-        if not self.client_secret:
-            return None
-        if self._token and time.time() < self._token_exp - 30:
-            return self._token
+    async def _fetch_token(self) -> str | None:
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
@@ -78,7 +73,7 @@ class GatewayClient:
                     timeout=10.0,
                 )
             if resp.status_code == 404:
-                return None  # no OAuth on this gateway
+                return None
             resp.raise_for_status()
             data = resp.json()
             self._token = data["access_token"]
@@ -91,6 +86,13 @@ class GatewayClient:
             logger.warning("token fetch failed: %s", e)
             return None
 
+    async def get_token(self) -> str | None:
+        if not self.client_secret:
+            return None
+        if self._token and time.time() < self._token_exp - 30:
+            return self._token
+        return await self._fetch_token()
+
     def _check_status(self, status: int, tool_name: str) -> None:
         if status == 403:
             raise ToolAccessDenied(f"403 Forbidden: {tool_name}")
@@ -101,14 +103,17 @@ class GatewayClient:
                 f"HTTP {status}", request=httpx.Request("POST", self.gateway_url), response=None
             )
 
+    def _parse_text_content(self, text: str):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
+
     def _extract_content(self, data: dict):
         items = data.get("content") or data.get("result") or []
         if not (items and isinstance(items[0], dict) and items[0].get("type") == "text"):
             return data
-        try:
-            return json.loads(items[0]["text"])
-        except json.JSONDecodeError:
-            return items[0]["text"]
+        return self._parse_text_content(items[0]["text"])
 
     def _unwrap(self, data: dict, status: int, tool_name: str) -> dict:
         logger.debug("tool_call raw response: %s", data)

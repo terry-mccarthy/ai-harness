@@ -56,6 +56,14 @@ def _has_violation(violations: list, severity: str) -> bool:
     return False
 
 
+def _gate_requires_human(violations: list, state: HarnessState) -> bool:
+    if _has_violation(violations, "HARD"):
+        return True
+    if _has_violation(violations, "SOFT") and not state.get("human_justification"):
+        return True
+    return False
+
+
 def route_after_gate(state: HarnessState) -> str:
     signal = state.get("gate_signal")
     if not signal:
@@ -65,11 +73,7 @@ def route_after_gate(state: HarnessState) -> str:
         return "synthesise"
     if result != "FAIL":
         return "error_handler"
-
-    violations = signal.get("violations", [])
-    if _has_violation(violations, "HARD"):
-        return "human_gate"
-    if _has_violation(violations, "SOFT") and not state.get("human_justification"):
+    if _gate_requires_human(signal.get("violations", []), state):
         return "human_gate"
     return "synthesise"
 

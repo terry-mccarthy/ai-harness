@@ -118,6 +118,13 @@ class ArchitectAgent:
         ]
         return await self._llm_retry(messages)
 
+    async def _build_context(self, phase_results: dict, *phases: str) -> dict:
+        context = {}
+        for p in phases:
+            if p in phase_results:
+                context[p] = {k: v for k, v in phase_results[p].items() if k != "phase"}
+        return context
+
     async def _phase_abstraction_analysis(self, task: str, phase_results: dict) -> dict | None:
         logger.info("phase: abstraction_analysis")
         recon = phase_results.get("reconnaissance", {})
@@ -127,10 +134,7 @@ class ArchitectAgent:
             query = " and ".join(interfaces_to_examine[:5])
         abstractions = await self._call_tool("codebase_search", {"query": query, "repo": self.gateway.gateway_url, "top_k": 10})
         abs_data = abstractions or {"result": "no data"}
-        context = {}
-        for p in ("reconnaissance", "flow_trace"):
-            if p in phase_results:
-                context[p] = {k: v for k, v in phase_results[p].items() if k != "phase"}
+        context = await self._build_context(phase_results, "reconnaissance", "flow_trace")
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps({
@@ -146,10 +150,7 @@ class ArchitectAgent:
         logger.info("phase: synthesis")
         adrs = await self._call_tool("adr_read", {"query": task, "repo": self.gateway.gateway_url, "top_k": 5})
         adr_data = adrs or {"result": "no data"}
-        context = {}
-        for p in PHASES:
-            if p in phase_results and phase_results[p]:
-                context[p] = {k: v for k, v in phase_results[p].items() if k != "phase"}
+        context = await self._build_context(phase_results, *PHASES)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps({

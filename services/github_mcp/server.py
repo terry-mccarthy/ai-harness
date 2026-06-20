@@ -251,8 +251,17 @@ def _fetch_single_adr(owner: str, repo_name: str, branch: str, path: str) -> dic
     }
 
 
+def _to_adr_entry(f: dict) -> dict:
+    adr_id = f["name"].split("-")[0]
+    return {
+        "path": f["path"],
+        "name": f["name"],
+        "id": adr_id,
+        "download_url": f.get("download_url", ""),
+    }
+
+
 async def _list_adr_files(owner: str, repo_name: str, branch: str) -> list[dict]:
-    """List ADR files from docs/adr/ via GitHub API."""
     url = f"{_API_BASE}/repos/{owner}/{repo_name}/contents/docs/adr"
     async with httpx.AsyncClient() as client:
         resp = await client.get(url, headers=_HEADERS, timeout=10)
@@ -264,16 +273,7 @@ async def _list_adr_files(owner: str, repo_name: str, branch: str) -> list[dict]
     if not isinstance(files, list):
         return []
 
-    adr_files = []
-    for f in files:
-        if f.get("type") == "file" and f["name"].endswith(".md"):
-            adr_id = f["name"].split("-")[0]
-            adr_files.append({
-                "path": f["path"],
-                "name": f["name"],
-                "id": adr_id,
-                "download_url": f.get("download_url", ""),
-            })
+    adr_files = [_to_adr_entry(f) for f in files if f.get("type") == "file" and f["name"].endswith(".md")]
     return sorted(adr_files, key=lambda x: x["name"])
 
 

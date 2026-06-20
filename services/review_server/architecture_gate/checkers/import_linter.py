@@ -22,40 +22,45 @@ layers = [
 """
 
 
+def _run_import_linter(repo_path: str) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(
+            ["import-linter", "--format", "json"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except FileNotFoundError:
+        logger.warning("import-linter not installed — skipping")
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning("import-linter timed out for %s", repo_path)
+        return None
+
+
+def _parse_linter_violations(stdout: str) -> list[Violation]:
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        return []
+    violations = []
+    for entry in data.get("contracts", []):
+        for violation in entry.get("violations", []):
+            violations.append(Violation(
+                rule=violation.get("rule", "layer-violation"),
+                severity="HARD",
+                file=violation.get("module", ""),
+                message=violation.get("message", "Illegal import"),
+            ))
+    return violations
+
+
 class ImportLinterChecker(Checker):
     """Run import-linter on the repo and map layer violations to HARD violations."""
 
     async def check(self, repo_path: str) -> list[Violation]:
-        try:
-            result = subprocess.run(
-                ["import-linter", "--format", "json"],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-        except FileNotFoundError:
-            logger.warning("import-linter not installed — skipping")
+        result = _run_import_linter(repo_path)
+        if result is None or result.returncode == 0:
             return []
-        except subprocess.TimeoutExpired:
-            logger.warning("import-linter timed out for %s", repo_path)
-            return []
-
-        if result.returncode == 0:
-            return []
-
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return []
-
-        violations = []
-        for entry in data.get("contracts", []):
-            for violation in entry.get("violations", []):
-                violations.append(Violation(
-                    rule=violation.get("rule", "layer-violation"),
-                    severity="HARD",
-                    file=violation.get("module", ""),
-                    message=violation.get("message", "Illegal import"),
-                ))
-        return violations
+        return _parse_linter_violations(result.stdout)

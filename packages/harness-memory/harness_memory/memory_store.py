@@ -45,21 +45,20 @@ class PostgresMemoryStore:
         self._redis: aioredis.Redis | None = None
         self.cache_hits: int = 0
 
-    async def setup(self) -> None:
+    async def _ensure_connections(self) -> None:
         if self._pool is None:
             self._pool = await asyncpg.create_pool(self._pg_dsn, min_size=1, max_size=5)
         if self._redis is None:
             self._redis = aioredis.from_url(self._redis_url, decode_responses=False)
 
-        # Detect embedding dimension once per model; cache across store instances
+    async def _resolve_embedding_dim(self) -> int:
         if self._embed_model not in PostgresMemoryStore._embed_dim_cache:
             sample = await self._embed("setup")
             PostgresMemoryStore._embed_dim_cache[self._embed_model] = len(sample)
-        dim = PostgresMemoryStore._embed_dim_cache[self._embed_model]
+        return PostgresMemoryStore._embed_dim_cache[self._embed_model]
 
-        create_table_sql = BASE_CREATE_TABLE_SQL.format(dim=dim)
+    async def _ensure_table(self, dim: int) -> None:
         async with self._pool.acquire() as conn:
-            # If table already exists with wrong vector dimension, drop it
             existing_dim = await conn.fetchval(
                 """
                 SELECT atttypmod FROM pg_attribute pa
@@ -71,8 +70,12 @@ class PostgresMemoryStore:
             )
             if existing_dim is not None and existing_dim != dim:
                 await conn.execute("DROP TABLE IF EXISTS memory_items")
+            await conn.execute(BASE_CREATE_TABLE_SQL.format(dim=dim))
 
-            await conn.execute(create_table_sql)
+    async def setup(self) -> None:
+        await self._ensure_connections()
+        dim = await self._resolve_embedding_dim()
+        await self._ensure_table(dim)
 
     async def close(self) -> None:
         if self._pool:

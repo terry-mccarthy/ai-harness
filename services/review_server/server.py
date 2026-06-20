@@ -59,18 +59,21 @@ async def _ensure_config_table() -> None:
         """)
 
 
+def _apply_config_overrides(overrides: dict) -> None:
+    if "llm_provider" in overrides:
+        _CONFIG["llm_provider"] = overrides["llm_provider"]
+    for prov in ("ollama", "gemini", "openrouter"):
+        if prov in overrides:
+            _CONFIG[prov] = overrides[prov]
+
+
 async def _load_config_from_pg() -> None:
     if not _PG_POOL:
         return
     async with _PG_POOL.acquire() as conn:
         row = await conn.fetchrow("SELECT config FROM server_config WHERE id = 1")
     if row and row["config"]:
-        overrides = json.loads(row["config"])
-        if "llm_provider" in overrides:
-            _CONFIG["llm_provider"] = overrides["llm_provider"]
-        for prov in ("ollama", "gemini", "openrouter"):
-            if prov in overrides:
-                _CONFIG[prov] = overrides[prov]
+        _apply_config_overrides(json.loads(row["config"]))
 
 
 async def _save_config_to_pg() -> None:
@@ -165,14 +168,6 @@ def _get_cfg(provider: str, key: str):
 
 
 def _resolve(override, provider: str, key: str, env_var: str, default, *, cast=None):
-    """Resolve a setting with priority: explicit override > config store > env var > default.
-
-    *override* is the per-call kwarg (None = not set).
-    *provider* / *key* look up the runtime config store (set via PUT /config).
-    *env_var* is the environment variable name.
-    *default* is the fallback when nothing above is set.
-    *cast* is an optional type converter (e.g. float, int).
-    """
     if override is not None:
         return override
     cfg = _get_cfg(provider, key)
@@ -206,65 +201,64 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
-def _build_llm_provider(
-    provider_name: str,
-    *,
-    host: str | None = None,
-    model: str | None = None,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    num_ctx: int | None = None,
-    num_predict: int | None = None,
-):
-    """Factory: return a concrete LLMProvider.
-
-    Resolution order for each parameter:
-      1. Per-call keyword argument (highest priority)
-      2. Runtime config store (set via ``PUT /config``)
-      3. Environment variable
-      4. Hardcoded default (lowest priority)
-    """
-    from harness_agents.llm import OllamaProvider, GeminiProvider, OpenRouterProvider
-
-    if provider_name == "gemini":
-        api_key = _resolve(None, "gemini", "api_key", "GEMINI_API_KEY", "")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY is required for the gemini provider")
-        return GeminiProvider(
-            model=_resolve(model, "gemini", "model", "GEMINI_MODEL", "gemini-2.5-flash"),
-            api_key=api_key,
-            temperature=_resolve(temperature, "gemini", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
-            max_output_tokens=_resolve(max_tokens, "gemini", "max_output_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
-        )
-    if provider_name == "openrouter":
-        api_key = _resolve(None, "openrouter", "api_key", "OPENROUTER_API_KEY", "")
-        if not api_key:
-            raise ValueError("OPENROUTER_API_KEY is required for the openrouter provider")
-        return OpenRouterProvider(
-            api_key=api_key,
-            model=_resolve(model, "openrouter", "model", "OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
-            temperature=_resolve(temperature, "openrouter", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
-            max_tokens=_resolve(max_tokens, "openrouter", "max_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
-        )
-    if provider_name == "ollama":
-        return OllamaProvider(
-            host=_resolve(host, "ollama", "host", "OLLAMA_HOST", "http://localhost:11434"),
-            model=_resolve(model, "ollama", "model", "OLLAMA_MODEL", "qwen2.5-coder:7b"),
-            num_ctx=_resolve(num_ctx, "ollama", "num_ctx", "OLLAMA_NUM_CTX", 8192, cast=int),
-            temperature=_resolve(
-                temperature, "ollama", "temperature", "LLM_TEMPERATURE",
-                _env_float("OLLAMA_TEMPERATURE", 0.1),
-                cast=float,
-            ),
-            num_predict=_resolve(
-                num_predict, "ollama", "num_predict", "LLM_MAX_TOKENS",
-                _env_int("OLLAMA_NUM_PREDICT", 1024),
-                cast=int,
-            ),
-        )
-    raise ValueError(
-        f"Unknown LLM provider: {provider_name!r}. Supported: ollama, gemini, openrouter"
+def _build_gemini_provider(model=None, temperature=None, max_tokens=None):
+    from harness_agents.llm import GeminiProvider
+    api_key = _resolve(None, "gemini", "api_key", "GEMINI_API_KEY", "")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY is required for the gemini provider")
+    return GeminiProvider(
+        model=_resolve(model, "gemini", "model", "GEMINI_MODEL", "gemini-2.5-flash"),
+        api_key=api_key,
+        temperature=_resolve(temperature, "gemini", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
+        max_output_tokens=_resolve(max_tokens, "gemini", "max_output_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
     )
+
+
+def _build_openrouter_provider(model=None, temperature=None, max_tokens=None):
+    from harness_agents.llm import OpenRouterProvider
+    api_key = _resolve(None, "openrouter", "api_key", "OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY is required for the openrouter provider")
+    return OpenRouterProvider(
+        api_key=api_key,
+        model=_resolve(model, "openrouter", "model", "OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+        temperature=_resolve(temperature, "openrouter", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
+        max_tokens=_resolve(max_tokens, "openrouter", "max_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
+    )
+
+
+def _build_ollama_provider(host=None, model=None, temperature=None, max_tokens=None, num_ctx=None, num_predict=None):
+    from harness_agents.llm import OllamaProvider
+    return OllamaProvider(
+        host=_resolve(host, "ollama", "host", "OLLAMA_HOST", "http://localhost:11434"),
+        model=_resolve(model, "ollama", "model", "OLLAMA_MODEL", "qwen2.5-coder:7b"),
+        num_ctx=_resolve(num_ctx, "ollama", "num_ctx", "OLLAMA_NUM_CTX", 8192, cast=int),
+        temperature=_resolve(
+            temperature, "ollama", "temperature", "LLM_TEMPERATURE",
+            _env_float("OLLAMA_TEMPERATURE", 0.1),
+            cast=float,
+        ),
+        num_predict=_resolve(
+            num_predict, "ollama", "num_predict", "LLM_MAX_TOKENS",
+            _env_int("OLLAMA_NUM_PREDICT", 1024),
+            cast=int,
+        ),
+    )
+
+
+_BUILDERS = {
+    "gemini": _build_gemini_provider,
+    "openrouter": _build_openrouter_provider,
+    "ollama": _build_ollama_provider,
+}
+
+
+def _build_llm_provider(provider_name: str, **kwargs):
+    """Factory: return a concrete LLMProvider. Resolution: kwarg > config > env > default."""
+    builder = _BUILDERS.get(provider_name)
+    if not builder:
+        raise ValueError(f"Unknown LLM provider: {provider_name!r}. Supported: ollama, gemini, openrouter")
+    return builder(**kwargs)
 
 
 async def _run_review(

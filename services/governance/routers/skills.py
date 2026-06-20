@@ -161,23 +161,27 @@ def _maybe_repropose_candidate(conn, skill: dict) -> str | None:
     return candidate_id
 
 
+def _get_audit_success_rate(conn, agent_role: str, cutoff_ms: int) -> float | None:
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            "SELECT COUNT(*) as total, SUM(policy_decision='allow') as allowed "
+            "FROM audit_log WHERE agent_id=%s AND timestamp_ms >= %s",
+            (agent_role, cutoff_ms),
+        )
+        row = cur.fetchone()
+    total = int(row["total"] or 0) if row else 0
+    if total == 0:
+        return None
+    return float(row["allowed"] or 0) / total
+
+
 def _compute_early_review_flags(conn, active_skills: list[dict]) -> list[str]:
     """Return skill IDs whose trailing 30-day audit success rate is < 0.5."""
     flagged = []
     cutoff_ms = int((datetime.utcnow() - timedelta(days=30)).timestamp() * 1000)
     for skill in active_skills:
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
-            cur.execute(
-                "SELECT COUNT(*) as total, SUM(policy_decision='allow') as allowed "
-                "FROM audit_log WHERE agent_id=%s AND timestamp_ms >= %s",
-                (skill["agent_role"], cutoff_ms),
-            )
-            row = cur.fetchone()
-        total = int(row["total"] or 0) if row else 0
-        if total == 0:
-            continue
-        allowed = int(row["allowed"] or 0)
-        if (allowed / total) < 0.5:
+        rate = _get_audit_success_rate(conn, skill["agent_role"], cutoff_ms)
+        if rate is not None and rate < 0.5:
             flagged.append(skill["id"])
     return flagged
 

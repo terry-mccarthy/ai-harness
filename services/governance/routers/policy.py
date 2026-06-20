@@ -107,6 +107,39 @@ async def check_policy(
 # ---------------------------------------------------------------------------
 
 
+def _record_audit_metrics(role: str, decision: str, latency_ms: int) -> None:
+    tool_calls_total.labels(agent_role=role, decision=decision).inc()
+    if latency_ms:
+        tool_call_latency.labels(agent_role=role).observe(latency_ms)
+
+
+def _schedule_audit_write(background_tasks: BackgroundTasks, claims: dict, body: dict) -> None:
+    full_tool = body.get("tool_name", "")
+    short_tool = full_tool.split("__")[-1] if "__" in full_tool else full_tool
+    rule = body.get("rule", f"harness.allow[{claims['role']}]")
+    correlation_id = body.get("correlation_id")
+
+    background_tasks.add_task(
+        write_audit,
+        claims["sub"], full_tool, short_tool,
+        body.get("req_hash", ""), body.get("resp_hash", ""),
+        body.get("decision", "allow"), rule,
+        int(body.get("latency_ms", 0)), correlation_id,
+    )
+    background_tasks.add_task(
+        write_episode, claims["sub"], full_tool, short_tool,
+        body.get("req_hash", ""), correlation_id, body.get("service_class"),
+    )
+
+
+def _maybe_run_expiry_pass(background_tasks: BackgroundTasks) -> None:
+    global _audit_call_count
+    _audit_call_count += 1
+    if EXPIRY_PASS_INTERVAL > 0 and _audit_call_count % EXPIRY_PASS_INTERVAL == 0:
+        from routers.skills import background_expiry_pass
+        background_tasks.add_task(background_expiry_pass)
+
+
 @router.post("/audit", status_code=202)
 async def audit(
     request: Request,
@@ -114,48 +147,16 @@ async def audit(
     authorization: str | None = Header(default=None),
     x_correlation_id: str | None = Header(default=None),
 ):
-    """Accept an audit record from GatewayClient and write it to Dolt async."""
-    global _audit_call_count
     claims = decode_jwt(authorization)
     body = await request.json()
-    full_tool = body.get("tool_name", "")
-    short_tool = full_tool.split("__")[-1] if "__" in full_tool else full_tool
-    rule = body.get("rule", f"harness.allow[{claims['role']}]")
-    req_hash = body.get("req_hash", "")
-    resp_hash = body.get("resp_hash", "")
     decision = body.get("decision", "allow")
     latency_ms = int(body.get("latency_ms", 0))
-    correlation_id = x_correlation_id or body.get("correlation_id")
+    if x_correlation_id:
+        body["correlation_id"] = x_correlation_id
 
-    tool_calls_total.labels(agent_role=claims["role"], decision=decision).inc()
-    if latency_ms:
-        tool_call_latency.labels(agent_role=claims["role"]).observe(latency_ms)
-
-    background_tasks.add_task(
-        write_audit,
-        claims["sub"],
-        full_tool,
-        short_tool,
-        req_hash,
-        resp_hash,
-        decision,
-        rule,
-        latency_ms,
-        correlation_id,
-    )
-    background_tasks.add_task(
-        write_episode,
-        claims["sub"],
-        full_tool,
-        short_tool,
-        req_hash,
-        correlation_id,
-        body.get("service_class"),
-    )
-    _audit_call_count += 1
-    if EXPIRY_PASS_INTERVAL > 0 and _audit_call_count % EXPIRY_PASS_INTERVAL == 0:
-        from routers.skills import background_expiry_pass  # lazy: lives in slice 04
-        background_tasks.add_task(background_expiry_pass)
+    _record_audit_metrics(claims["role"], decision, latency_ms)
+    _schedule_audit_write(background_tasks, claims, body)
+    _maybe_run_expiry_pass(background_tasks)
     return {}
 
 

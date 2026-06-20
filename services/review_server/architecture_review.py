@@ -79,12 +79,15 @@ async def _fetch_architecture_md(owner: str, repo: str, ref: str) -> str:
         raise
 
 
-async def _list_adr_files(owner: str, repo: str, ref: str) -> list[str]:
-    """List docs/adr/*.md files in the repo via the GitHub API."""
+async def _fetch_adr_list(owner: str, repo: str, ref: str) -> list[dict]:
     url = f"https://api.github.com/repos/{owner}/{repo}/contents/docs/adr?ref={ref}"
+    text = await _fetch_text(url)
+    return json.loads(text)
+
+
+async def _list_adr_files(owner: str, repo: str, ref: str) -> list[str]:
     try:
-        text = await _fetch_text(url)
-        items = json.loads(text)
+        items = await _fetch_adr_list(owner, repo, ref)
         return [
             item["name"]
             for item in items
@@ -120,28 +123,39 @@ async def _fetch_invariants(owner: str, repo: str, ref: str) -> dict:
     return {"architecture_md": architecture_md, "adrs": adrs}
 
 
-async def _fetch_file_tree(owner: str, repo: str, ref: str) -> str:
-    """Fetch the repo file tree via the GitHub Git Trees API."""
+async def _fetch_tree_data(owner: str, repo: str, ref: str) -> dict | None:
     url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{ref}?recursive=1"
     try:
         text = await _fetch_text(url)
-        data = json.loads(text)
-        skip = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}
-        files: list[str] = []
-        for item in data.get("tree", []):
-            if item["type"] != "blob":
-                continue
-            path = item["path"]
-            if any(part in skip for part in Path(path).parts):
-                continue
-            files.append(path)
-            if len(files) >= _MAX_CODEBASE_FILES:
-                break
-        return "\n".join(sorted(files))
+        return json.loads(text)
     except httpx.HTTPStatusError as e:
         if e.response.status_code in (404, 403):
-            return "(unable to fetch file tree — API rate limit or private repo)"
+            return None
         raise
+
+
+_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}
+
+
+def _should_skip_path(path: str) -> bool:
+    return any(part in _SKIP_DIRS for part in Path(path).parts)
+
+
+async def _fetch_file_tree(owner: str, repo: str, ref: str) -> str:
+    data = await _fetch_tree_data(owner, repo, ref)
+    if data is None:
+        return "(unable to fetch file tree — API rate limit or private repo)"
+    files: list[str] = []
+    for item in data.get("tree", []):
+        if item["type"] != "blob":
+            continue
+        path = item["path"]
+        if _should_skip_path(path):
+            continue
+        files.append(path)
+        if len(files) >= _MAX_CODEBASE_FILES:
+            break
+    return "\n".join(sorted(files))
 
 
 def _format_invariants(inv: dict) -> str:
@@ -191,32 +205,32 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
-async def architecture_review(
-    repo: str,
-    target_mode: str,
-    diff: str | None,
-    llm_provider,
-) -> dict:
-    """Score a diff or codebase against the repo's stated architectural invariants.
+def _parse_review_response(raw: str) -> dict | None:
+    """Parse LLM output, return structured dict with findings+summary or None on failure."""
+    parsed = _extract_json(raw)
+    if parsed is None:
+        return None
+    return {
+        "findings": parsed.get("findings", []),
+        "summary": parsed.get("summary", ""),
+    }
 
-    Fetches invariants (ARCHITECTURE.md + ADRs) from the GitHub repo.
-    ``llm_provider`` must have ``async chat(messages) -> LLMResponse``.
-    """
+
+async def _resolve_target_payload(target_mode: str, owner: str, repo_name: str, ref: str, diff: str | None) -> str:
+    if target_mode == "diff":
+        return diff
+    return await _fetch_file_tree(owner, repo_name, ref)
+
+
+async def architecture_review(repo: str, target_mode: str, diff: str | None, llm_provider) -> dict:
     if target_mode not in _VALID_MODES:
-        raise ValueError(
-            f"target_mode {target_mode!r} not supported; expected one of {_VALID_MODES}"
-        )
+        raise ValueError(f"target_mode {target_mode!r} not supported; expected one of {_VALID_MODES}")
     if target_mode == "diff" and not diff:
         raise ValueError("target_mode='diff' requires a non-empty 'diff' argument")
 
     owner, repo_name, ref = _parse_github_url(repo)
     invariants = await _fetch_invariants(owner, repo_name, ref)
-
-    if target_mode == "diff":
-        target_payload = diff
-    else:
-        target_payload = await _fetch_file_tree(owner, repo_name, ref)
-
+    target_payload = await _resolve_target_payload(target_mode, owner, repo_name, ref, diff)
     user_msg = _build_user_message(target_mode, invariants, target_payload)
 
     messages: List[Dict[str, str]] = [
@@ -224,22 +238,20 @@ async def architecture_review(
         {"role": "user", "content": user_msg},
     ]
     response = await llm_provider.chat(messages)
-    raw = response.content
+    result = _parse_review_response(response.content)
 
-    parsed = _extract_json(raw)
-    if parsed is None:
+    if result is None:
         return {
             "target_mode": target_mode,
             "repo": repo,
             "findings": [],
             "summary": "",
             "parse_error": "LLM response was not valid JSON",
-            "raw": raw[:500],
+            "raw": response.content[:500],
         }
 
     return {
         "target_mode": target_mode,
         "repo": repo,
-        "findings": parsed.get("findings", []),
-        "summary": parsed.get("summary", ""),
+        **result,
     }

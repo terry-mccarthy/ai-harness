@@ -36,6 +36,16 @@ def _to_cf_tool_name(mcp_name: str) -> str:
     return mcp_name.replace("__", "-").replace("_", "-")
 
 
+def _parse_tool_result(result: dict) -> dict:
+    content = result.get("content", [])
+    if not (content and isinstance(content[0], dict) and content[0].get("type") == "text"):
+        return result
+    try:
+        return json.loads(content[0]["text"])
+    except json.JSONDecodeError:
+        return {"text": content[0]["text"]}
+
+
 class ContextForgeError(Exception):
     pass
 
@@ -149,9 +159,4 @@ class ContextForgeGatewayClient:
 
         result = data.get("result", {})
         content = result.get("content", [])
-        if content and isinstance(content[0], dict) and content[0].get("type") == "text":
-            try:
-                return json.loads(content[0]["text"])
-            except json.JSONDecodeError:
-                return {"text": content[0]["text"]}
-        return result
+        return _parse_tool_result(result)
