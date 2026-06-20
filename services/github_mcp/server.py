@@ -50,6 +50,102 @@ def _default_branch(owner: str, repo: str) -> str:
     return resp.json().get("default_branch", "main")
 
 
+async def _fetch_convention_files(
+    owner: str, repo_name: str, branch: str, paths: list[str]
+) -> list[dict]:
+    files = []
+    async with httpx.AsyncClient() as client:
+        for path in paths:
+            url = f"{_RAW_BASE}/{owner}/{repo_name}/{branch}/{path}"
+            try:
+                resp = await client.get(url, headers=_HEADERS, timeout=10)
+                if resp.status_code == 200:
+                    files.append({"path": path, "content": resp.text})
+            except Exception:
+                continue
+    return files
+
+
+def _rank_by_query(files: list[dict], query: str | None) -> list[dict]:
+    if not query:
+        return files
+    q_lower = query.lower()
+    scored = []
+    for f in files:
+        score = 0
+        if q_lower in f["content"].lower():
+            score += f["content"].lower().count(q_lower)
+        if q_lower in f["path"].lower():
+            score += 10
+        scored.append((score, f))
+    scored.sort(key=lambda x: -x[0])
+    return [f for _, f in scored]
+
+
+@mcp.tool()
+async def issue_create(
+    repo: str,
+    title: str,
+    body: str,
+    labels: list[str] | None = None,
+) -> dict:
+    """Create a GitHub issue in the given repository.
+
+    Args:
+        repo: ``https://github.com/owner/repo``.
+        title: Issue title.
+        body: Issue body (Markdown).
+        labels: Optional list of label names to apply.
+    """
+    owner, repo_name = _parse_github_url(repo)
+    url = f"{_API_BASE}/repos/{owner}/{repo_name}/issues"
+    payload: dict = {"title": title, "body": body}
+    if labels:
+        payload["labels"] = labels
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, headers=_HEADERS, json=payload, timeout=15)
+    if resp.status_code == 403:
+        logger.warning("GitHub API rate limited or token missing; issue not created")
+        return {"created": False, "error": "rate_limited"}
+    if resp.status_code == 401:
+        logger.warning("GitHub API auth failed; issue not created")
+        return {"created": False, "error": "unauthorized"}
+    resp.raise_for_status()
+    data = resp.json()
+    return {"created": True, "issue_url": data["html_url"], "issue_number": data["number"]}
+
+
+@mcp.tool()
+async def repo_conventions_read(
+    repo: str,
+    query: str | None = None,
+) -> dict:
+    """Read coding conventions and style guides from a GitHub repo.
+
+    Fetches common conventions files (``CONTRIBUTING.md``,
+    ``docs/CODING_STANDARDS.md``, ``.editorconfig``, etc.) from the repo
+    and returns their contents.  An optional free-text ``query`` can be
+    provided to rank results by relevance.
+
+    Args:
+        repo: ``https://github.com/owner/repo``.
+        query: Optional free-text query to rank conventions.
+    """
+    owner, repo_name = _parse_github_url(repo)
+    branch = _default_branch(owner, repo_name)
+    convention_paths = [
+        "CONTRIBUTING.md",
+        "docs/CODING_STANDARDS.md",
+        "docs/CONTRIBUTING.md",
+        ".editorconfig",
+    ]
+    files = await _fetch_convention_files(owner, repo_name, branch, convention_paths)
+    if not files:
+        return {"repo": f"{owner}/{repo_name}", "conventions": [], "message": "no conventions files found"}
+    files = _rank_by_query(files, query)
+    return {"repo": f"{owner}/{repo_name}", "conventions": files}
+
+
 @mcp.tool()
 async def codebase_search(query: str, repo: str, top_k: int = 5) -> dict:
     """Search a GitHub codebase using GitHub's code search API.
@@ -85,6 +181,24 @@ async def codebase_search(query: str, repo: str, top_k: int = 5) -> dict:
     return {"repo": repo, "query": query, "results": results}
 
 
+async def _fetch_adr_contents(
+    owner: str, repo_name: str, branch: str, adr_files: list[dict]
+) -> list[dict]:
+    adrs = []
+    async with httpx.AsyncClient() as client:
+        for af in adr_files:
+            content = await _fetch_raw(owner, repo_name, branch, af["path"], client)
+            title, parsed_id = _parse_adr_metadata(content or "", af["path"])
+            adrs.append({
+                "id": parsed_id,
+                "title": title,
+                "status": _parse_adr_status(content or ""),
+                "path": af["path"],
+                "content": content or "",
+            })
+    return adrs
+
+
 @mcp.tool()
 async def adr_read(
     query: str | None = None,
@@ -117,18 +231,7 @@ async def adr_read(
     if query:
         adr_files = _rank_by_query(adr_files, query)[:top_k]
 
-    adrs = []
-    async with httpx.AsyncClient() as client:
-        for af in adr_files:
-            content = await _fetch_raw(owner, repo_name, branch, af["path"], client)
-            adrs.append({
-                "id": af.get("id", af["path"]),
-                "title": af.get("title", ""),
-                "status": af.get("status", "unknown"),
-                "path": af["path"],
-                "content": content or "",
-            })
-
+    adrs = await _fetch_adr_contents(owner, repo_name, branch, adr_files)
     return {"repo": f"{owner}/{repo_name}", "adrs": adrs}
 
 
@@ -200,6 +303,15 @@ def _parse_adr_metadata(content: str, path: str) -> tuple[str, str]:
             title = stripped[2:].strip()
             break
     return title, adr_id
+
+
+def _parse_adr_status(content: str) -> str:
+    """Extract status from ADR content (e.g. ``**Status:** accepted``)."""
+    for line in content.splitlines():
+        stripped = line.strip().lower()
+        if stripped.startswith("**status:**"):
+            return stripped.split("**status:**", 1)[1].strip()
+    return "unknown"
 
 
 def _rank_by_query(files: list[dict], query: str) -> list[dict]:
