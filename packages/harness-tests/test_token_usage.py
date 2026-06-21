@@ -65,27 +65,11 @@ def _reviewer_state(**overrides) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Slice 1 — LLMResponse carries token counts
-# ---------------------------------------------------------------------------
-
-def test_llm_response_has_token_fields():
-    from harness_agents.llm import LLMResponse
-
-    r = LLMResponse(content="hello", prompt_tokens=10, completion_tokens=5)
-    assert r.prompt_tokens == 10
-    assert r.completion_tokens == 5
-
-
-def test_llm_response_defaults_to_zero():
-    from harness_agents.llm import LLMResponse
-
-    r = LLMResponse(content="hello")
-    assert r.prompt_tokens == 0
-    assert r.completion_tokens == 0
-
-
-# ---------------------------------------------------------------------------
 # Slice 2 — OllamaProvider captures usage from API response
+#
+# LLMResponse field defaults (prompt_tokens/completion_tokens, None→0) are
+# exercised through the real provider path below, not as standalone dataclass
+# assertions.
 # ---------------------------------------------------------------------------
 
 async def test_ollama_provider_captures_token_counts():
@@ -131,31 +115,11 @@ async def test_ollama_provider_none_counts_become_zero():
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 — AgentState type definition includes token fields
-# ---------------------------------------------------------------------------
-
-def test_agent_state_accepts_token_fields():
-    """AgentState TypedDict must accept token_usage and token_budget keys."""
-    from harness_agents.types import AgentState
-
-    state: AgentState = {
-        "task": "review",
-        "diff": "",
-        "thread_id": str(uuid.uuid4()),
-        "agent_output": None,
-        "requires_human_approval": False,
-        "error": None,
-        "human_approval_token": None,
-        "memory_context": None,
-        "token_usage": {"prompt_tokens": 0, "completion_tokens": 0},
-        "token_budget": None,
-    }
-    assert state["token_usage"]["prompt_tokens"] == 0
-    assert state["token_budget"] is None
-
-
-# ---------------------------------------------------------------------------
 # Slice 4 — CodeReviewerAgent accumulates token_usage from LLM responses
+#
+# AgentState's token_usage/token_budget keys are exercised end-to-end by the
+# reviewer accumulation and budget tests below — a standalone TypedDict literal
+# assertion proves nothing at runtime.
 # ---------------------------------------------------------------------------
 
 async def test_reviewer_accumulates_token_usage():

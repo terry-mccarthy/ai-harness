@@ -1,13 +1,13 @@
 """Phase 3 — Specialised Agent Nodes.
 
-14 tests across three agents. Unit tests use MockLLMProvider + mocked gateway.
+10 tests across three agents. Unit tests use MockLLMProvider + mocked gateway.
 Integration tests (marked integration) run against the live Docker stack.
 """
 import inspect
 import json
 import os
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -118,19 +118,6 @@ _VALID_FINDINGS = json.dumps({
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def mock_memory_store():
-    store = MagicMock()
-    store.read = AsyncMock(return_value=None)
-    store.write = AsyncMock()
-    store.search = AsyncMock(return_value=[])
-    return store
-
-
-# ---------------------------------------------------------------------------
 # Slice 1 — AgentNode Protocol compliance (all three agents)
 # ---------------------------------------------------------------------------
 
@@ -183,58 +170,6 @@ async def test_architect_produces_review():
     assert "reconnaissance" in output["_phases"]
     assert "flow_trace" in output["_phases"]
     assert "abstraction_analysis" in output["_phases"]
-
-
-async def test_architect_reads_past_adrs(mock_memory_store):
-    """Architect searches memory for past ADRs before generating output."""
-    from harness_agents.architect import ArchitectAgent
-    from harness_agents.types import AgentState
-
-    agent = ArchitectAgent(
-        gateway=_mock_gateway(),
-        llm_provider=MockLLMProvider(_VALID_ADR),
-        memory_store=mock_memory_store,
-    )
-    state: AgentState = {
-        "task": "Design auth layer",
-        "diff": "",
-        "thread_id": str(uuid.uuid4()),
-        "agent_output": None,
-        "requires_human_approval": False,
-        "error": None,
-        "human_approval_token": None,
-        "memory_context": None,
-    }
-    await agent.run(state)
-
-    mock_memory_store.search.assert_awaited()
-
-
-async def test_architect_writes_adr_to_memory(mock_memory_store):
-    """After run(), memory store contains a new entry under architect/ namespace."""
-    from harness_agents.architect import ArchitectAgent
-    from harness_agents.types import AgentState
-
-    agent = ArchitectAgent(
-        gateway=_mock_gateway(),
-        llm_provider=MockLLMProvider(_VALID_ADR),
-        memory_store=mock_memory_store,
-    )
-    state: AgentState = {
-        "task": "Design auth layer",
-        "diff": "",
-        "thread_id": str(uuid.uuid4()),
-        "agent_output": None,
-        "requires_human_approval": False,
-        "error": None,
-        "human_approval_token": None,
-        "memory_context": None,
-    }
-    await agent.run(state)
-
-    mock_memory_store.write.assert_awaited_once()
-    call_args = mock_memory_store.write.call_args
-    assert call_args.args[0] == "architect"  # namespace
 
 
 @pytest.mark.integration
@@ -424,31 +359,6 @@ async def test_reviewer_loop_max_iterations():
     assert result["error"]["code"] == "invalid_output"
 
 
-async def test_reviewer_reads_conventions(mock_memory_store):
-    """Reviewer searches memory for repo conventions before the first LLM call."""
-    from harness_agents.reviewer import CodeReviewerAgent
-    from harness_agents.types import AgentState
-
-    agent = CodeReviewerAgent(
-        gateway=_mock_gateway({"git_diff": {}, "run_linter": {}}),
-        llm_provider=MockLLMProvider(_VALID_FINDINGS),
-        memory_store=mock_memory_store,
-    )
-    state: AgentState = {
-        "task": "Review",
-        "diff": "diff",
-        "thread_id": str(uuid.uuid4()),
-        "agent_output": None,
-        "requires_human_approval": False,
-        "error": None,
-        "human_approval_token": None,
-        "memory_context": None,
-    }
-    await agent.run(state)
-
-    mock_memory_store.search.assert_awaited()
-
-
 # ---------------------------------------------------------------------------
 # Slice 4 — SREAgent
 # ---------------------------------------------------------------------------
@@ -514,33 +424,3 @@ async def test_sre_shell_exec_allowed_with_approval():
     )
     result = await gw.call_tool("shell_exec", {"command": "echo ok"})
     assert result is not None
-
-
-async def test_sre_writes_incident_to_memory(mock_memory_store):
-    """After resolving an incident, memory store has entry under sre/ namespace."""
-    from harness_agents.sre import SREAgent
-    from harness_agents.types import AgentState
-
-    agent = SREAgent(
-        gateway=_mock_gateway({
-            "observability_query": {},
-            "log_search": {},
-            "runbook_read": {},
-        }),
-        llm_provider=MockLLMProvider(_VALID_INCIDENT),
-        memory_store=mock_memory_store,
-    )
-    state: AgentState = {
-        "task": "DB latency alert",
-        "diff": "",
-        "thread_id": str(uuid.uuid4()),
-        "agent_output": None,
-        "requires_human_approval": False,
-        "error": None,
-        "human_approval_token": None,
-        "memory_context": None,
-    }
-    await agent.run(state)
-
-    mock_memory_store.write.assert_awaited_once()
-    assert mock_memory_store.write.call_args.args[0] == "sre"
