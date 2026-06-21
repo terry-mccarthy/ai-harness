@@ -247,7 +247,7 @@ async def architecture_review(repo: str, target_mode: str, diff: str | None, llm
             "findings": [],
             "summary": "",
             "parse_error": "LLM response was not valid JSON",
-            "raw": response.content[:500],
+            "raw": response.content[:2000],
         }
 
     return {

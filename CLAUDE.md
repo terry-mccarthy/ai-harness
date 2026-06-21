@@ -350,6 +350,14 @@ Three input modes, evaluated in priority order:
 2. `pr_number` + `github_repo` — fetches the unified diff from `GET https://api.github.com/repos/{github_repo}/pulls/{pr_number}` with `Accept: application/vnd.github.v3.diff`. Token read from `GITHUB_TOKEN` env var (optional; omit for public repos). Works from inside Docker — no filesystem access needed.
 3. `repo_path` + `base`/`head` — runs `git diff` against the Docker-internal baked sample repo at `/app/sample-repo`.
 
+## PG config persistence gotcha
+
+The review-server stores runtime config (PUT /config) in Postgres `server_config` table. `.env` has `PG_DSN=localhost:5432` — works for host-side Python but **breaks inside Docker**. In docker-compose.yml, `PG_DSN` is hardcoded to `postgres` hostname (service name) to avoid the `.env` override.
+
+Even with correct PG_DSN, FastMCP's streamable-http transport only runs the lifespan **per MCP request**, not at server startup. Custom routes (GET /config) bypass the lifespan entirely. Config loads lazily on first MCP call (e.g. `initialize`). Until that call, `_CONFIG` shows defaults.
+
+`_init_pg_pool` has 5-attempt retry with backoff because the review-server has no `depends_on: postgres`.
+
 ## review_server HTTP endpoint
 
 `POST http://localhost:9003/review` — plain JSON endpoint for CI pipelines, pre-commit hooks, and webhooks.

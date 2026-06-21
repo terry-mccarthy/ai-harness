@@ -112,7 +112,8 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}
       REVIEW_API_KEY: ${REVIEW_API_KEY:-}
-      PG_DSN: ${PG_DSN:-postgresql://harness:harness@postgres:5432/harness}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      PG_DSN: postgresql://harness:harness@postgres:5432/harness
     depends_on:
       mcpjungle:
         condition: service_healthy
