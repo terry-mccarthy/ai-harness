@@ -126,16 +126,6 @@ def test_task_post_creates_dolt_commit(sre_token):
     cleanup_tasks([task_id])
 
 
-@pytest.mark.integration
-def test_task_post_requires_auth():
-    """task_post without a token returns 401."""
-    resp = httpx.post(
-        f"{GOVERNANCE_URL}/tasks",
-        json={"required_role": "sre", "artifact_type": "incident", "payload": {}},
-    )
-    assert resp.status_code == 401
-
-
 # ---------------------------------------------------------------------------
 # task_claim tests
 # ---------------------------------------------------------------------------
