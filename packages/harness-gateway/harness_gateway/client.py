@@ -201,7 +201,7 @@ class GatewayClient:
         if not self.governance_url:
             return
         try:
-            token = self.get_token()
+            token = await self.get_token()
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"{self.governance_url}/audit",
