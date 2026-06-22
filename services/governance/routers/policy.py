@@ -16,7 +16,7 @@ from core.config import (
     b64url,
 )
 from core.dolt import write_audit, write_episode, write_gate_failure
-from core.metrics import tool_call_latency, tool_calls_total
+from core.metrics import record_llm_usage, tool_call_latency, tool_calls_total
 from core.opa import check_opa
 
 logger = logging.getLogger(__name__)
@@ -155,6 +155,7 @@ async def audit(
         body["correlation_id"] = x_correlation_id
 
     _record_audit_metrics(claims["role"], decision, latency_ms)
+    record_llm_usage(claims["role"], body)
     _schedule_audit_write(background_tasks, claims, body)
     _maybe_run_expiry_pass(background_tasks)
     return {}

@@ -115,6 +115,22 @@ class DynamicSREAgent:
         key = f"incident:{state['thread_id'][:8]}"
         await self.memory.write(self.memory_namespace, key, report)
 
+    async def _report_llm_usage(self, token_usage: dict) -> None:
+        """Best-effort: send accumulated LLM token counts to governance for Prometheus."""
+        if not hasattr(self.gateway, "report_llm_usage"):
+            return
+        if not (hasattr(self.llm, "provider_name") and hasattr(self.llm, "model_name")):
+            return
+        try:
+            await self.gateway.report_llm_usage(
+                provider=self.llm.provider_name,
+                model=self.llm.model_name,
+                prompt_tokens=token_usage.get("prompt_tokens", 0),
+                completion_tokens=token_usage.get("completion_tokens", 0),
+            )
+        except Exception:
+            pass
+
     async def run(self, state: AgentState) -> AgentState:
         task = state.get("task", "")
         token_usage = self._init_token_usage(state)
@@ -144,34 +160,37 @@ class DynamicSREAgent:
             {"role": "user", "content": f"Incident: {task}{formula_block}{context_block}\n\nBegin your investigation."},
         ]
 
-        for turn in range(MAX_TURNS):
-            response, error = await self._llm_chat(messages, token_usage)
-            if error:
-                return {**state, "token_usage": token_usage, "error": {"code": "provider_error", "reason": error}}
+        try:
+            for turn in range(MAX_TURNS):
+                response, error = await self._llm_chat(messages, token_usage)
+                if error:
+                    return {**state, "token_usage": token_usage, "error": {"code": "provider_error", "reason": error}}
 
-            if token_budget is not None and token_usage["completion_tokens"] >= token_budget:
-                return {**state, "token_usage": token_usage, "error": {
-                    "code": "token_budget_exceeded",
-                    "reason": f"completion tokens {token_usage['completion_tokens']} exceeded budget {token_budget}",
-                }}
+                if token_budget is not None and token_usage["completion_tokens"] >= token_budget:
+                    return {**state, "token_usage": token_usage, "error": {
+                        "code": "token_budget_exceeded",
+                        "reason": f"completion tokens {token_usage['completion_tokens']} exceeded budget {token_budget}",
+                    }}
 
-            raw = _clean(response.content)
-            logger.debug("turn %d: %s", turn + 1, raw)
+                raw = _clean(response.content)
+                logger.debug("turn %d: %s", turn + 1, raw)
 
-            try:
-                action = json.loads(raw)
-            except json.JSONDecodeError:
-                messages.append({"role": "assistant", "content": raw})
-                messages.append({"role": "user", "content": "Invalid JSON. Respond with exactly one JSON object."})
-                continue
+                try:
+                    action = json.loads(raw)
+                except json.JSONDecodeError:
+                    messages.append({"role": "assistant", "content": raw})
+                    messages.append({"role": "user", "content": "Invalid JSON. Respond with exactly one JSON object."})
+                    continue
 
-            handled = await self._dispatch(action, raw, messages, state, token_usage)
-            if handled is not None:
-                if handled.get("agent_output"):
-                    await self._save_memory(state, handled["agent_output"])
-                return handled
+                handled = await self._dispatch(action, raw, messages, state, token_usage)
+                if handled is not None:
+                    if handled.get("agent_output"):
+                        await self._save_memory(state, handled["agent_output"])
+                    return handled
 
-        return {**state, "token_usage": token_usage, "error": {
-            "code": "max_turns_exceeded",
-            "reason": f"exceeded {MAX_TURNS} turns without final response",
-        }}
+            return {**state, "token_usage": token_usage, "error": {
+                "code": "max_turns_exceeded",
+                "reason": f"exceeded {MAX_TURNS} turns without final response",
+            }}
+        finally:
+            await self._report_llm_usage(token_usage)

@@ -194,6 +194,31 @@ class GatewayClient:
         except Exception as e:
             logger.warning("governance audit post failed: %s", e)
 
+    async def report_llm_usage(
+        self, provider: str, model: str, prompt_tokens: int, completion_tokens: int
+    ) -> None:
+        """POST LLM token counts to governance /audit for Prometheus tracking."""
+        if not self.governance_url:
+            return
+        try:
+            token = self.get_token()
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{self.governance_url}/audit",
+                    json={
+                        "tool_name": "__llm__",
+                        "llm_provider": provider,
+                        "llm_model": model,
+                        "llm_tokens": {"prompt": prompt_tokens, "completion": completion_tokens},
+                        "decision": "allow",
+                        "latency_ms": 0,
+                    },
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=10.0,
+                )
+        except Exception as e:
+            logger.warning("llm usage audit post failed: %s", e)
+
     def _cf_jwt(self) -> str:
         now = int(time.time())
         return pyjwt.encode(
