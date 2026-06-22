@@ -54,6 +54,18 @@ worker = ConsolidationWorker(store=store, formula_store=fstore); \
 result = asyncio.run(worker.run_pass('sre')); \
 print(result)"
 
+seed-runbooks:
+	set -a && source .env && set +a && \
+	.venv/bin/python -c "\
+import asyncio, os; \
+from pathlib import Path; \
+from harness_memory.memory_store import PostgresMemoryStore; \
+from harness_memory.runbook_seed import seed_runbooks; \
+store = PostgresMemoryStore(os.environ['PG_DSN'], os.environ.get('REDIS_URL','redis://localhost:6379'), os.environ.get('EMBED_MODEL','nomic-embed-text'), os.environ.get('OLLAMA_HOST','http://localhost:11434')); \
+asyncio.run(store.setup()); \
+n = asyncio.run(seed_runbooks(Path('docs/runbooks'), store)); \
+print(f'seeded {n} runbooks')"
+
 alembic-upgrade:
 	set -a && source .env && set +a && \
 	cd packages/harness-memory && ../../.venv/bin/alembic upgrade head

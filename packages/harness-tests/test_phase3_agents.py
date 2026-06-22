@@ -96,7 +96,7 @@ _PHASE_SYNTHESIS = json.dumps({
     "alternatives_considered": [],
 })
 
-_VALID_INCIDENT = json.dumps({
+_VALID_INCIDENT_REPORT = {
     "timeline": "Alert fired at 14:00, DB latency spiked to 5s",
     "likely_cause": "Connection pool exhausted",
     "severity": "P2",
@@ -105,7 +105,8 @@ _VALID_INCIDENT = json.dumps({
     ],
     "runbook_ref": None,
     "requires_human_approval": False,
-})
+}
+_VALID_INCIDENT = json.dumps({"action": "respond", "result": _VALID_INCIDENT_REPORT})
 
 _VALID_FINDINGS = json.dumps({
     "verdict": "fail",
@@ -456,7 +457,7 @@ async def test_sre_produces_incident_report():
     from harness_agents.types import AgentState, SRE_OUTPUT_SCHEMA
     import jsonschema
 
-    _react_respond = json.dumps({"action": "respond", "result": json.loads(_VALID_INCIDENT)})
+    _react_respond = _VALID_INCIDENT
 
     agent = DynamicSREAgent(
         gateway=_mock_gateway({

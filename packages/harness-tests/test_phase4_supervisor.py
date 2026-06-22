@@ -67,7 +67,7 @@ _VALID_FINDINGS = json.dumps({
     "summary": "No issues found.",
 })
 
-_VALID_INCIDENT = json.dumps({
+_VALID_INCIDENT_REPORT = {
     "timeline": "Alert fired at 14:00",
     "likely_cause": "Connection pool exhausted",
     "severity": "P2",
@@ -76,9 +76,10 @@ _VALID_INCIDENT = json.dumps({
     ],
     "runbook_ref": None,
     "requires_human_approval": False,
-})
+}
+_VALID_INCIDENT = json.dumps({"action": "respond", "result": _VALID_INCIDENT_REPORT})
 
-_INCIDENT_NEEDS_APPROVAL = json.dumps({
+_INCIDENT_NEEDS_APPROVAL = json.dumps({"action": "respond", "result": {
     "timeline": "Critical DB failure",
     "likely_cause": "Disk full",
     "severity": "P1",
@@ -87,7 +88,7 @@ _INCIDENT_NEEDS_APPROVAL = json.dumps({
     ],
     "runbook_ref": None,
     "requires_human_approval": True,
-})
+}})
 
 DOLT_CONN = dict(
     host=os.environ.get("DOLT_HOST", "localhost"),
@@ -242,7 +243,7 @@ async def test_formula_outcome_recorded():
         **_base_state("Triage incident"),
         "formula_id": "sre:triage-incident",
         "formula_instance_id": instance_id,
-        "agent_output": json.loads(_VALID_INCIDENT),
+        "agent_output": _VALID_INCIDENT_REPORT,
         "active_agent": "sre",
         "task_type": "incident",
     }
@@ -260,7 +261,7 @@ async def test_agent_executes_ad_hoc_without_formula():
     from harness_supervisor.nodes import run_agent_node
     from harness_agents.dynamic_sre import DynamicSREAgent
 
-    _react_respond = json.dumps({"action": "respond", "result": json.loads(_VALID_INCIDENT)})
+    _react_respond = _VALID_INCIDENT
     gw = _mock_gateway({"observability_query": {}, "log_search": {}, "runbook_read": {}})
     agent = DynamicSREAgent(gateway=gw, llm_provider=MockLLMProvider(_react_respond))
     state = {
@@ -288,7 +289,7 @@ async def test_propose_formula_on_novel_task():
         "formula_id": None,
         "formula_instance_id": None,
         "active_agent": "sre",
-        "agent_output": json.loads(_VALID_INCIDENT),
+        "agent_output": _VALID_INCIDENT_REPORT,
     }
 
     try:
@@ -314,7 +315,7 @@ async def test_agent_executes_formula_steps():
     formula = fstore.get("sre:triage-incident")
     assert formula is not None
 
-    _react_respond = json.dumps({"action": "respond", "result": json.loads(_VALID_INCIDENT)})
+    _react_respond = _VALID_INCIDENT
     gw = _mock_gateway({"observability_query": {}, "log_search": {}, "runbook_read": {}})
     agent = DynamicSREAgent(gateway=gw, llm_provider=MockLLMProvider(_react_respond))
 
