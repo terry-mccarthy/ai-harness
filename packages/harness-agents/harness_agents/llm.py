@@ -108,10 +108,12 @@ class GeminiProvider:
         )
 
 
-def _pick(override, *env_vars_and_default):
-    """Return the first non-empty value from: override, env vars in order, final default."""
+def _pick(override, config_val, *env_vars_and_default):
+    """Return the first non-empty value: override > config_val > env vars > default."""
     if override is not None and override != "":
         return override
+    if config_val is not None and config_val != "":
+        return config_val
     *env_vars, default = env_vars_and_default
     for var in env_vars:
         val = os.environ.get(var, "")
@@ -120,37 +122,37 @@ def _pick(override, *env_vars_and_default):
     return default
 
 
-def _build_ollama(overrides: dict) -> "OllamaProvider":
+def _build_ollama(overrides: dict, cfg: dict) -> "OllamaProvider":
     return OllamaProvider(
-        host=_pick(overrides.get("host"), "OLLAMA_HOST", "http://localhost:11434"),
-        model=_pick(overrides.get("model"), "OLLAMA_MODEL", "qwen2.5-coder:7b"),
-        num_ctx=int(_pick(overrides.get("num_ctx"), "OLLAMA_NUM_CTX", "8192")),
-        temperature=float(_pick(overrides.get("temperature"), "LLM_TEMPERATURE", "OLLAMA_TEMPERATURE", "0.1")),
-        num_predict=int(_pick(overrides.get("num_predict") or overrides.get("max_tokens"), "OLLAMA_NUM_PREDICT", "LLM_MAX_TOKENS", "1024")),
+        host=_pick(overrides.get("host"), cfg.get("host"), "OLLAMA_HOST", "http://localhost:11434"),
+        model=_pick(overrides.get("model"), cfg.get("model"), "OLLAMA_MODEL", "qwen2.5-coder:7b"),
+        num_ctx=int(_pick(overrides.get("num_ctx"), cfg.get("num_ctx"), "OLLAMA_NUM_CTX", "8192")),
+        temperature=float(_pick(overrides.get("temperature"), cfg.get("temperature"), "LLM_TEMPERATURE", "OLLAMA_TEMPERATURE", "0.1")),
+        num_predict=int(_pick(overrides.get("num_predict") or overrides.get("max_tokens"), cfg.get("num_predict"), "OLLAMA_NUM_PREDICT", "LLM_MAX_TOKENS", "1024")),
     )
 
 
-def _build_gemini(overrides: dict) -> "GeminiProvider":
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
+def _build_gemini(overrides: dict, cfg: dict) -> "GeminiProvider":
+    api_key = _pick(None, cfg.get("api_key"), "GEMINI_API_KEY", "")
+    if not str(api_key or "").strip():
         raise ValueError("GEMINI_API_KEY is required for the gemini provider")
     return GeminiProvider(
-        model=_pick(overrides.get("model"), "GEMINI_MODEL", "gemini-2.5-flash"),
-        api_key=api_key,
-        temperature=float(_pick(overrides.get("temperature"), "LLM_TEMPERATURE", "0.1")),
-        max_output_tokens=int(_pick(overrides.get("max_tokens"), "LLM_MAX_TOKENS", "1024")),
+        model=_pick(overrides.get("model"), cfg.get("model"), "GEMINI_MODEL", "gemini-2.5-flash"),
+        api_key=str(api_key).strip(),
+        temperature=float(_pick(overrides.get("temperature"), cfg.get("temperature"), "LLM_TEMPERATURE", "0.1")),
+        max_output_tokens=int(_pick(overrides.get("max_tokens"), cfg.get("max_output_tokens"), "LLM_MAX_TOKENS", "1024")),
     )
 
 
-def _build_openrouter(overrides: dict) -> "OpenRouterProvider":
-    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    if not api_key:
+def _build_openrouter(overrides: dict, cfg: dict) -> "OpenRouterProvider":
+    api_key = _pick(None, cfg.get("api_key"), "OPENROUTER_API_KEY", "")
+    if not str(api_key or "").strip():
         raise ValueError("OPENROUTER_API_KEY is required for the openrouter provider")
     return OpenRouterProvider(
-        api_key=api_key,
-        model=_pick(overrides.get("model"), "OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
-        temperature=float(_pick(overrides.get("temperature"), "LLM_TEMPERATURE", "0.1")),
-        max_tokens=int(_pick(overrides.get("max_tokens"), "LLM_MAX_TOKENS", "1024")),
+        api_key=str(api_key).strip(),
+        model=_pick(overrides.get("model"), cfg.get("model"), "OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+        temperature=float(_pick(overrides.get("temperature"), cfg.get("temperature"), "LLM_TEMPERATURE", "0.1")),
+        max_tokens=int(_pick(overrides.get("max_tokens"), cfg.get("max_tokens"), "LLM_MAX_TOKENS", "1024")),
     )
 
 
@@ -161,20 +163,26 @@ _PROVIDER_BUILDERS = {
 }
 
 
-def build_llm_from_env(provider: str | None = None, **overrides) -> "LLMProvider":
-    """Build an LLM provider from environment variables with optional kwarg overrides.
+def build_llm_from_env(
+    provider: str | None = None,
+    config: dict | None = None,
+    **overrides,
+) -> "LLMProvider":
+    """Build an LLM provider. Resolution order: kwarg > config dict > env var > default.
 
-    Resolution order: kwarg override > environment variable > default.
-    provider kwarg (or LLM_PROVIDER env var) selects which provider to build.
-    Supported: 'ollama' (default), 'gemini', 'openrouter'.
+    config mirrors the server_config JSONB schema:
+      {"llm_provider": "gemini", "gemini": {"model": "...", "api_key": "..."}, ...}
+
+    Supported providers: 'ollama' (default), 'gemini', 'openrouter'.
     """
-    provider_name = _pick(provider, "LLM_PROVIDER", "ollama").lower()
+    cfg = config or {}
+    provider_name = _pick(provider, cfg.get("llm_provider"), "LLM_PROVIDER", "ollama").lower()
     builder = _PROVIDER_BUILDERS.get(provider_name)
     if not builder:
         raise ValueError(
             f"Unknown LLM provider: {provider_name!r}. Supported: ollama, gemini, openrouter"
         )
-    return builder(overrides)
+    return builder(overrides, cfg.get(provider_name, {}))
 
 
 class OpenRouterProvider:

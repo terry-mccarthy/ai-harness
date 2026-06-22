@@ -3,12 +3,15 @@
 Wires formula_store (Dolt) and memory_store (pgvector) when env vars are
 present; falls back to stub-only mode when they are not.
 
+LLM selection priority: DB config (server_config table) > LLM_PROVIDER env var > ollama default.
+
 Usage:
-    make demo-sre                          # Ollama (default)
-    LLM_PROVIDER=openrouter make demo-sre  # OpenRouter
+    make demo-sre                          # uses DB config or Ollama fallback
+    LLM_PROVIDER=openrouter make demo-sre  # force OpenRouter (overridden by DB config if set)
 """
 import asyncio
 import json
+import logging
 import os
 import uuid
 
@@ -16,6 +19,25 @@ from harness_agents.dynamic_sre import DynamicSREAgent
 from harness_agents.llm import build_llm_from_env
 from harness_agents.types import AgentState
 from harness_gateway.client import GatewayClient
+
+logger = logging.getLogger(__name__)
+
+
+async def _load_llm_config_from_pg(pg_dsn: str) -> dict:
+    """Read LLM config from the server_config table. Returns {} on any error."""
+    try:
+        import asyncpg
+        conn = await asyncpg.connect(pg_dsn)
+        try:
+            row = await conn.fetchrow("SELECT config FROM server_config WHERE id = 1")
+            if row and row["config"]:
+                data = row["config"]
+                return dict(data) if not isinstance(data, str) else json.loads(data)
+        finally:
+            await conn.close()
+    except Exception as exc:
+        logger.debug("could not load llm config from pg: %s", exc)
+    return {}
 
 INCIDENT = (
     "Grafana cost dashboard shows the architect agent role consuming tokens "
@@ -56,8 +78,12 @@ def _build_formula_store():
     )
 
 
-def _banner(memory_store, formula_store) -> str:
+def _banner(memory_store, formula_store, llm_config: dict, agent) -> str:
+    provider = agent.llm.provider_name
+    model = agent.llm.model_name
+    config_source = "db config" if llm_config.get("llm_provider") else "env/default"
     lines = ["Capabilities:"]
+    lines.append(f"  llm           : {provider}/{model} (source: {config_source})")
     lines.append(f"  memory store  : {'connected (past incidents loaded)' if memory_store else 'disabled (set PG_DSN to enable)'}")
     lines.append(f"  formula store : {'connected (skill guidance pre-loaded)' if formula_store else 'disabled (set DOLT_HOST to enable)'}")
     lines.append(f"  log_search    : {'semantic (run make seed-logs first)' if os.environ.get('PG_DSN') else 'stub'}")
@@ -74,18 +100,19 @@ async def main() -> None:
         client_secret=os.environ.get("SRE_SECRET", "sre-secret"),
     )
 
+    llm_config = await _load_llm_config_from_pg(os.environ["PG_DSN"]) if os.environ.get("PG_DSN") else {}
     memory_store = await _build_memory_store()
     formula_store = _build_formula_store()
 
     agent = DynamicSREAgent(
         gateway=gateway,
-        llm_provider=build_llm_from_env(),
+        llm_provider=build_llm_from_env(config=llm_config),
         memory_store=memory_store,
         formula_store=formula_store,
     )
 
     print(f"Incident: {INCIDENT}\n")
-    print(_banner(memory_store, formula_store))
+    print(_banner(memory_store, formula_store, llm_config, agent))
     print("\nInvestigating...\n")
 
     state: AgentState = {
