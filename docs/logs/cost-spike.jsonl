@@ -1,0 +1,8 @@
+{"timestamp": "2024-01-15T13:52:00Z", "level": "WARN", "service": "architect-agent", "message": "token usage unusually high: prompt_tokens=38000 completion_tokens=6200 on turn 4", "trace_id": "trace-a1b2"}
+{"timestamp": "2024-01-15T13:54:30Z", "level": "ERROR", "service": "architect-agent", "message": "LLM call timeout after 120s, retrying (attempt 2/3)", "trace_id": "trace-a1b2"}
+{"timestamp": "2024-01-15T13:55:15Z", "level": "WARN", "service": "architect-agent", "message": "token usage approaching budget: prompt_tokens=45000 completion_tokens=8000", "trace_id": "trace-a1b2"}
+{"timestamp": "2024-01-15T13:57:30Z", "level": "ERROR", "service": "architect-agent", "message": "LLM call timeout after 120s, retrying (attempt 3/3) — final attempt", "trace_id": "trace-a1b2"}
+{"timestamp": "2024-01-15T13:58:00Z", "level": "ERROR", "service": "governance", "message": "token budget exceeded for thread trace-a1b2, agent_role=architect, tokens_used=62000", "trace_id": "trace-a1b2"}
+{"timestamp": "2024-01-15T13:58:05Z", "level": "ERROR", "service": "architect-agent", "message": "max_turns_exceeded after 8 turns: no final_response produced, thread trace-a1b2 stuck", "trace_id": "trace-a1b2"}
+{"timestamp": "2024-01-15T13:59:10Z", "level": "ERROR", "service": "architect-agent", "message": "max_turns_exceeded after 8 turns: no final_response produced, thread trace-c3d4 stuck", "trace_id": "trace-c3d4"}
+{"timestamp": "2024-01-15T14:01:00Z", "level": "WARN", "service": "mcpjungle", "message": "high tool invocation rate from agent_role=architect: 47 calls in last 5 minutes (threshold: 20)", "trace_id": ""}

@@ -1,0 +1,6 @@
+{"timestamp": "2024-01-15T14:00:00Z", "level": "ERROR", "service": "postgres", "message": "too many connections: current=100, max=100 — new connections refused", "trace_id": ""}
+{"timestamp": "2024-01-15T14:00:01Z", "level": "ERROR", "service": "api-server", "message": "connection pool exhausted: all 20 pool slots occupied, request queued", "trace_id": "req-9f8e"}
+{"timestamp": "2024-01-15T14:00:03Z", "level": "WARN", "service": "api-server", "message": "p99 DB query latency 4800ms (threshold: 500ms) — possible connection pool starvation", "trace_id": "req-9f8e"}
+{"timestamp": "2024-01-15T14:00:10Z", "level": "ERROR", "service": "api-server", "message": "DB query timeout after 5000ms: connection never acquired from pool", "trace_id": "req-a2c3"}
+{"timestamp": "2024-01-15T14:00:15Z", "level": "ERROR", "service": "api-server", "message": "5xx rate rising: 15% of requests failing with 503 Service Unavailable", "trace_id": ""}
+{"timestamp": "2024-01-15T14:01:00Z", "level": "WARN", "service": "postgres", "message": "idle connection count high: 85 idle connections held by api-server pool (expected: <30)", "trace_id": ""}

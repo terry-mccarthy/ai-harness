@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e test-load review consolidate alembic-upgrade monitoring-up seed-runbooks demo-sre
+.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e test-load review consolidate alembic-upgrade monitoring-up seed-runbooks seed-logs demo-sre
 
 stack-up:
 	docker compose up -d --wait --remove-orphans
@@ -56,6 +56,9 @@ print(result)"
 
 seed-runbooks:
 	set -a && source .env && set +a && .venv/bin/python scripts/seed_runbooks.py
+
+seed-logs:
+	set -a && source .env && set +a && .venv/bin/python scripts/seed_logs.py
 
 demo-sre:
 	set -a && source .env && set +a && .venv/bin/python scripts/demo_sre.py

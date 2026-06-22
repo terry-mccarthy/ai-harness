@@ -56,9 +56,13 @@ async def runbook_read(runbook_name: str) -> dict:
 
 
 @mcp.tool()
-def log_search(query: str) -> dict:
-    """Search logs for a query."""
-    return {"result": "stub", "tool": "log_search", "query": query}
+async def log_search(query: str) -> dict:
+    """Search logs semantically by error pattern or incident description."""
+    store = await _get_store()
+    if store is None:
+        return {"result": "stub", "tool": "log_search", "query": query}
+    from harness_memory.log_retriever import retrieve_logs
+    return await retrieve_logs(store, query)
 
 
 @mcp.tool()
