@@ -1,0 +1,20 @@
+{
+  "repo": "https://github.com/example/notes",
+  "query": "interfaces, abstractions, and their implementations",
+  "results": [
+    {
+      "path": "ports/note_repository.py",
+      "repo": "example/notes",
+      "matches": [
+        {"fragment": "from abc import ABC, abstractmethod\nfrom domain.note import Note   # only domain types\n\nclass NoteRepository(ABC):\n    @abstractmethod\n    async def save(self, note: Note) -> None: ...\n    @abstractmethod\n    async def get(self, note_id: NoteId) -> Note | None: ...\n# small, cohesive port expressed entirely in domain terms; no Session, no ORM."}
+      ]
+    },
+    {
+      "path": "adapters/postgres_note_repo.py",
+      "repo": "example/notes",
+      "matches": [
+        {"fragment": "class PostgresNoteRepository(NoteRepository):\n    # the only place asyncpg is imported; maps rows <-> Note. Swapping DB touches only this file."}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "repo": "https://github.com/example/billing",
+  "query": "entry point, service layer, data access",
+  "results": [
+    {
+      "path": "billing/domain/invoice_service.py",
+      "repo": "example/billing",
+      "matches": [
+        {"fragment": "from sqlalchemy.orm import Session\nfrom billing.domain.repository import InvoiceRepository\n\nclass InvoiceService:\n    def __init__(self, repo: InvoiceRepository):\n        self.repo = repo\n\n    def finalize(self, invoice_id: int, session: Session):\n        # domain method takes a SQLAlchemy Session as a parameter\n        row = self.repo.get(invoice_id, session)   # returns an ORM model\n        row.status = 'final'                        # mutating an ORM object in the domain\n        session.flush()                             # domain controls the transaction\n        return row"}
+      ]
+    }
+  ]
+}

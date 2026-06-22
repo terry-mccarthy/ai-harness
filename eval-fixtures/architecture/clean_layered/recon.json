@@ -1,0 +1,20 @@
+{
+  "repo": "https://github.com/example/notes",
+  "query": "directory structure and dependencies",
+  "results": [
+    {
+      "path": "README.md",
+      "repo": "example/notes",
+      "matches": [
+        {"fragment": "Notes API. Hexagonal layout: api/ (FastAPI routers, thin), domain/ (pure Python entities + services, no framework imports), ports/ (abstract repository interfaces in domain terms), adapters/ (Postgres implementations of the ports). Dependency direction points inward to the domain."}
+      ]
+    },
+    {
+      "path": "pyproject.toml",
+      "repo": "example/notes",
+      "matches": [
+        {"fragment": "dependencies = [\"fastapi\", \"pydantic\", \"asyncpg\"]\n# domain/ has zero third-party imports — verified by import-linter contract."}
+      ]
+    }
+  ]
+}

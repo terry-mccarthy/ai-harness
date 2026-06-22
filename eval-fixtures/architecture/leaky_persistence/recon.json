@@ -1,0 +1,27 @@
+{
+  "repo": "https://github.com/example/billing",
+  "query": "directory structure and dependencies",
+  "results": [
+    {
+      "path": "README.md",
+      "repo": "example/billing",
+      "matches": [
+        {"fragment": "Billing service. Has a `domain/` package and a `persistence/` package, so it looks layered. Uses SQLAlchemy ORM."}
+      ]
+    },
+    {
+      "path": "pyproject.toml",
+      "repo": "example/billing",
+      "matches": [
+        {"fragment": "dependencies = [\"fastapi\", \"sqlalchemy>=2.0\", \"psycopg[binary]\"]"}
+      ]
+    },
+    {
+      "path": "billing/domain/repository.py",
+      "repo": "example/billing",
+      "matches": [
+        {"fragment": "# domain/ defines the InvoiceRepository 'interface' but it imports SQLAlchemy."}
+      ]
+    }
+  ]
+}

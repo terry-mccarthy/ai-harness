@@ -1,0 +1,12 @@
+{
+  "repo": "example/notes",
+  "adrs": [
+    {
+      "id": "0001",
+      "title": "Hexagonal architecture",
+      "status": "accepted",
+      "path": "docs/adr/0001-hexagonal.md",
+      "content": "# 0001 — Hexagonal architecture\n\nStatus: accepted\n\n## Decision\nDomain is framework-free. Ports live in the domain and are expressed in domain types. Adapters implement the ports. An import-linter contract enforces that domain/ imports nothing from adapters/ or third-party frameworks."
+    }
+  ]
+}

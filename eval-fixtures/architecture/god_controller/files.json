@@ -1,0 +1,13 @@
+{
+  "repo": "https://github.com/example/shopflow",
+  "query": "entry point, service layer, data access",
+  "results": [
+    {
+      "path": "shopflow/routes.py",
+      "repo": "example/shopflow",
+      "matches": [
+        {"fragment": "@app.route('/orders', methods=['POST'])\ndef create_order():\n    body = request.get_json()\n    conn = psycopg2.connect(DATABASE_URL)\n    cur = conn.cursor()\n    # validate inline\n    if not body.get('items'):\n        return jsonify({'error': 'no items'}), 400\n    total = 0\n    for it in body['items']:\n        cur.execute('SELECT price, stock FROM products WHERE id=%s', (it['id'],))\n        price, stock = cur.fetchone()\n        if stock < it['qty']:\n            return jsonify({'error': 'out of stock'}), 409\n        total += price * it['qty']\n    # charge card right here in the handler\n    charge = stripe.Charge.create(amount=int(total*100), currency='usd', source=body['token'])\n    cur.execute('INSERT INTO orders (user_id, total, stripe_id) VALUES (%s,%s,%s) RETURNING id', (body['user_id'], total, charge.id))\n    order_id = cur.fetchone()[0]\n    for it in body['items']:\n        cur.execute('UPDATE products SET stock = stock - %s WHERE id=%s', (it['qty'], it['id']))\n    conn.commit()\n    return jsonify({'order_id': order_id, 'total': total})"}
+      ]
+    }
+  ]
+}

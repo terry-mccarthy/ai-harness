@@ -283,9 +283,11 @@ Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`,
 | `test_dolt_records_gate_failures` | architectural_gate_failures INSERT + Dolt commit |
 | `test_audit_architectural_gate_endpoint` | POST /audit/architectural-gate returns 202 |
 
-### Eval suite (7 tests) — `pytest -m eval -v -s`
+### Eval suite (11 tests) — `pytest -m eval -v -s`
 
-Scores the `CodeReviewerAgent` against 6 labeled diffs with known security bugs (SQL injection, hardcoded secrets, shell injection, missing auth, path traversal, clean refactor). Uses a mock gateway — no Docker stack needed, only Ollama.
+Scores the agents against labeled fixtures with known problems. Uses mock gateways — no Docker stack needed, only Ollama.
+
+**Reviewer** — `CodeReviewerAgent` against labeled diffs with known security bugs:
 
 | Test | What it proves |
 |---|---|
@@ -296,6 +298,15 @@ Scores the `CodeReviewerAgent` against 6 labeled diffs with known security bugs 
 | `test_reviewer_fixture[05_missing_auth]` | Catches auth/role decorators removed from admin endpoints |
 | `test_reviewer_fixture[06_path_traversal]` | Catches user-controlled filename used directly in `open()` |
 | `test_reviewer_aggregate_score` | Asserts verdict accuracy ≥ 80% and recall ≥ 60% across all fixtures |
+
+**Architect** — four-phase `ArchitectAgent` against fixture repos expressed as canned tool responses:
+
+| Test | What it proves |
+|---|---|
+| `test_architect_fixture[clean_layered]` | Control: a clean hexagonal app raises no false CRITICAL |
+| `test_architect_fixture[god_controller]` | Catches business logic + SQL inline in an HTTP handler (layering/coupling) |
+| `test_architect_fixture[leaky_persistence]` | Catches SQLAlchemy/ORM leaking through a domain "port" (abstraction/coupling) |
+| `test_architect_aggregate_score` | Asserts schema validity 100%, detection ≥ 66%, recall ≥ 50%, and that synthesis output matches `ARCHITECT_OUTPUT_SCHEMA` |
 
 ### Token usage unit tests (9 tests) — `pytest packages/harness-tests/test_token_usage.py`
 
@@ -380,7 +391,7 @@ Claude Code will see all registered tools including `review_server__review_diff`
 │   └── review_server/     # review_diff MCP tool (wraps the agent)
 ├── stub_servers/          # git_diff, run_linter, architect, sre MCP servers
 ├── prompts/               # LLM system prompts (classify.md, synthesise.md, code_reviewer.md, architect.md, sre.md)
-├── eval-fixtures/         # Labeled diffs for reviewer quality benchmarking (diffs/ + labels/)
+├── eval-fixtures/         # Reviewer fixtures (diffs/ + labels/) and architect fixtures (architecture/)
 ├── test-fixtures/         # Committed test RSA key (jwt-test-key.pem) — dev/CI only
 ├── scripts/
 │   └── skills_cli.py      # CLI for the skill-learning pipeline (token, pipeline, episodes, candidates, skills)
