@@ -1,5 +1,8 @@
 """Demo: run DynamicSREAgent against a canned incident and print the report.
 
+Wires formula_store (Dolt) and memory_store (pgvector) when env vars are
+present; falls back to stub-only mode when they are not.
+
 Usage:
     make demo-sre                          # Ollama (default)
     LLM_PROVIDER=openrouter make demo-sre  # OpenRouter
@@ -37,6 +40,47 @@ def _build_llm():
     )
 
 
+async def _build_memory_store():
+    """Return a connected PostgresMemoryStore, or None if PG_DSN is not set."""
+    pg_dsn = os.environ.get("PG_DSN")
+    if not pg_dsn:
+        return None
+    from harness_memory.memory_store import PostgresMemoryStore
+    store = PostgresMemoryStore(
+        pg_dsn,
+        os.environ.get("REDIS_URL", "redis://localhost:6379"),
+        os.environ.get("EMBED_MODEL", "nomic-embed-text"),
+        os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+    )
+    await store.setup()
+    return store
+
+
+def _build_formula_store():
+    """Return a DoltFormulaStore, or None if DOLT_HOST is not set."""
+    dolt_host = os.environ.get("DOLT_HOST")
+    if not dolt_host:
+        return None
+    from harness_memory.formula_store import DoltFormulaStore
+    return DoltFormulaStore(
+        host=dolt_host,
+        port=int(os.environ.get("DOLT_PORT", "3306")),
+        user=os.environ.get("DOLT_USER", "root"),
+        password=os.environ.get("DOLT_PASSWORD", "root"),
+        database=os.environ.get("DOLT_DATABASE", "harness"),
+    )
+
+
+def _banner(memory_store, formula_store) -> str:
+    lines = ["Capabilities:"]
+    lines.append(f"  memory store  : {'connected (past incidents loaded)' if memory_store else 'disabled (set PG_DSN to enable)'}")
+    lines.append(f"  formula store : {'connected (skill guidance pre-loaded)' if formula_store else 'disabled (set DOLT_HOST to enable)'}")
+    lines.append(f"  log_search    : {'semantic (run make seed-logs first)' if os.environ.get('PG_DSN') else 'stub'}")
+    lines.append(f"  runbook_read  : {'semantic (run make seed-runbooks first)' if os.environ.get('PG_DSN') else 'stub'}")
+    lines.append(f"  skill_search  : {'live formula lookup' if formula_store else 'stub'}")
+    return "\n".join(lines)
+
+
 async def main() -> None:
     gateway = GatewayClient(
         gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8080"),
@@ -44,7 +88,20 @@ async def main() -> None:
         client_id="sre",
         client_secret=os.environ.get("SRE_SECRET", "sre-secret"),
     )
-    agent = DynamicSREAgent(gateway=gateway, llm_provider=_build_llm())
+
+    memory_store = await _build_memory_store()
+    formula_store = _build_formula_store()
+
+    agent = DynamicSREAgent(
+        gateway=gateway,
+        llm_provider=_build_llm(),
+        memory_store=memory_store,
+        formula_store=formula_store,
+    )
+
+    print(f"Incident: {INCIDENT}\n")
+    print(_banner(memory_store, formula_store))
+    print("\nInvestigating...\n")
 
     state: AgentState = {
         "task": INCIDENT,
@@ -55,10 +112,10 @@ async def main() -> None:
         "error": None,
     }
 
-    print(f"Incident: {INCIDENT}\n")
-    print("Investigating...\n")
-
     result = await agent.run(state)
+
+    if memory_store:
+        await memory_store.close()
 
     if result.get("error"):
         print(f"Error: {json.dumps(result['error'], indent=2)}")
@@ -68,10 +125,9 @@ async def main() -> None:
     print(json.dumps(report, indent=2))
 
     runbook = report.get("runbook_ref")
-    if runbook:
-        print(f"\n  Runbook cited: {runbook}")
-    else:
-        print("\n  (no runbook cited)")
+    print(f"\n  Runbook cited : {runbook or '(none)'}")
+    print(f"  Severity      : {report.get('severity', '?')}")
+    print(f"  Needs approval: {report.get('requires_human_approval', False)}")
 
 
 if __name__ == "__main__":

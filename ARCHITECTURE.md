@@ -151,7 +151,7 @@ Every tool call the agent makes produces:
 | `diff-proxy`     | local build                    | 9001 | Real `git diff` MCP server (baked sample repo)               |
 | `linter-stub`    | local build                    | 9002 | Semgrep-based `run_linter` MCP server (`semgrep-rules.yml`)  |
 | `github-mcp`     | local build                    | 9010 | GitHub API MCP server — `codebase_search`, `adr_read`, `issue_create` |
-| `sre-stub`       | local build                    | 9005 | Stub MCP server for SRE-role tools                           |
+| `sre-stub`       | local build                    | 9005 | SRE-role MCP server: `runbook_read` + `log_search` do semantic pgvector search (`PG_DSN`); `skill_search` does Dolt formula lookup (`DOLT_HOST`); stub fallback without infra |
 | `review-server`  | local build                    | 9003 | `review_diff`, `architecture_review`, `execute_architecture_check` MCP tools — runs full code-reviewer agent, architecture review, and architectural gate |
 | `register-*`     | mcpjungle image                | —    | One-shot init containers that register MCP servers           |
 
@@ -163,7 +163,7 @@ Every tool call the agent makes produces:
 packages/
   harness-gateway/   — GatewayClient + ContextForgeGatewayClient
   harness-agents/    — CodeReviewerAgent + AgentState TypedDict + output schema
-  harness-memory/    — PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker
+  harness-memory/    — PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker, runbook_retriever, log_retriever, skill_retriever
   harness-supervisor/ — LangGraph supervisor orchestration, graph nodes, approval tokens
   harness-tests/     — pytest integration tests (77 tests across 5 test files + load test)
 
@@ -180,7 +180,8 @@ services/
 security/
   owasp-review.md    — OWASP Agentic AI Top 10 review
 
-docs/runbooks/       — 4 operational runbooks
+docs/runbooks/       — 4 operational runbooks (seeded into pgvector via `make seed-runbooks`)
+docs/logs/           — JSONL log fixtures: cost-spike (8 entries) + db-latency (6 entries) (seeded via `make seed-logs`)
 ```
 
 Dependencies: `harness-tests` → `harness-supervisor` → (`harness-agents`, `harness-memory`,

@@ -40,7 +40,7 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 - **diff-proxy** — real `git diff` on the baked sample repo, or fetches a PR diff from the GitHub API (`pr_number` + `github_repo`; reads `GITHUB_TOKEN` from env)
 - **linter-stub** — semgrep-based linter (`semgrep-rules.yml`); catches SQL f-string injection, hardcoded credentials, `subprocess shell=True`, `open()` f-string paths, and `eval()`
 - **github-mcp** — MCP server wrapping GitHub API for architect-role tools (`codebase_search`, `adr_read`, `issue_create`)
-- **sre-stub** — stub MCP server for SRE-role tools (`observability_query`, `runbook_read`, `log_search`, `shell_exec`)
+- **sre-stub** — MCP server for SRE-role tools; `runbook_read` and `log_search` do semantic pgvector search when `PG_DSN` is set (seed with `make seed-runbooks` / `make seed-logs`); `skill_search` looks up proven formulas from Dolt when `DOLT_HOST` is set; all tools fall back to stubs without infra
 - **review-server** — FastMCP service wrapping the full code-reviewer agent; callable from Claude Code via MCP and from CI pipelines via `POST /review` (plain HTTP, optional bearer-token auth via `REVIEW_API_KEY`)
 - **ContextForge** (`ghcr.io/ibm/mcp-context-forge`, `:4444`) — production MCP gateway; alternative to MCPJungle, enabled via `GATEWAY_BACKEND=contextforge`
 - **Prometheus + Grafana** — optional monitoring stack (`make monitoring-up`); governance exposes `/metrics` with tool-call counters, latency histograms, and rate-limit rejections; pre-built cost-per-role dashboard at `localhost:3000`
@@ -127,6 +127,8 @@ Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`,
 ## Tests
 
 ### Integration suite (229 tests: all green) — `make test-integration`
+
+### Unit suite (182 tests: all green) — `make test-unit`
 
 ### Phase 0 — Core reviewer (9 tests)
 

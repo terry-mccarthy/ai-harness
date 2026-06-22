@@ -160,7 +160,7 @@ allow {             # broken — rego_parse_error on modern OPA
 Current policy (`policies/harness.rego`) maps three roles to tool sets:
 - `architect` → `codebase_search`, `adr_read`, `architecture_review`, `execute_architecture_check`
 - `code_reviewer` → `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`
-- `sre` → `observability_query`, `runbook_read`, `log_search`, `shell_exec`
+- `sre` → `observability_query`, `runbook_read`, `log_search`, `shell_exec`, `skill_search`
 
 ## MCP server config (FastMCP)
 
@@ -292,22 +292,39 @@ Build context must be `.` (repo root), not the service subdirectory, so the `pac
 docker compose build dolt && docker compose up -d --no-deps dolt
 ```
 
-## Runbook retrieval (slice 4)
+## SRE signal sources (slices 2, 4, 5)
 
-`packages/harness-memory/harness_memory/runbook_retriever.py` — `retrieve_runbooks(store, query, top_k=3) -> dict`. Searches the pgvector store under the `"runbooks"` namespace using cosine similarity and returns `{"runbooks": [...], "query": "..."}` with each entry having `id`, `signature`, `body`, `score` (rounded to 3 dp).
+All three signal-source tools share the same lazy-init + fallback pattern: they connect when the relevant env var is set, return a stub dict otherwise (unit tests pass without infra).
 
-`sre_stub` (`stub_servers/sre_server.py`) lazy-inits a `PostgresMemoryStore` the first time `runbook_read` is called when `PG_DSN` is set. Falls back to stub when `PG_DSN` is absent (existing unit tests still pass without infra).
+| Tool | Module | Store | Namespace | Seed command |
+|---|---|---|---|---|
+| `runbook_read` | `runbook_retriever.py` | `PostgresMemoryStore` | `"runbooks"` | `make seed-runbooks` |
+| `log_search` | `log_retriever.py` | `PostgresMemoryStore` | `"logs"` | `make seed-logs` |
+| `skill_search` | `skill_retriever.py` | `DoltFormulaStore` | N/A (TF-IDF lookup) | Dolt seed formulas |
 
-**sre-stub Docker gotcha**: sre-stub now uses its own `Dockerfile.sre` (not `Dockerfile.stub`) with **build context `.` (repo root)** so it can COPY `packages/harness-memory`. diff-proxy and linter-stub continue to use `Dockerfile.stub` with `context: ./stub_servers`. When rebuilding:
+`sre_stub` (`stub_servers/sre_server.py`) holds two lazy singletons:
+- `_store` — `PostgresMemoryStore`, async-init on first `runbook_read` or `log_search` call when `PG_DSN` set
+- `_dolt_store` — `DoltFormulaStore`, sync-init on first `skill_search` call when `DOLT_HOST` set
+
+**sre-stub Docker gotcha**: sre-stub uses `Dockerfile.sre` (not `Dockerfile.stub`) with **build context `.` (repo root)** so it can COPY `packages/harness-memory`. diff-proxy and linter-stub continue to use `Dockerfile.stub`. When rebuilding:
 ```bash
 docker compose build sre-stub
 docker compose up -d --no-deps sre-stub
 ```
 
-Before the agent can find runbooks, seed them once with:
+Before the agent can find runbooks and logs, seed them once with:
 ```bash
-make seed-runbooks   # requires Postgres + Ollama running locally
+make seed-runbooks   # docs/runbooks/*.md  → pgvector "runbooks" namespace
+make seed-logs       # docs/logs/*.jsonl   → pgvector "logs" namespace
 ```
+
+## DynamicSREAgent — skill-aware guidance (slice 6)
+
+`DynamicSREAgent(gateway, llm_provider, memory_store=None, formula_store=None)`.
+
+When `formula_store` is provided, `_load_formula(task)` calls `store.lookup(self.name, task)` synchronously before the ReAct loop. A matched formula's steps are injected into the opening user message as a structured investigation plan (precedence over free-form investigation).
+
+`make demo-sre` wires both stores when env vars are set; shows a capability banner on startup.
 
 ## Agent orchestration (Phases 3–4)
 

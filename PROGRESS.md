@@ -948,3 +948,54 @@ Four extractions reduced CCN in flagged hotspots, bringing overall score from **
 17 functions remain at CCN 6 (under threshold — all borderline `if`/`elif` chains with 4–5 branches). No further work planned.
 
 **Updated: 2026-06-20**
+
+---
+
+## DynamicSREAgent — Semantic Signal Sources + Skill-Aware Guidance (2026-06-22)
+
+Completed four slices that wire real data into the SRE agent's investigation loop.
+
+### Slice 4 — Semantic runbook_read via pgvector ✅
+
+- `harness_memory/runbook_retriever.py` — `retrieve_runbooks(store, query, top_k)` searches the `"runbooks"` pgvector namespace using cosine similarity
+- `sre_server.py` `runbook_read` made async; lazy-inits `PostgresMemoryStore` on first call when `PG_DSN` set; falls back to stub without infra
+- 6 unit tests (`test_unit_runbook_retriever.py`) — all pass without Docker
+- `make seed-runbooks` seeds `docs/runbooks/*.md` into pgvector (embed: `**When to use:**` signature line)
+
+### Slice 2 — Semantic log_search via pgvector ✅
+
+- `harness_memory/log_retriever.py` — `retrieve_logs(store, query, top_k)` searches `"logs"` namespace
+- `harness_memory/log_seed.py` — ingests `docs/logs/*.jsonl`; one log entry per line
+- `docs/logs/cost-spike.jsonl` (8 entries: runaway architect thread) + `docs/logs/db-latency.jsonl` (6 entries: connection pool exhaustion)
+- `sre_server.py` `log_search` made async; same lazy-init + fallback pattern
+- 6 unit tests (`test_unit_log_retriever.py`) — all pass without Docker
+- `make seed-logs` seeds all JSONL fixtures
+
+### Slice 5 — skill_search MCP tool (DoltFormulaStore.lookup) ✅
+
+- `harness_memory/skill_retriever.py` — `retrieve_skill(store, agent_role, task)` wraps `store.lookup` (synchronous)
+- `sre_server.py` `skill_search` tool: lazy-inits `DoltFormulaStore` when `DOLT_HOST` set; stub without it
+- OPA policy: `skill_search` added to `sre` role
+- `TOOL_NAME_MAP`: `"skill_search": "sre_stub__skill_search"`
+- `DynamicSREAgent.allowed_tools` + SRE prompt updated
+- 5 unit tests (`test_unit_skill_retriever.py`) — all pass without Docker
+
+### Slice 6 — Skill-aware guidance + formula precedence ✅
+
+- `DynamicSREAgent.__init__` accepts optional `formula_store`
+- `_load_formula(task)` — synchronous; no-op when no store
+- `run()` pre-loads formula before the loop; matched formula's steps injected into the opening message as a structured investigation plan
+- SRE prompt updated: formula steps take precedence when pre-loaded; `skill_search` available for mid-investigation discovery
+- 4 unit tests added to `test_unit_dynamic_sre.py` (behaviors 11–14): formula injected, no-match no-block, backward compat, role forwarded
+
+### Slice 7 — End-to-end demo + doc reconciliation ✅
+
+- `scripts/demo_sre.py` updated: wires `formula_store` (Dolt) + `memory_store` (pgvector) when env vars present; capability banner shows active/inactive signal sources; `memory_store.close()` on exit
+- Unit test total: **182 pass** (up from 173 before this session)
+- No integration test changes — all 229 integration tests pass unchanged
+
+**Seeding commands** (requires Postgres + Ollama running locally):
+```bash
+make seed-runbooks   # docs/runbooks/*.md → pgvector "runbooks" namespace
+make seed-logs       # docs/logs/*.jsonl  → pgvector "logs" namespace
+```
