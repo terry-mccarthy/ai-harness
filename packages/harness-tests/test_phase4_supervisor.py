@@ -101,50 +101,23 @@ PG_DSN = os.environ.get("PG_DSN", "postgresql://harness:harness@localhost:5432/h
 
 
 # ---------------------------------------------------------------------------
-# Slice 1 — classify node (3 unit tests)
+# Slice 1 — classify node
 # ---------------------------------------------------------------------------
 
-async def test_classify_design_task():
-    """'Design the auth service' → task_type='design'."""
+@pytest.mark.parametrize("task,task_type", [
+    ("Design the auth service", "design"),
+    ("Review this PR diff", "review"),
+    ("Alert fired: DB latency spike", "incident"),
+])
+async def test_classify_extracts_task_type_from_llm_json(task, task_type):
+    """Happy path: classify_node extracts task_type from clean LLM JSON."""
     from harness_supervisor.nodes import classify_node
     from harness_supervisor.state import HarnessState
 
-    llm = MockLLMProvider(json.dumps({"task_type": "design"}))
-    state: HarnessState = _base_state("Design the auth service")
+    llm = MockLLMProvider(json.dumps({"task_type": task_type}))
+    state: HarnessState = _base_state(task)
     result = await classify_node(state, llm_provider=llm)
-    assert result["task_type"] == "design"
-
-
-async def test_classify_review_task():
-    """'Review this PR diff' → task_type='review'."""
-    from harness_supervisor.nodes import classify_node
-    from harness_supervisor.state import HarnessState
-
-    llm = MockLLMProvider(json.dumps({"task_type": "review"}))
-    state: HarnessState = _base_state("Review this PR diff")
-    result = await classify_node(state, llm_provider=llm)
-    assert result["task_type"] == "review"
-
-
-async def test_classify_incident_task():
-    """'Alert fired: DB latency spike' → task_type='incident'."""
-    from harness_supervisor.nodes import classify_node
-    from harness_supervisor.state import HarnessState
-
-    llm = MockLLMProvider(json.dumps({"task_type": "incident"}))
-    state: HarnessState = _base_state("Alert fired: DB latency spike")
-    result = await classify_node(state, llm_provider=llm)
-    assert result["task_type"] == "incident"
-
-
-async def test_classify_llm_routes_ambiguous_task():
-    """Task with no routing keywords is classified by the LLM, not defaulted."""
-    from harness_supervisor.nodes import classify_node
-
-    llm = MockLLMProvider(json.dumps({"task_type": "incident"}))
-    state = _base_state("Users say the checkout page hangs for several seconds")
-    result = await classify_node(state, llm_provider=llm)
-    assert result["task_type"] == "incident"
+    assert result["task_type"] == task_type
 
 
 async def test_classify_llm_overrides_keyword_match():
@@ -193,28 +166,17 @@ async def test_classify_strips_think_blocks():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — route function (3 unit tests)
+# Slice 2 — route function (1 parametrized unit test)
 # ---------------------------------------------------------------------------
 
-def test_route_to_architect():
-    """task_type='design' → routes to architect node."""
+@pytest.mark.parametrize("task_type,expected", [
+    ("design", "architect"),
+    ("review", "code_reviewer"),
+    ("incident", "sre"),
+])
+def test_route_node(task_type, expected):
     from harness_supervisor.nodes import route_node
-
-    assert route_node({"task_type": "design"}) == "architect"
-
-
-def test_route_to_reviewer():
-    """task_type='review' → routes to code_reviewer node."""
-    from harness_supervisor.nodes import route_node
-
-    assert route_node({"task_type": "review"}) == "code_reviewer"
-
-
-def test_route_to_sre():
-    """task_type='incident' → routes to sre node."""
-    from harness_supervisor.nodes import route_node
-
-    assert route_node({"task_type": "incident"}) == "sre"
+    assert route_node({"task_type": task_type}) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -371,10 +333,42 @@ async def test_agent_executes_formula_steps():
 
 
 # ---------------------------------------------------------------------------
-# Slice 7 — human gate (4 integration tests)
+# Slice 6.5 — _after_human_gate routing (1 unit test)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.integration
+
+async def test_after_human_gate_architect_gate_does_not_route_to_sre():
+    """_after_human_gate with gate_signal + valid token → synthesise, not sre.
+
+    When the human gate is reached via architect → architectural_gate → FAIL,
+    a valid approval token should NOT resume the SRE agent.
+    """
+    from unittest.mock import patch
+    from harness_supervisor.graph import _after_human_gate
+
+    state = {
+        **_base_state("Design the auth service"),
+        "gate_signal": {
+            "result": "FAIL",
+            "violations": [
+                {"rule": "layer-violation", "severity": "HARD", "file": "a.py", "message": "bad"}
+            ],
+            "action": "STOP_AND_SURFACE",
+        },
+        "human_approval_token": "valid-token",
+    }
+
+    with patch("harness_supervisor.graph.validate_approval_token", return_value=True):
+        result = _after_human_gate(state)
+
+    assert result != "sre", "_after_human_gate must not route to sre when gate_signal is present"
+    assert result == "synthesise", f"Expected 'synthesise', got {result!r}"
+
+
+# ---------------------------------------------------------------------------
+# Slice 7 — human gate (4 tests)
+# ---------------------------------------------------------------------------
+
 async def test_human_gate_pauses_graph():
     """SRE output with requires_human_approval=True pauses the graph."""
     from langgraph.checkpoint.memory import InMemorySaver
@@ -428,7 +422,6 @@ async def test_human_gate_resumes_with_valid_token():
     assert final.get("final_response") is not None
 
 
-@pytest.mark.integration
 async def test_human_gate_rejects_expired_token():
     """Expired human_approval_token moves graph to error_handler."""
     from langgraph.checkpoint.memory import InMemorySaver
@@ -455,7 +448,6 @@ async def test_human_gate_rejects_expired_token():
     assert final.get("error") is not None
 
 
-@pytest.mark.integration
 async def test_human_gate_rejects_wrong_scope():
     """Token scoped to different thread_id is rejected."""
     from langgraph.checkpoint.memory import InMemorySaver
@@ -518,7 +510,7 @@ async def test_checkpoint_survives_human_pause():
 
 
 # ---------------------------------------------------------------------------
-# Slice 9 — OTel spans (1 integration test)
+# Slice 9 — OTel spans (1 integration test — real Dolt formula store)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
@@ -552,11 +544,10 @@ async def test_otel_spans_emitted():
 
 
 # ---------------------------------------------------------------------------
-# Slice 10 — E2E full graph runs (3 e2e tests)
+# Slice 10 — Full graph runs (3 unit tests, no real infrastructure)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.e2e
-async def test_full_design_task_e2e():
+async def test_full_design_task():
     """Full graph: design task → formula_lookup → architect → synthesise → final_response."""
     from langgraph.checkpoint.memory import InMemorySaver
     from harness_supervisor.graph import build_supervisor
@@ -578,8 +569,7 @@ async def test_full_design_task_e2e():
     assert final.get("task_type") == "design"
 
 
-@pytest.mark.e2e
-async def test_full_review_task_e2e():
+async def test_full_review_task():
     """Full graph: review task → formula_lookup → reviewer → synthesise → verdict in final_response."""
     from langgraph.checkpoint.memory import InMemorySaver
     from harness_supervisor.graph import build_supervisor
@@ -602,8 +592,7 @@ async def test_full_review_task_e2e():
     assert final.get("task_type") == "review"
 
 
-@pytest.mark.e2e
-async def test_full_incident_task_no_shell_e2e():
+async def test_full_incident_task_no_shell():
     """Incident not requiring shell_exec completes without pausing at human_gate."""
     from langgraph.checkpoint.memory import InMemorySaver
     from harness_supervisor.graph import build_supervisor

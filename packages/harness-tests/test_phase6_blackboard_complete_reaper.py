@@ -205,16 +205,6 @@ def test_task_complete_idempotent(sre_token):
     cleanup_tasks([task_id])
 
 
-@pytest.mark.integration
-def test_task_complete_requires_auth():
-    """task_complete without a token returns 401."""
-    resp = httpx.post(
-        f"{GOVERNANCE_URL}/tasks/complete",
-        json={"task_id": str(uuid.uuid4()), "result": {}, "idempotency_key": "x"},
-    )
-    assert resp.status_code == 401
-
-
 # ---------------------------------------------------------------------------
 # Lease reaper
 # ---------------------------------------------------------------------------

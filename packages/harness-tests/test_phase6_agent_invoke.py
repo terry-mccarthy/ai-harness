@@ -79,16 +79,6 @@ def test_agent_invoke_allowed(architect_token):
     assert isinstance(body, dict)
 
 
-@pytest.mark.integration
-def test_agent_invoke_requires_auth():
-    """agent_invoke without a token returns 401."""
-    resp = httpx.post(
-        f"{GOVERNANCE_URL}/agent/invoke",
-        json={"target": "code-reviewer", "artifact_type": "git_diff", "payload": {}},
-    )
-    assert resp.status_code == 401
-
-
 # ---------------------------------------------------------------------------
 # Denial: policy-blocked invocation, must also be audited
 # ---------------------------------------------------------------------------

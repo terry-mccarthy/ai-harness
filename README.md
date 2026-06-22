@@ -36,7 +36,7 @@ The agent is also exposed as an MCP tool (`review_diff`) — Claude Code or any 
 - **Dolt** — git-versioned MySQL-compatible database; audit rows and formula versions are auto-committed so both logs are append-only and diffable
 - **PostgreSQL** (`pgvector/pgvector:pg16`) — MCPJungle state, LangGraph checkpoints, and vector memory store; pgvector extension enables semantic search
 - **Redis 7** — hot-read cache for the memory store; frequently accessed items served in-process without hitting PostgreSQL
-- **Ollama** (`qwen2.5-coder:32b` default) — local LLM for reviews and vector embeddings; no API key needed
+- **LLM providers** — pluggable via `LLM_PROVIDER`: `ollama` (default; local `qwen2.5-coder`, no API key needed), `gemini` (`gemini-2.5-flash`), or `openrouter` (any hosted model). Provider and per-provider settings are switchable at runtime via the review-server `PUT /config` endpoint. Ollama also serves vector embeddings (`nomic-embed-text`)
 - **diff-proxy** — real `git diff` on the baked sample repo, or fetches a PR diff from the GitHub API (`pr_number` + `github_repo`; reads `GITHUB_TOKEN` from env)
 - **linter-stub** — semgrep-based linter (`semgrep-rules.yml`); catches SQL f-string injection, hardcoded credentials, `subprocess shell=True`, `open()` f-string paths, and `eval()`
 - **github-mcp** — MCP server wrapping GitHub API for architect-role tools (`codebase_search`, `adr_read`, `issue_create`)
@@ -73,7 +73,10 @@ All options are in `.env` (copy from `.env.example`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `OLLAMA_MODEL` | `qwen2.5-coder` | LLM used by agents for chat/reasoning |
+| `LLM_PROVIDER` | `ollama` | Active LLM provider: `ollama`, `gemini`, or `openrouter`. Override per-request via the `provider` field or at runtime via review-server `PUT /config`. |
+| `OLLAMA_MODEL` | `qwen2.5-coder:7b` | LLM used by agents for chat/reasoning when provider is `ollama` |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Model used when provider is `gemini` (requires `GEMINI_API_KEY`) |
+| `OPENROUTER_MODEL` | `anthropic/claude-3.5-sonnet` | Model used when provider is `openrouter` (requires `OPENROUTER_API_KEY`) |
 | `EMBED_MODEL` | `nomic-embed-text` | Dedicated embedding model for semantic memory search (768 dims) |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint |
 | `MCPJUNGLE_URL` | `http://localhost:8090` | Governance service URL (agent tool calls route here) |

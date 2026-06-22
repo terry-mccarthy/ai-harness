@@ -1,4 +1,4 @@
-nothing # AI Harness — Architecture
+# AI Harness — Architecture
 
 > This file is the authoritative architecture specification for the ai-harness project.
 > It is consumed by both human developers and AI coding agents (Claude Code, Codex, etc.).
@@ -45,8 +45,12 @@ a `DOLT_COMMIT`. The audit log must be complete; partial audit is not acceptable
 
 **[HARD]** `harness-memory` must not import from `harness-agents` or `harness-tests`.
 
+**[HARD]** `harness-supervisor` is the orchestration layer at the top of the runtime stack —
+it may import `harness-agents`, `harness-memory`, and `harness-gateway`, but nothing other than
+`harness-tests` may import from it.
+
 **[HARD]** `harness-tests` is a test-only package. It must not be imported by any service
-or runtime package (`governance`, `review_server`, `harness-gateway`, `harness-agents`, `harness-memory`).
+or runtime package (`governance`, `review_server`, `harness-gateway`, `harness-agents`, `harness-memory`, `harness-supervisor`).
 
 **[HARD]** Any new tool added to a stub server or service MUST have a corresponding OPA policy
 entry in `policies/harness.rego` before the change is considered complete. Tools without
@@ -67,20 +71,34 @@ consistent with all existing stub servers and service implementations.
 ## Package Dependency Direction
 
 ```
-harness-tests
-    ↓ (test imports only)
-harness-agents      harness-memory
-    ↓                    ↓
-harness-gateway     (standalone — no runtime package deps)
+harness-supervisor       (orchestration — top of the runtime stack)
+   │ may import ↓
+harness-agents           harness-memory     (standalone — no runtime package deps)
+   │ may import ↓
+harness-gateway          (leaf — no runtime deps on other harness packages)
 
-✗  harness-gateway → harness-agents   [HARD violation]
-✗  harness-gateway → harness-memory   [HARD violation]
-✗  harness-gateway → harness-tests    [HARD violation]
-✗  harness-agents  → harness-tests    [HARD violation]
-✗  harness-memory  → harness-agents   [HARD violation]
-✗  harness-memory  → harness-tests    [HARD violation]
-✗  any service     → harness-tests    [HARD violation]
+harness-tests            (test-only — may import any runtime package above)
+
+Allowed imports (top → bottom only):
+  harness-supervisor → harness-agents, harness-memory, harness-gateway
+  harness-agents     → harness-gateway
+
+✗  harness-gateway    → harness-agents      [HARD violation]
+✗  harness-gateway    → harness-memory      [HARD violation]
+✗  harness-gateway    → harness-supervisor  [HARD violation]
+✗  harness-gateway    → harness-tests       [HARD violation]
+✗  harness-agents     → harness-supervisor  [HARD violation]
+✗  harness-agents     → harness-tests       [HARD violation]
+✗  harness-memory     → harness-agents      [HARD violation]
+✗  harness-memory     → harness-supervisor  [HARD violation]
+✗  harness-memory     → harness-tests       [HARD violation]
+✗  harness-supervisor → harness-tests       [HARD violation]
+✗  any service        → harness-tests       [HARD violation]
 ```
+
+`harness-supervisor` (LangGraph orchestration) is the only package permitted to
+depend on all three of `harness-agents`, `harness-memory`, and `harness-gateway`.
+Nothing may depend on `harness-supervisor` except `harness-tests`.
 
 ---
 
@@ -165,8 +183,9 @@ security/
 docs/runbooks/       — 4 operational runbooks
 ```
 
-Dependencies: `harness-tests` → `harness-agents` → `harness-gateway`; `harness-memory`
-is standalone (no dependency on other harness packages). See
+Dependencies: `harness-tests` → `harness-supervisor` → (`harness-agents`, `harness-memory`,
+`harness-gateway`); `harness-agents` → `harness-gateway`; `harness-memory` is standalone (no
+dependency on other harness packages). See
 [Package Dependency Direction](#package-dependency-direction) above for the enforced direction.
 
 ---
@@ -632,6 +651,13 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 
 ## Decision Log
 
+> **This table is the canonical ADR index.** Every architectural decision lives here as a
+> one-line row, numbered in a single sequence. ADRs that need more than a line — full context,
+> alternatives, consequences — also get a long-form file in [`docs/adr/`](docs/adr/) sharing the
+> same number (e.g. row 0036 ↔ `docs/adr/0036-architect-mcp-server.md`); the row links to it.
+> Most decisions stay table-only. **The number space is shared** — never create a `docs/adr/NNNN-*`
+> file whose number already names a different row. See [`docs/adr/README.md`](docs/adr/README.md).
+
 | ID   | Decision                                                        | Status   |
 |------|-----------------------------------------------------------------|----------|
 | 0001 | Governance as mandatory intercept rather than per-tool auth     | Accepted |
@@ -669,7 +695,8 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0033 | CCN ceiling policy: governance `server.py` and `client.py` must maintain code health ≥ 9.0 — enforced by running `/forensics` before every commit; complex validation logic extracted into named helpers (`_validate_label_body`, `_check_episode_labelable`, `_check_count_criteria`, `_check_diversity_criteria`, `_compute_support_stats`, `_parse_steps`, `_count_completed`, etc.) that are individually testable and readable | Accepted |
 | 0034 | `POST /skills/select` uses three ordered tiebreak rules rather than LLM selection — LLM-based selection is non-deterministic and untestable; rule-based selection is auditable (each decision is tagged with the winning rule), reproducible (same inputs always produce the same winner), and escalates gracefully rather than guessing; `preconditions.env_constraints` specificity is the primary discriminator, with recency and success rate as tiebreakers; escalation surfaces tied skill IDs for operator review | Accepted |
 | 0035 | Skill execution moved out of `GatewayClient` into a dedicated `SkillRunner` module — the gateway's real job is per-call routing (auth, OPA check, invoke, audit), whereas skill execution is a stateful workflow built on top of `call_tool`; collocating them produced a 357-line class mixing four concerns; the new `SkillRunner` takes a `GatewayClient` collaborator so token caching, OPA, and audit still flow through one place; `GatewayClient.execute_skill` retained as a thin delegating shim for back-compat; `GatewayClient.get_token` promoted from `_get_token` to a public method so the new module reads it through a clean seam | Accepted |
-| 0036 | Architect MCP server replicates semble's pattern — host-side FastMCP streamable-HTTP, `repo`-per-call (v1: local path / `https://`; v2: `s3://` + `upload://` for ECS), LRU cache keyed by commit SHA, hybrid BM25+dense via Ollama `nomic-embed-text`; ADRs live in `<repo>/docs/adr/`; new `architecture_review(target_mode)` tool covers codebase + diff modes; same tool signature in host and AWS modes — only resolvers change. See [docs/adr/0036-architect-mcp-server.md](docs/adr/0036-architect-mcp-server.md) | Accepted |
+| 0036 | Architect MCP server replicates semble's pattern — host-side FastMCP streamable-HTTP, `repo`-per-call (v1: local path / `https://`; v2: `s3://` + `upload://` for ECS), LRU cache keyed by commit SHA, hybrid BM25+dense via Ollama `nomic-embed-text`; ADRs live in `<repo>/docs/adr/`; new `architecture_review(target_mode)` tool covers codebase + diff modes; same tool signature in host and AWS modes — only resolvers change. See [docs/adr/0036-architect-mcp-server.md](docs/adr/0036-architect-mcp-server.md) | Superseded in part by 0038, 0039 (host-side lifecycle reversed) |
 | 0037 | Architectural gate (AaC engine) — `architectural_gate_node` between architect and synthesise calls `execute_architecture_check` via gateway; `route_after_gate` routes PASS → synthesise, FAIL (HARD or SOFT without justification) → human_gate, SOFT with justification → synthesise; failures recorded in dedicated `architectural_gate_failures` Dolt table with DOLT_COMMIT per write; `POST /audit/architectural-gate` endpoint on governance; container sandbox stub deferred to follow-up | Accepted |
 | 0038 | Replace host-side architect server with review-server and github-mcp — `architecture_review` + `execute_architecture_check` moved to review-server (has multi-provider LLM, already in Docker); `codebase_search` + `adr_read` served by new github-mcp service wrapping GitHub API (read-only); `adr_write` and `diagram_gen` removed (review-only); host-side retired, all services now run in Docker | Accepted |
 | 0039 | `issue_create` replaces `adr_write` on `github-mcp` — ADRs are records of decisions already made, not actionable work items; the architect now files GitHub issues for CRITICAL/HIGH findings instead of writing ADRs, making violations trackable and assignable through the normal issue lifecycle | Accepted |
+| 0040 | This Decision Log table is the canonical ADR index; `docs/adr/` holds optional long-form files for decisions that need depth, sharing the same number space — previously only ADR-0036 had a file with no stated relationship between the two stores, which let a numbering collision slip in; convention documented in `docs/adr/README.md` and the Decision Log header | Accepted |

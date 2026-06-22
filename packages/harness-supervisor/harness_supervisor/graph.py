@@ -82,6 +82,13 @@ def _after_human_gate(state: HarnessState) -> str:
     # Gate soft-fail justification — resume to synthesise
     if state.get("human_justification"):
         return "synthesise"
+    # If we arrived here from the architectural gate (path: architect → gate → FAIL),
+    # a token doesn't mean "resume SRE" — it means "override gate failure and proceed"
+    if state.get("gate_signal"):
+        token = state.get("human_approval_token")
+        if token:
+            return "synthesise"
+        return END
     token = state.get("human_approval_token")
     thread_id = state.get("thread_id", "")
     if not token:

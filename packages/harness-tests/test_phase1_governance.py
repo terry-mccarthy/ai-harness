@@ -176,6 +176,24 @@ def test_unknown_token_rejected():
     assert resp.status_code == 401
 
 
+# Every governance endpoint funnels auth through the same core.auth.decode_jwt
+# helper, so "missing token → 401" is one behaviour, tested once across all
+# endpoints rather than duplicated per endpoint. Each endpoint additionally has
+# its own valid-token functional test, which proves decode_jwt is on its path.
+@pytest.mark.integration
+@pytest.mark.parametrize("method,path,json_body", [
+    ("POST", "/check", {"tool_name": "diff_proxy__git_diff"}),
+    ("POST", "/agent/invoke", {"target": "code-reviewer", "artifact_type": "git_diff", "payload": {}}),
+    ("POST", "/tasks", {"required_role": "sre", "artifact_type": "incident", "payload": {}}),
+    ("POST", "/tasks/complete", {"task_id": "00000000-0000-0000-0000-000000000000", "result": {}, "idempotency_key": "x"}),
+    ("GET", "/agents", None),
+])
+def test_endpoint_rejects_missing_token(method, path, json_body):
+    """No Authorization header → 401 on every authed governance endpoint."""
+    resp = httpx.request(method, f"{GOVERNANCE_URL}{path}", json=json_body, timeout=10.0)
+    assert resp.status_code == 401, f"{method} {path} returned {resp.status_code}: {resp.text}"
+
+
 # ---------------------------------------------------------------------------
 # Audit / Dolt tests (POST /audit → Dolt)
 # ---------------------------------------------------------------------------

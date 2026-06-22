@@ -150,10 +150,3 @@ def test_agent_list_code_reviewer_sees_empty():
     agents = resp.json()
     assert isinstance(agents, list)
     assert agents == [], f"code-reviewer should see empty agent list, got: {agents}"
-
-
-@pytest.mark.integration
-def test_agent_list_requires_auth():
-    """GET /agents without a token returns 401."""
-    resp = httpx.get(f"{GOVERNANCE_URL}/agents")
-    assert resp.status_code == 401

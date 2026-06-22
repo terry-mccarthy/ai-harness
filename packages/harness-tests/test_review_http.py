@@ -235,8 +235,8 @@ async def test_http_review_malformed_header_returns_401():
 # Slice 6 — Config API
 # ---------------------------------------------------------------------------
 
-async def test_config_get_returns_defaults():
-    """GET /config returns the current override dict (empty = all defaults)."""
+async def test_config_get_returns_effective_config():
+    """GET /config returns the effective config (env defaults merged with overrides)."""
     import server as review_server
     app = review_server.mcp.streamable_http_app()
     with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
@@ -244,11 +244,13 @@ async def test_config_get_returns_defaults():
             resp = await client.get("/config")
     assert resp.status_code == 200
     body = resp.json()
-    assert "llm_provider" in body
-    assert body["llm_provider"] is None
-    assert "ollama" in body
-    assert "gemini" in body
-    assert "openrouter" in body
+    # llm_provider is now always resolved to a concrete value (default "ollama"),
+    # never the bare None override.
+    assert body["llm_provider"]
+    assert "ollama" in body and "gemini" in body and "openrouter" in body
+    # provider sub-dicts carry their resolved settings, not an empty override slot
+    assert "model" in body["ollama"]
+    assert "host" in body["ollama"]
 
 
 async def test_config_get_sanitizes_api_keys():
@@ -302,6 +304,48 @@ async def test_config_put_clears_key_on_null():
         assert review_server._get_cfg("ollama", "model") is None
     finally:
         review_server._CONFIG["ollama"].pop("model", None)
+
+
+# ---------------------------------------------------------------------------
+# Slice — POST /review-architecture (plain HTTP, no MCP client timeout)
+# ---------------------------------------------------------------------------
+
+_ARCH_RESULT = {"compliant": True, "findings": [], "summary": "ok"}
+
+
+async def test_http_architecture_review_happy_path():
+    """POST /review-architecture returns the architecture_review result as JSON."""
+    with patch("architecture_review.architecture_review", AsyncMock(return_value=_ARCH_RESULT)):
+        async with _review_client() as client:
+            resp = await client.post(
+                "/review-architecture",
+                json={"target_mode": "codebase", "repo": "https://github.com/o/r"},
+            )
+    assert resp.status_code == 200
+    assert resp.json() == _ARCH_RESULT
+
+
+async def test_http_architecture_review_missing_target_mode_returns_422():
+    async with _review_client() as client:
+        resp = await client.post("/review-architecture", json={"repo": "https://github.com/o/r"})
+    assert resp.status_code == 422
+
+
+async def test_http_architecture_review_missing_repo_returns_422():
+    async with _review_client() as client:
+        resp = await client.post("/review-architecture", json={"target_mode": "codebase"})
+    assert resp.status_code == 422
+
+
+async def test_http_architecture_review_wrong_key_returns_401():
+    """When REVIEW_API_KEY is set, a wrong bearer token is rejected before any work."""
+    async with _review_client(api_key="secret") as client:
+        resp = await client.post(
+            "/review-architecture",
+            json={"target_mode": "codebase", "repo": "https://github.com/o/r"},
+            headers={"Authorization": "Bearer wrong"},
+        )
+    assert resp.status_code == 401
 
 
 async def test_config_put_updates_llm_provider():

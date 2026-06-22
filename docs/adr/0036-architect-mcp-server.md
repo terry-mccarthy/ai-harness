@@ -1,7 +1,16 @@
 # ADR-0036: Architect MCP server — host-side, semble-style, designed for ECS portability
 
-**Status:** accepted
+**Status:** accepted, superseded in part by ADR-0038 and ADR-0039 (see the Decision Log in [ARCHITECTURE.md](../../ARCHITECTURE.md#decision-log))
 **Date:** 2026-06-17
+
+> **Superseded note:** The *host-side FastMCP server* lifecycle decided here was
+> later reversed. ADR-0038 moved the architect tools into the containerized
+> `review_server` (`architecture_review`, `execute_architecture_check`) and
+> `github-mcp` (`codebase_search`, `adr_read`) services and retired the host-side
+> process; ADR-0039 replaced `adr_write` with `issue_create` and dropped
+> `diagram_gen`. The `repo`-parameter design, indexing/caching strategy, and
+> governance invariants below remain accurate. Treat any reference to a host-side
+> server or `make architect-up` as historical.
 
 Delivered across 7 slices (slice 8 retired `stub_servers/architect_server.py`).
 Slices 1–5 added `codebase_search` (BM25 → semantic → hybrid → LRU cache with

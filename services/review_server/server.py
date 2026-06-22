@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 import json
 import logging
@@ -27,10 +28,23 @@ async def _init_pg_pool() -> None:
     dsn = os.environ.get("PG_DSN", "postgresql://harness:harness@localhost:5432/harness")
     if not dsn:
         return
-    try:
-        _PG_POOL = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
-    except Exception:
-        logging.warning("config persistence unavailable — PG_DSN not reachable", exc_info=True)
+    for attempt in range(1, 6):
+        try:
+            _PG_POOL = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+            logging.info("connected to postgres config store")
+            return
+        except Exception:
+            if attempt < 5:
+                wait = attempt * 2
+                logging.warning(
+                    "pg connect attempt %d/5 failed, retrying in %ds...", attempt, wait
+                )
+                await asyncio.sleep(wait)
+            else:
+                logging.warning(
+                    "config persistence unavailable — pg not reachable after 5 attempts",
+                    exc_info=True,
+                )
 
 
 async def _close_pg_pool() -> None:
@@ -136,6 +150,37 @@ _CONFIG: dict = {
 _SENSITIVE_KEYS = {"api_key", "client_secret", "secret"}
 
 
+_ENV_CFG = {
+    "llm_provider": ("LLM_PROVIDER", "ollama"),
+    "ollama": {
+        "model": ("OLLAMA_MODEL", "qwen2.5-coder:7b"),
+        "host": ("OLLAMA_HOST", "http://localhost:11434"),
+        "num_ctx": ("OLLAMA_NUM_CTX", 8192),
+        "temperature": ("OLLAMA_TEMPERATURE", 0.1),
+        "num_predict": ("OLLAMA_NUM_PREDICT", 1024),
+    },
+    "gemini": {
+        "model": ("GEMINI_MODEL", "gemini-2.5-flash"),
+        "api_key": ("GEMINI_API_KEY", None),
+    },
+    "openrouter": {
+        "model": ("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+        "api_key": ("OPENROUTER_API_KEY", None),
+    },
+}
+
+
+def _env_cfg() -> dict:
+    result = {}
+    result["llm_provider"] = _CONFIG.get("llm_provider") or os.environ.get("LLM_PROVIDER", "ollama")
+    for provider in ("ollama", "gemini", "openrouter"):
+        sub = {}
+        for k, (env_var, default) in _ENV_CFG[provider].items():
+            sub[k] = _get_cfg(provider, k) or os.environ.get(env_var, default)
+        result[provider] = sub
+    return result
+
+
 def _should_mask(key: str, val) -> bool:
     if key.lower() not in _SENSITIVE_KEYS:
         return False
@@ -201,29 +246,29 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
-def _build_gemini_provider(model=None, temperature=None, max_tokens=None):
+def _build_gemini_provider(**kwargs):
     from harness_agents.llm import GeminiProvider
     api_key = _resolve(None, "gemini", "api_key", "GEMINI_API_KEY", "")
     if not api_key:
         raise ValueError("GEMINI_API_KEY is required for the gemini provider")
     return GeminiProvider(
-        model=_resolve(model, "gemini", "model", "GEMINI_MODEL", "gemini-2.5-flash"),
+        model=_resolve(kwargs.get("model"), "gemini", "model", "GEMINI_MODEL", "gemini-2.5-flash"),
         api_key=api_key,
-        temperature=_resolve(temperature, "gemini", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
-        max_output_tokens=_resolve(max_tokens, "gemini", "max_output_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
+        temperature=_resolve(kwargs.get("temperature"), "gemini", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
+        max_output_tokens=_resolve(kwargs.get("max_tokens"), "gemini", "max_output_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
     )
 
 
-def _build_openrouter_provider(model=None, temperature=None, max_tokens=None):
+def _build_openrouter_provider(**kwargs):
     from harness_agents.llm import OpenRouterProvider
     api_key = _resolve(None, "openrouter", "api_key", "OPENROUTER_API_KEY", "")
     if not api_key:
         raise ValueError("OPENROUTER_API_KEY is required for the openrouter provider")
     return OpenRouterProvider(
         api_key=api_key,
-        model=_resolve(model, "openrouter", "model", "OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
-        temperature=_resolve(temperature, "openrouter", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
-        max_tokens=_resolve(max_tokens, "openrouter", "max_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
+        model=_resolve(kwargs.get("model"), "openrouter", "model", "OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+        temperature=_resolve(kwargs.get("temperature"), "openrouter", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
+        max_tokens=_resolve(kwargs.get("max_tokens"), "openrouter", "max_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
     )
 
 
@@ -431,10 +476,10 @@ async def http_review(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/config", methods=["GET"])
 async def get_config(request: Request) -> JSONResponse:
-    """Return the current runtime config overrides (sensitive values masked)."""
+    """Return effective runtime config (env vars + overrides, secrets masked)."""
     if not _check_api_key(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return JSONResponse(_sanitize_cfg(_CONFIG))
+    return JSONResponse(_sanitize_cfg(_env_cfg()))
 
 
 async def _parse_json_body(request: Request) -> dict | None:
@@ -568,6 +613,76 @@ async def architecture_review(
     except Exception as e:
         logging.exception("architecture_review failed")
         raise RuntimeError(str(e)) from e
+
+
+# ---------------------------------------------------------------------------
+# Architecture review HTTP endpoint (no MCP timeout limit)
+# ---------------------------------------------------------------------------
+
+
+@mcp.custom_route("/review-architecture", methods=["POST"])
+async def http_architecture_review(request: Request) -> JSONResponse:
+    """Plain HTTP endpoint for architecture review — no MCP client timeout.
+
+    Body (JSON):
+        target_mode (str, required): ``"codebase"`` or ``"diff"``
+        repo        (str, required): GitHub URL
+        diff        (str, optional): unified diff (required when target_mode="diff")
+        provider    (str, optional): provider name override
+        model       (str, optional): model name override
+        temperature (float, optional): temperature override
+        max_tokens  (int, optional): max tokens override
+        num_ctx     (int, optional): context window override (Ollama)
+        num_predict (int, optional): num_predict override (Ollama)
+        host        (str, optional): Ollama host override
+
+    Auth: set REVIEW_API_KEY in env (same as POST /review).
+    """
+    if not _check_api_key(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=422)
+
+    target_mode = body.get("target_mode")
+    if not target_mode:
+        return JSONResponse({"error": "target_mode is required"}, status_code=422)
+    repo = body.get("repo")
+    if not repo:
+        return JSONResponse({"error": "repo is required"}, status_code=422)
+
+    from architecture_review import architecture_review as _architecture_review
+
+    resolved_provider = (
+        body.get("provider")
+        or _CONFIG.get("llm_provider")
+        or os.environ.get("LLM_PROVIDER", "ollama")
+    ).lower()
+    try:
+        llm_provider = _build_llm_provider(
+            resolved_provider,
+            host=body.get("host"),
+            model=body.get("model"),
+            temperature=body.get("temperature"),
+            max_tokens=body.get("max_tokens"),
+            num_ctx=body.get("num_ctx"),
+            num_predict=body.get("num_predict"),
+        )
+        llm_provider = MonitoredLLMProvider(llm_provider, agent_role="architect")
+        result = await _architecture_review(
+            repo=repo,
+            target_mode=target_mode,
+            diff=body.get("diff"),
+            llm_provider=llm_provider,
+        )
+        return JSONResponse(result)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception:
+        logging.exception("architecture_review failed")
+        return JSONResponse({"error": "architecture review failed — see server logs"}, status_code=500)
 
 
 # ---------------------------------------------------------------------------
