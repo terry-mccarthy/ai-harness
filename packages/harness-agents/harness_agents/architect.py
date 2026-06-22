@@ -115,7 +115,7 @@ class ArchitectAgent:
 
     async def _phase_flow_trace(self, task: str, phase_results: dict) -> dict | None:
         logger.info("phase: flow_trace")
-        recon = phase_results.get("reconnaissance", {})
+        recon = phase_results.get("reconnaissance") or {}
         critical_path = recon.get("critical_path_suggestion", task)
         files = await self._call_tool("codebase_search", {"query": f"entry point, service layer, data access for: {critical_path}", "repo": self.gateway.gateway_url, "top_k": 10})
         files_data = files or {"result": "no data"}
@@ -135,13 +135,13 @@ class ArchitectAgent:
     async def _build_context(self, phase_results: dict, *phases: str) -> dict:
         context = {}
         for p in phases:
-            if p in phase_results:
+            if phase_results.get(p):
                 context[p] = {k: v for k, v in phase_results[p].items() if k != "phase"}
         return context
 
     async def _phase_abstraction_analysis(self, task: str, phase_results: dict) -> dict | None:
         logger.info("phase: abstraction_analysis")
-        recon = phase_results.get("reconnaissance", {})
+        recon = phase_results.get("reconnaissance") or {}
         interfaces_to_examine = recon.get("interfaces_to_examine", [])
         query = "interfaces, abstractions, and their implementations"
         if interfaces_to_examine:

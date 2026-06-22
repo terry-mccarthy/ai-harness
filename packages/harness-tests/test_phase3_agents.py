@@ -230,6 +230,35 @@ async def test_architect_errors_when_synthesis_never_schema_valid():
     assert result["error"]["code"] == "invalid_output"
 
 
+class _FailFirstLLM:
+    """Raises on the first chat() call (simulates a failed phase), then replays."""
+    def __init__(self, after_fail: list[str]):
+        self._responses = list(reversed(after_fail))
+        self._calls = 0
+
+    async def chat(self, messages):
+        from harness_agents.llm import LLMResponse
+        self._calls += 1
+        if self._calls == 1:
+            raise RuntimeError("LLM unavailable")
+        return LLMResponse(content=self._responses.pop())
+
+
+async def test_architect_survives_failed_phase():
+    """If a phase's LLM call fails (phase result is None), later phases must
+    degrade gracefully rather than crash on the None prior context."""
+    from harness_agents.architect import ArchitectAgent
+
+    agent = ArchitectAgent(
+        gateway=_mock_gateway(),
+        llm_provider=_FailFirstLLM([_PHASE_FLOW, _PHASE_ABSTRACTION, _PHASE_SYNTHESIS]),
+    )
+    result = await agent.run(_architect_state("Design the persistent memory layer"))
+
+    assert result["error"] is None
+    assert len(result["agent_output"]["findings"]) > 0
+
+
 @pytest.mark.integration
 async def test_architect_tool_calls_go_via_gateway():
     """Architect's codebase_search call is visible in gateway audit log."""
