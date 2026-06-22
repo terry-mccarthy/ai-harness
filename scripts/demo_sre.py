@@ -13,6 +13,7 @@ import os
 import uuid
 
 from harness_agents.dynamic_sre import DynamicSREAgent
+from harness_agents.llm import build_llm_from_env
 from harness_agents.types import AgentState
 from harness_gateway.client import GatewayClient
 
@@ -22,22 +23,6 @@ INCIDENT = (
     "in a loop with no final_response produced."
 )
 
-
-def _build_llm():
-    provider = os.environ.get("LLM_PROVIDER", "ollama")
-    if provider == "openrouter":
-        from harness_agents.llm import OpenRouterProvider
-        return OpenRouterProvider(
-            api_key=os.environ["OPENROUTER_API_KEY"],
-            model=os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
-            max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "2048")),
-        )
-    from harness_agents.llm import OllamaProvider
-    return OllamaProvider(
-        host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-        model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"),
-        num_ctx=int(os.environ.get("OLLAMA_NUM_CTX", "8192")),
-    )
 
 
 async def _build_memory_store():
@@ -94,7 +79,7 @@ async def main() -> None:
 
     agent = DynamicSREAgent(
         gateway=gateway,
-        llm_provider=_build_llm(),
+        llm_provider=build_llm_from_env(),
         memory_store=memory_store,
         formula_store=formula_store,
     )

@@ -19,7 +19,7 @@ import pytest
 from pathlib import Path
 
 from harness_agents.reviewer import CodeReviewerAgent
-from harness_agents.llm import OllamaProvider
+from harness_agents.llm import build_llm_from_env
 
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "eval-fixtures"
 DIFFS_DIR = FIXTURES_DIR / "diffs"
@@ -107,11 +107,7 @@ async def test_reviewer_fixture(diff_path: Path, label_path: Path):
     diff_text = diff_path.read_text()
     label = json.loads(label_path.read_text())
 
-    llm = OllamaProvider(
-        host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-        model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"),
-        num_ctx=int(os.environ.get("OLLAMA_NUM_CTX", "8192")),
-    )
+    llm = build_llm_from_env()
     agent = CodeReviewerAgent(gateway=_MockGateway(diff_text), llm_provider=llm)
 
     state = {
@@ -208,11 +204,7 @@ def _assert_scores(verdict_accuracy: float, avg_recall: float) -> None:
 @pytest.mark.live
 async def test_reviewer_aggregate_score():
     """Run all fixtures and assert minimum aggregate recall and verdict accuracy."""
-    llm = OllamaProvider(
-        host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-        model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"),
-        num_ctx=int(os.environ.get("OLLAMA_NUM_CTX", "8192")),
-    )
+    llm = build_llm_from_env()
     scores = await _score_all_fixtures(llm)
     assert scores
     verdict_accuracy, avg_recall = _compute_aggregates(scores)

@@ -24,16 +24,13 @@ def gateway_client():
     )
 
 
-from harness_agents.llm import OllamaProvider
+from harness_agents.llm import build_llm_from_env
 
 @pytest.fixture
 def reviewer_agent(gateway_client):
     return CodeReviewerAgent(
         gateway=gateway_client,
-        llm_provider=OllamaProvider(
-            host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-            model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder"),
-        ),
+        llm_provider=build_llm_from_env(),
     )
 
 

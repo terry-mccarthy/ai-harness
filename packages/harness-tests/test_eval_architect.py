@@ -30,7 +30,7 @@ import jsonschema
 import pytest
 
 from harness_agents.architect import ArchitectAgent
-from harness_agents.llm import OllamaProvider, OpenRouterProvider
+from harness_agents.llm import build_llm_from_env
 from harness_agents.types import ARCHITECT_OUTPUT_SCHEMA
 
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "eval-fixtures" / "architecture"
@@ -128,25 +128,9 @@ def _score(label: dict, output: dict) -> dict:
 
 
 def _build_llm():
-    """Select the LLM provider from LLM_PROVIDER (default: local Ollama).
-
-    CI runs with LLM_PROVIDER=openrouter on a fast hosted model since runners
-    have no GPU; local runs default to Ollama.
-    """
-    provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
-    if provider == "openrouter":
-        # The synthesis report (findings + recommendations + debt + nfr risks) is
-        # large; the provider default of 1024 truncates it into unparseable JSON.
-        return OpenRouterProvider(
-            api_key=os.environ["OPENROUTER_API_KEY"],
-            model=os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
-            max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "4096")),
-        )
-    return OllamaProvider(
-        host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-        model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"),
-        num_ctx=int(os.environ.get("OLLAMA_NUM_CTX", "8192")),
-    )
+    # CI uses openrouter with a large max_tokens default because the synthesis
+    # report (findings + recommendations + debt + nfr risks) truncates at 1024.
+    return build_llm_from_env(max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "4096")))
 
 
 def _make_agent(case_dir: Path) -> ArchitectAgent:
