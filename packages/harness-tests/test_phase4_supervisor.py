@@ -52,13 +52,12 @@ def _mock_gateway(tool_responses: dict | None = None):
     return gw
 
 
-_VALID_ADR = json.dumps({
-    "title": "ADR-001: Use PostgreSQL",
+_VALID_ARCH_REVIEW = json.dumps({
+    "title": "Auth service architecture review",
     "status": "proposed",
-    "context": "Need persistent storage.",
-    "decision": "Use PostgreSQL.",
-    "consequences": "Requires pgvector.",
-    "alternatives_considered": [],
+    "summary": "Architecture looks sound with minor concerns.",
+    "findings": [],
+    "recommendations": [],
 })
 
 _VALID_FINDINGS = json.dumps({
@@ -556,7 +555,7 @@ async def test_full_design_task():
     from harness_supervisor.graph import build_supervisor
 
     supervisor = await build_supervisor(
-        llm_provider=MockLLMProvider(_VALID_ADR),
+        llm_provider=MockLLMProvider(_VALID_ARCH_REVIEW),
         gateway=_mock_gateway({
             "codebase_search": {"files": []},
             "adr_read": {"adrs": []},

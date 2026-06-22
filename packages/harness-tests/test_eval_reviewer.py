@@ -101,6 +101,7 @@ def _load_fixtures():
 
 
 @pytest.mark.eval
+@pytest.mark.live
 @pytest.mark.parametrize("diff_path,label_path", _load_fixtures())
 async def test_reviewer_fixture(diff_path: Path, label_path: Path):
     diff_text = diff_path.read_text()
@@ -204,6 +205,7 @@ def _assert_scores(verdict_accuracy: float, avg_recall: float) -> None:
 
 
 @pytest.mark.eval
+@pytest.mark.live
 async def test_reviewer_aggregate_score():
     """Run all fixtures and assert minimum aggregate recall and verdict accuracy."""
     llm = OllamaProvider(

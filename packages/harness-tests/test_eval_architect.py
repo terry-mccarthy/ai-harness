@@ -184,6 +184,7 @@ def _load_cases():
 
 
 @pytest.mark.eval
+@pytest.mark.live
 @pytest.mark.parametrize("label_path", _load_cases())
 async def test_architect_fixture(label_path: Path):
     label, result = await _run_case(label_path)
@@ -232,6 +233,7 @@ def _compute_aggregates(scores: list[dict]) -> tuple[float, float, float]:
 
 
 @pytest.mark.eval
+@pytest.mark.live
 async def test_architect_aggregate_score():
     """Run all fixtures and assert minimum schema validity, detection and recall."""
     scores = []

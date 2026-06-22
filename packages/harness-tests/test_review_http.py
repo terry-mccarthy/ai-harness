@@ -3,6 +3,7 @@
 No Docker stack needed — the FastMCP app is exercised via httpx's ASGI
 transport, with GatewayClient and LLMProvider mocked in-process.
 """
+import importlib.util
 import json
 import sys
 from contextlib import asynccontextmanager
@@ -12,9 +13,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "review_server"))
-
 pytestmark = pytest.mark.asyncio
+
+# Load the review server by explicit path so it never collides with the
+# github_mcp service which is also named "server" in sys.modules.
+_REVIEW_SERVER_PATH = Path(__file__).resolve().parents[2] / "services" / "review_server" / "server.py"
+_REVIEW_SERVER_MODULE = "_review_server_under_test"
+
+def _load_review_server():
+    if _REVIEW_SERVER_MODULE in sys.modules:
+        return sys.modules[_REVIEW_SERVER_MODULE]
+    # Add review_server's directory so its relative imports work
+    rs_dir = str(_REVIEW_SERVER_PATH.parent)
+    if rs_dir not in sys.path:
+        sys.path.insert(0, rs_dir)
+    spec = importlib.util.spec_from_file_location(_REVIEW_SERVER_MODULE, _REVIEW_SERVER_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[_REVIEW_SERVER_MODULE] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 _VALID_REVIEW = json.dumps({
     "verdict": "pass",
@@ -34,7 +51,7 @@ async def _review_client(llm_response: str = _VALID_REVIEW, api_key: str | None 
 
     Pass api_key to simulate REVIEW_API_KEY being set in the environment.
     """
-    import server as review_server
+    review_server = _load_review_server()
 
     mock_gateway = MagicMock()
     mock_gateway.call_tool = AsyncMock(return_value={"result": "ok"})
@@ -55,7 +72,7 @@ async def _review_client(llm_response: str = _VALID_REVIEW, api_key: str | None 
 
     with (
         patch.object(review_server, "_build_llm_provider", return_value=_MockLLM()),
-        patch("server.GatewayClient", return_value=mock_gateway),
+        patch.object(review_server, "GatewayClient", return_value=mock_gateway),
         patch.dict("os.environ", env, clear=False),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -126,7 +143,7 @@ async def test_http_review_missing_diff_text_returns_422():
 
 async def test_http_review_agent_error_returns_400():
     """Agent-level errors (invalid LLM output) return 400, not 500."""
-    import server as review_server
+    review_server = _load_review_server()
 
     mock_gateway = MagicMock()
     mock_gateway.call_tool = AsyncMock(return_value={"result": "ok"})
@@ -142,7 +159,7 @@ async def test_http_review_agent_error_returns_400():
     app = review_server.mcp.streamable_http_app()
     with (
         patch.object(review_server, "_build_llm_provider", return_value=_ErrorLLM()),
-        patch("server.GatewayClient", return_value=mock_gateway),
+        patch.object(review_server, "GatewayClient", return_value=mock_gateway),
         patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -155,7 +172,7 @@ async def test_http_review_agent_error_returns_400():
 
 async def test_http_review_missing_provider_ollama_no_host_falls_back_to_env():
     """Ollama provider is built successfully when no host override is given."""
-    import server as review_server
+    review_server = _load_review_server()
 
     mock_gateway = MagicMock()
     mock_gateway.call_tool = AsyncMock(return_value={"result": "ok"})
@@ -171,7 +188,7 @@ async def test_http_review_missing_provider_ollama_no_host_falls_back_to_env():
     app = review_server.mcp.streamable_http_app()
     with (
         patch.object(review_server, "_build_llm_provider", return_value=_MockLLM()),
-        patch("server.GatewayClient", return_value=mock_gateway),
+        patch.object(review_server, "GatewayClient", return_value=mock_gateway),
         patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -237,7 +254,7 @@ async def test_http_review_malformed_header_returns_401():
 
 async def test_config_get_returns_effective_config():
     """GET /config returns the effective config (env defaults merged with overrides)."""
-    import server as review_server
+    review_server = _load_review_server()
     app = review_server.mcp.streamable_http_app()
     with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -255,7 +272,7 @@ async def test_config_get_returns_effective_config():
 
 async def test_config_get_sanitizes_api_keys():
     """Sensitive keys are masked in the response."""
-    import server as review_server
+    review_server = _load_review_server()
     review_server._CONFIG["openrouter"]["api_key"] = "sk-or-v1-abcdef1234567890"
     review_server._CONFIG["gemini"]["api_key"] = "AIzaSyD-test-key-12345"
     try:
@@ -278,7 +295,7 @@ async def test_config_get_sanitizes_api_keys():
 
 async def test_config_put_updates_ollama_model():
     """PUT /config updates a provider key and is reflected in GET."""
-    import server as review_server
+    review_server = _load_review_server()
     app = review_server.mcp.streamable_http_app()
     with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -293,7 +310,7 @@ async def test_config_put_updates_ollama_model():
 
 async def test_config_put_clears_key_on_null():
     """Setting a config key to null removes the override."""
-    import server as review_server
+    review_server = _load_review_server()
     review_server._CONFIG["ollama"]["model"] = "some-model"
     try:
         app = review_server.mcp.streamable_http_app()
@@ -350,7 +367,7 @@ async def test_http_architecture_review_wrong_key_returns_401():
 
 async def test_config_put_updates_llm_provider():
     """PUT can change the active llm_provider."""
-    import server as review_server
+    review_server = _load_review_server()
     app = review_server.mcp.streamable_http_app()
     with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -363,7 +380,7 @@ async def test_config_put_updates_llm_provider():
 
 async def test_config_put_invalid_json_returns_422():
     """Malformed body returns 422."""
-    import server as review_server
+    review_server = _load_review_server()
     app = review_server.mcp.streamable_http_app()
     with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -373,7 +390,7 @@ async def test_config_put_invalid_json_returns_422():
 
 async def test_config_get_respects_auth():
     """GET /config respects REVIEW_API_KEY."""
-    import server as review_server
+    review_server = _load_review_server()
     app = review_server.mcp.streamable_http_app()
     with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080", "REVIEW_API_KEY": "sekret"}):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -383,7 +400,7 @@ async def test_config_get_respects_auth():
 
 async def test_config_put_respects_auth():
     """PUT /config respects REVIEW_API_KEY."""
-    import server as review_server
+    review_server = _load_review_server()
     app = review_server.mcp.streamable_http_app()
     with patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080", "REVIEW_API_KEY": "sekret"}):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

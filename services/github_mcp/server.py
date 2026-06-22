@@ -67,16 +67,19 @@ async def _fetch_convention_files(
 
 
 def _rank_by_query(files: list[dict], query: str | None) -> list[dict]:
+    """Rank files by query relevance. Works for both convention files (path+content) and ADR entries (name)."""
     if not query:
         return files
     q_lower = query.lower()
     scored = []
     for f in files:
         score = 0
-        if q_lower in f["content"].lower():
-            score += f["content"].lower().count(q_lower)
-        if q_lower in f["path"].lower():
+        label = f.get("name", f.get("path", ""))
+        if q_lower in label.lower():
             score += 10
+        content = f.get("content", "")
+        if content and q_lower in content.lower():
+            score += content.lower().count(q_lower)
         scored.append((score, f))
     scored.sort(key=lambda x: -x[0])
     return [f for _, f in scored]
@@ -312,26 +315,6 @@ def _parse_adr_status(content: str) -> str:
         if stripped.startswith("**status:**"):
             return stripped.split("**status:**", 1)[1].strip()
     return "unknown"
-
-
-def _rank_by_query(files: list[dict], query: str) -> list[dict]:
-    """Simple token-overlap ranking."""
-    query_lower = query.lower()
-    q_tokens = set(query_lower.split())
-
-    scored = []
-    for f in files:
-        name_lower = f["name"].lower()
-        score = 0
-        if query_lower in name_lower:
-            score += 10
-        name_tokens = set(name_lower.replace("-", " ").split())
-        overlap = len(q_tokens & name_tokens)
-        score += overlap
-        scored.append((score, f))
-
-    scored.sort(key=lambda x: -x[0])
-    return [f for _, f in scored]
 
 
 if __name__ == "__main__":
