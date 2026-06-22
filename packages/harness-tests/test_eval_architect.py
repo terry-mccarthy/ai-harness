@@ -30,7 +30,7 @@ import jsonschema
 import pytest
 
 from harness_agents.architect import ArchitectAgent
-from harness_agents.llm import OllamaProvider
+from harness_agents.llm import OllamaProvider, OpenRouterProvider
 from harness_agents.types import ARCHITECT_OUTPUT_SCHEMA
 
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "eval-fixtures" / "architecture"
@@ -127,21 +127,44 @@ def _score(label: dict, output: dict) -> dict:
     }
 
 
-def _make_agent(case_dir: Path) -> ArchitectAgent:
-    llm = OllamaProvider(
+def _build_llm():
+    """Select the LLM provider from LLM_PROVIDER (default: local Ollama).
+
+    CI runs with LLM_PROVIDER=openrouter on a fast hosted model since runners
+    have no GPU; local runs default to Ollama.
+    """
+    provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
+    if provider == "openrouter":
+        return OpenRouterProvider(
+            api_key=os.environ["OPENROUTER_API_KEY"],
+            model=os.environ.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-001"),
+        )
+    return OllamaProvider(
         host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
         model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"),
         num_ctx=int(os.environ.get("OLLAMA_NUM_CTX", "8192")),
     )
-    return ArchitectAgent(gateway=_MockGateway(case_dir), llm_provider=llm)
+
+
+def _make_agent(case_dir: Path) -> ArchitectAgent:
+    return ArchitectAgent(gateway=_MockGateway(case_dir), llm_provider=_build_llm())
+
+
+# Each fixture is run through the agent at most once per session; the aggregate
+# test reuses what the parametrized tests already produced (halves LLM calls).
+_RESULT_CACHE: dict[str, tuple[dict, dict]] = {}
 
 
 async def _run_case(label_path: Path) -> tuple[dict, dict]:
+    key = label_path.stem
+    if key in _RESULT_CACHE:
+        return _RESULT_CACHE[key]
     label = json.loads(label_path.read_text())
-    case_dir = FIXTURES_DIR / label_path.stem
+    case_dir = FIXTURES_DIR / key
     agent = _make_agent(case_dir)
-    state = {"task": f"Architecture review of {label_path.stem}", "thread_id": "eval"}
+    state = {"task": f"Architecture review of {key}", "thread_id": "eval"}
     result = await agent.run(state)
+    _RESULT_CACHE[key] = (label, result)
     return label, result
 
 
