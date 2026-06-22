@@ -172,6 +172,93 @@ async def test_architect_produces_review():
     assert "abstraction_analysis" in output["_phases"]
 
 
+def _architect_state(task: str) -> "AgentState":
+    return {
+        "task": task,
+        "diff": "",
+        "thread_id": str(uuid.uuid4()),
+        "agent_output": None,
+        "requires_human_approval": False,
+        "error": None,
+        "human_approval_token": None,
+        "memory_context": None,
+    }
+
+
+# Schema-invalid synthesis: parses as JSON but omits required findings/recommendations.
+_INVALID_SYNTHESIS = json.dumps({
+    "title": "Architecture Review: AI Harness",
+    "status": "completed",
+    "summary": "missing the required findings and recommendations arrays",
+})
+
+
+async def test_architect_synthesis_retries_on_schema_violation():
+    """A synthesis output that violates ARCHITECT_OUTPUT_SCHEMA is rejected and retried;
+    a subsequent schema-valid response is accepted."""
+    from harness_agents.architect import ArchitectAgent
+
+    agent = ArchitectAgent(
+        gateway=_mock_gateway(),
+        llm_provider=MockLLMProvider(
+            [_PHASE_RECON, _PHASE_FLOW, _PHASE_ABSTRACTION, _INVALID_SYNTHESIS, _PHASE_SYNTHESIS]
+        ),
+    )
+    result = await agent.run(_architect_state("Design the persistent memory layer"))
+
+    assert result["error"] is None
+    output = result["agent_output"]
+    assert len(output["findings"]) > 0
+    assert len(output["recommendations"]) > 0
+
+
+async def test_architect_errors_when_synthesis_never_schema_valid():
+    """If synthesis never produces schema-valid output across all retries, run() errors."""
+    from harness_agents.architect import ArchitectAgent
+
+    agent = ArchitectAgent(
+        gateway=_mock_gateway(),
+        llm_provider=MockLLMProvider(
+            [_PHASE_RECON, _PHASE_FLOW, _PHASE_ABSTRACTION,
+             _INVALID_SYNTHESIS, _INVALID_SYNTHESIS, _INVALID_SYNTHESIS]
+        ),
+    )
+    result = await agent.run(_architect_state("Design the persistent memory layer"))
+
+    assert result["agent_output"] is None
+    assert result["error"] is not None
+    assert result["error"]["code"] == "invalid_output"
+
+
+class _FailFirstLLM:
+    """Raises on the first chat() call (simulates a failed phase), then replays."""
+    def __init__(self, after_fail: list[str]):
+        self._responses = list(reversed(after_fail))
+        self._calls = 0
+
+    async def chat(self, messages):
+        from harness_agents.llm import LLMResponse
+        self._calls += 1
+        if self._calls == 1:
+            raise RuntimeError("LLM unavailable")
+        return LLMResponse(content=self._responses.pop())
+
+
+async def test_architect_survives_failed_phase():
+    """If a phase's LLM call fails (phase result is None), later phases must
+    degrade gracefully rather than crash on the None prior context."""
+    from harness_agents.architect import ArchitectAgent
+
+    agent = ArchitectAgent(
+        gateway=_mock_gateway(),
+        llm_provider=_FailFirstLLM([_PHASE_FLOW, _PHASE_ABSTRACTION, _PHASE_SYNTHESIS]),
+    )
+    result = await agent.run(_architect_state("Design the persistent memory layer"))
+
+    assert result["error"] is None
+    assert len(result["agent_output"]["findings"]) > 0
+
+
 @pytest.mark.integration
 async def test_architect_tool_calls_go_via_gateway():
     """Architect's codebase_search call is visible in gateway audit log."""

@@ -269,7 +269,13 @@ Quality benchmarking for the four-phase `ArchitectAgent`, after the prompt/phase
 - `packages/harness-tests/test_eval_architect.py` — `@pytest.mark.eval`; `_MockGateway` routes `codebase_search` by query keyword to the right phase file; real Ollama
 - Pass bars: schema validity 100%, detection ≥ 66%, avg recall ≥ 50%
 - First run (7b model): **100% schema validity, 3/3 detected, recall 2/2 on both smells** — all above thresholds
-- Fixed a latent bug surfaced while building this: `ARCHITECT_OUTPUT_SCHEMA` was still the old ADR shape and diverged from the review-report shape the prompt emits. Updated the schema to match; `run()` still doesn't validate at runtime (eval is the only enforcement) — follow-up.
+- Fixed a latent bug surfaced while building this: `ARCHITECT_OUTPUT_SCHEMA` was still the old ADR shape and diverged from the review-report shape the prompt emits. Updated the schema to match.
+
+#### Follow-up: runtime schema validation + CI (2026-06-22)
+
+- **Runtime validation:** `_phase_synthesis` now passes `_validate_synthesis` to `_llm_retry`; a schema-invalid synthesis is fed back to the model and retried, and `run()` returns `error.code = "invalid_output"` if it never validates. Unit tests in `test_phase3_agents.py` cover retry-then-pass and never-valid-then-error (no live LLM). This caught a brittleness: a strict `category` enum let one off-vocabulary tag void a whole review — relaxed `category` to a free string, kept `severity` enum.
+- **Eval cost:** memoized `_run_case`; the aggregate test reuses per-fixture results instead of re-running the agent (6 agent runs → 3).
+- **CI:** `.github/workflows/architect-eval.yml` runs the suite on PRs touching the architect/prompt/schema/fixtures, via `LLM_PROVIDER=openrouter` (no GPU on runners). `_build_llm` selects the provider from env. Needs an `OPENROUTER_API_KEY` repo secret; skips with a warning if unset.
 
 ### Semgrep linter replacement
 

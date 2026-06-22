@@ -45,6 +45,16 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
+def _validate_synthesis(parsed: dict) -> str | None:
+    """Return None if the synthesis output satisfies ARCHITECT_OUTPUT_SCHEMA,
+    otherwise a short error message describing the first violation."""
+    try:
+        jsonschema.validate(parsed, ARCHITECT_OUTPUT_SCHEMA)
+        return None
+    except jsonschema.ValidationError as e:
+        return e.message
+
+
 class ArchitectAgent:
     name = "architect"
     allowed_tools = ["codebase_search", "adr_read", "code_health_score", "codebase_hotspots", "logical_coupling", "issue_create"]
@@ -62,7 +72,10 @@ class ArchitectAgent:
             logger.error("tool_access_denied: %s", e)
             return None
 
-    async def _llm_retry(self, messages: list) -> dict | None:
+    async def _llm_retry(self, messages: list, validate=None) -> dict | None:
+        """Call the LLM until it returns a parseable JSON object that also passes
+        the optional ``validate`` callable (returns an error string, or None when OK).
+        Failed attempts are fed back to the model as a correction before retrying."""
         for attempt in range(MAX_ITERATIONS):
             try:
                 response = await self.llm.chat(messages=messages)
@@ -71,14 +84,15 @@ class ArchitectAgent:
                 return None
             raw = _clean_raw(response.content)
             parsed = _extract_json(raw)
-            if parsed:
+            error = "could not parse" if parsed is None else (validate(parsed) if validate else None)
+            if parsed is not None and error is None:
                 return parsed
-            logger.warning("attempt %d: unparseable JSON", attempt + 1)
+            logger.warning("attempt %d: %s", attempt + 1, error)
             if attempt < MAX_ITERATIONS - 1:
                 messages.append({"role": "assistant", "content": raw})
                 messages.append({
                     "role": "user",
-                    "content": f"Your response was not valid JSON. Return ONLY a valid JSON object with no markdown fences. Error: could not parse",
+                    "content": f"Your response was not valid. Return ONLY a valid JSON object with no markdown fences. Error: {error}",
                 })
         return None
 
@@ -101,7 +115,7 @@ class ArchitectAgent:
 
     async def _phase_flow_trace(self, task: str, phase_results: dict) -> dict | None:
         logger.info("phase: flow_trace")
-        recon = phase_results.get("reconnaissance", {})
+        recon = phase_results.get("reconnaissance") or {}
         critical_path = recon.get("critical_path_suggestion", task)
         files = await self._call_tool("codebase_search", {"query": f"entry point, service layer, data access for: {critical_path}", "repo": self.gateway.gateway_url, "top_k": 10})
         files_data = files or {"result": "no data"}
@@ -121,13 +135,13 @@ class ArchitectAgent:
     async def _build_context(self, phase_results: dict, *phases: str) -> dict:
         context = {}
         for p in phases:
-            if p in phase_results:
+            if phase_results.get(p):
                 context[p] = {k: v for k, v in phase_results[p].items() if k != "phase"}
         return context
 
     async def _phase_abstraction_analysis(self, task: str, phase_results: dict) -> dict | None:
         logger.info("phase: abstraction_analysis")
-        recon = phase_results.get("reconnaissance", {})
+        recon = phase_results.get("reconnaissance") or {}
         interfaces_to_examine = recon.get("interfaces_to_examine", [])
         query = "interfaces, abstractions, and their implementations"
         if interfaces_to_examine:
@@ -160,7 +174,7 @@ class ArchitectAgent:
                 "architecture_decision_records": adr_data,
             })},
         ]
-        return await self._llm_retry(messages)
+        return await self._llm_retry(messages, validate=_validate_synthesis)
 
     async def _load_memory_context(self, task: str) -> list:
         if not self.memory:

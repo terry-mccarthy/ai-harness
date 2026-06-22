@@ -196,11 +196,13 @@ Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`,
 | `test_formula_deprecate` | Deprecated formula excluded from `list_active()` and `lookup()` |
 | `test_formula_interface_compliance` | `DoltFormulaStore` satisfies `FormulaStore` Protocol |
 
-### Phase 3 — Specialised Agent Nodes (4 tests)
+### Phase 3 — Specialised Agent Nodes (6 tests)
 
 | Test | What it proves |
 |---|---|
 | `test_agent_node_contract_compliance` | All three agents satisfy `AgentNode` Protocol |
+| `test_architect_synthesis_retries_on_schema_violation` | Schema-invalid synthesis is rejected and retried, then accepted |
+| `test_architect_errors_when_synthesis_never_schema_valid` | Synthesis that never validates → `run()` returns `invalid_output` |
 | `test_architect_tool_calls_go_via_gateway` | ArchitectAgent calls tools through GatewayClient |
 | `test_architect_denied_shell_exec` | Architect role is blocked from `shell_exec` by OPA |
 | `test_sre_shell_exec_blocked_without_approval` | SRE `shell_exec` blocked without `X-Human-Approval-Token` header |

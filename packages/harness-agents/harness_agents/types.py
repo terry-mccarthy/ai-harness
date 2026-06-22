@@ -34,13 +34,11 @@ ARCHITECT_OUTPUT_SCHEMA = {
                 "required": ["severity", "message"],
                 "properties": {
                     "severity": _SEVERITY,
-                    "category": {
-                        "type": "string",
-                        "enum": [
-                            "modularity", "coupling", "abstraction",
-                            "layering", "scalability", "security",
-                        ],
-                    },
+                    # category is a free string: prompts/architect.md suggests a
+                    # vocabulary (modularity/coupling/abstraction/layering/
+                    # scalability/security) but an off-list tag must not void an
+                    # otherwise-valid review at runtime.
+                    "category":     {"type": "string"},
                     "title":        {"type": "string"},
                     "message":      {"type": "string"},
                     "location":     {"type": "string"},

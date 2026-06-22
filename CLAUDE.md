@@ -220,7 +220,7 @@ Set `LLM_PROVIDER=openrouter` to route all LLM calls through [OpenRouter](https:
 
 Recommended large-context models via OpenRouter:
 - `anthropic/claude-3.5-sonnet` — 200K context, strong reasoning
-- `google/gemini-2.0-flash-001` — 1M context, very fast
+- `google/gemini-2.5-flash` — 1M context, very fast
 - `openai/gpt-4o` — 128K context, reliable JSON output
 
 ```bash
@@ -468,7 +468,11 @@ The `_MockGateway` routes `codebase_search` to the right file **by keyword in th
 
 **`must_flag` matching** is against HIGH+ findings only (`title`+`message`+`location`+`category`), filtered by `min_severity`. As with the reviewer eval, when the model phrases a finding differently than your pattern, fix the label — the labels are as much under test as the model.
 
-**Schema dimension:** the eval validates synthesis output against `ARCHITECT_OUTPUT_SCHEMA` (`harness_agents/types.py`). That schema is the architecture-**review-report** shape the prompt actually emits (`findings`/`recommendations`/`technical_debt_hotspots`/...), not the old ADR shape. `ArchitectAgent.run()` imports the schema but does **not** yet validate against it at runtime — the eval is currently the only enforcement. Wiring runtime validation into `run()` is a sensible follow-up.
+**Schema dimension:** the eval validates synthesis output against `ARCHITECT_OUTPUT_SCHEMA` (`harness_agents/types.py`) — the architecture-**review-report** shape the prompt emits (`findings`/`recommendations`/`technical_debt_hotspots`/...), not the old ADR shape. The synthesis phase **also validates at runtime**: `_phase_synthesis` passes `_validate_synthesis` to `_llm_retry`, so a schema-invalid synthesis is fed back to the model and retried (up to `MAX_ITERATIONS`); if it never validates, `run()` returns `error.code = "invalid_output"`. Only `severity` is enum-constrained — `category` is a free string (the prompt suggests a vocabulary, but an off-list tag must not void an otherwise-valid review).
+
+**CI:** `.github/workflows/architect-eval.yml` runs this suite on PRs that touch the architect, its prompt, the schema, or the fixtures. Runners have no GPU, so it uses `LLM_PROVIDER=openrouter` with `google/gemini-2.5-flash` (`_build_llm` selects the provider from env; defaults to Ollama locally). Requires an `OPENROUTER_API_KEY` repo secret — the job skips with a warning if it's unset.
+
+**Gotcha — OpenRouter `max_tokens` truncation:** the synthesis report (findings + recommendations + debt + nfr risks) is large. The provider default of 1024 output tokens truncates it into unparseable JSON — symptom is synthesis failing with "could not parse" only on the *multi-finding* fixtures while the small `clean_layered` passes. `_build_llm` sets `max_tokens=4096` (override via `LLM_MAX_TOKENS`). The aggregate test treats an errored fixture as a failure (`assert not errored`) rather than skipping it, so a regression like this can't pass vacuously.
 
 ## Linter stub (semgrep)
 
