@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       LLM_PROVIDER: openrouter
-      OPENROUTER_MODEL: google/gemini-2.0-flash-001
+      OPENROUTER_MODEL: google/gemini-2.5-flash
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
       - uses: actions/checkout@v4

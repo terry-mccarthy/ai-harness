@@ -135,9 +135,12 @@ def _build_llm():
     """
     provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
     if provider == "openrouter":
+        # The synthesis report (findings + recommendations + debt + nfr risks) is
+        # large; the provider default of 1024 truncates it into unparseable JSON.
         return OpenRouterProvider(
             api_key=os.environ["OPENROUTER_API_KEY"],
-            model=os.environ.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-001"),
+            model=os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
+            max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "4096")),
         )
     return OllamaProvider(
         host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
@@ -232,14 +235,19 @@ def _compute_aggregates(scores: list[dict]) -> tuple[float, float, float]:
 async def test_architect_aggregate_score():
     """Run all fixtures and assert minimum schema validity, detection and recall."""
     scores = []
+    errored = []
     for label_path in sorted(LABELS_DIR.glob("*.json")):
         if not (FIXTURES_DIR / label_path.stem).is_dir():
             continue
         label, result = await _run_case(label_path)
         if result.get("error"):
+            # An errored fixture is a failure, not a fixture to skip — otherwise
+            # the aggregate could pass vacuously while real cases are broken.
+            errored.append((label_path.stem, result["error"]))
             continue
         scores.append(_score(label, result["agent_output"]))
 
+    assert not errored, f"fixtures errored: {errored}"
     assert scores
     schema_validity, detection_accuracy, avg_recall = _compute_aggregates(scores)
 
