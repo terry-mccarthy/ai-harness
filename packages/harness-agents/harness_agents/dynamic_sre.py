@@ -71,8 +71,14 @@ class DynamicSREAgent:
     ):
         try:
             result = await self.gateway.call_tool(tool, params)
-        except ToolAccessDenied as e:
-            return {**state, "token_usage": token_usage, "error": {"code": "tool_access_denied", "reason": str(e)}}
+        except ToolAccessDenied:
+            messages.append({"role": "assistant", "content": raw})
+            messages.append({"role": "user", "content": (
+                f"Access denied for tool '{tool}'. "
+                "If this is a remediation action, propose it in recommended_steps "
+                "with requires_approval=true instead of calling it directly."
+            )})
+            return None
         messages.append({"role": "assistant", "content": raw})
         messages.append({"role": "user", "content": f"Tool result:\n{json.dumps(result, indent=2)}"})
         return None
