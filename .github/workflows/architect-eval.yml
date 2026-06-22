@@ -24,7 +24,7 @@ jobs:
       OPENROUTER_MODEL: google/gemini-2.5-flash
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.0
 
       - name: Skip if no OpenRouter key configured
         id: guard
@@ -38,7 +38,7 @@ jobs:
 
       - name: Install uv
         if: steps.guard.outputs.run == 'true'
-        uses: astral-sh/setup-uv@v8
+        uses: astral-sh/setup-uv@v8.2.0
 
       - name: Set up Python
         if: steps.guard.outputs.run == 'true'
