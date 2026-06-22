@@ -37,10 +37,11 @@ class DynamicSREAgent:
     allowed_tools = ["observability_query", "log_search", "runbook_read", "shell_exec", "skill_search"]
     memory_namespace = "sre"
 
-    def __init__(self, gateway: GatewayClient, llm_provider: LLMProvider, memory_store=None):
+    def __init__(self, gateway: GatewayClient, llm_provider: LLMProvider, memory_store=None, formula_store=None):
         self.gateway = gateway
         self.llm = llm_provider
         self.memory = memory_store
+        self.formula_store = formula_store
 
     def _init_token_usage(self, state: AgentState) -> dict:
         current = state.get("token_usage")
@@ -98,6 +99,11 @@ class DynamicSREAgent:
         messages.append({"role": "user", "content": "Unrecognised action. Use 'call_tool' or 'respond'."})
         return None
 
+    def _load_formula(self, task: str):
+        if not self.formula_store:
+            return None
+        return self.formula_store.lookup(self.name, task)
+
     async def _load_memory(self, task: str) -> list:
         if not self.memory:
             return []
@@ -114,6 +120,18 @@ class DynamicSREAgent:
         token_usage = self._init_token_usage(state)
         token_budget = state.get("token_budget")
 
+        formula = self._load_formula(task)
+        formula_block = ""
+        if formula:
+            steps_text = "\n".join(
+                f"{i + 1}. {json.dumps(s)}" for i, s in enumerate(formula.steps)
+            )
+            formula_block = (
+                f"\nProven formula for this incident type: '{formula.name}'\n"
+                f"Follow these steps in order:\n{steps_text}\n"
+                f"Deviate only if a step's result is clearly inapplicable.\n"
+            )
+
         memory_context = await self._load_memory(task)
         context_block = (
             f"\nPast incidents from memory:\n{json.dumps(memory_context, indent=2)}\n"
@@ -123,7 +141,7 @@ class DynamicSREAgent:
         system_prompt = (_PROMPTS_DIR / "react_sre.md").read_text()
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Incident: {task}{context_block}\n\nBegin your investigation."},
+            {"role": "user", "content": f"Incident: {task}{formula_block}{context_block}\n\nBegin your investigation."},
         ]
 
         for turn in range(MAX_TURNS):

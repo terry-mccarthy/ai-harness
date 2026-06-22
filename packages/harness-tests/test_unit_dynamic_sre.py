@@ -11,6 +11,7 @@ import pytest
 
 from harness_agents.llm import LLMResponse
 from harness_agents.types import AgentState, SRE_OUTPUT_SCHEMA
+from harness_memory.models import Formula as _Formula
 
 pytestmark = pytest.mark.asyncio
 
@@ -324,7 +325,97 @@ async def test_resolved_report_written_to_memory():
 
 
 # ---------------------------------------------------------------------------
-# Behavior 11 — supervisor routes incident tasks to DynamicSREAgent (integration)
+# Behaviors 11–14 — skill-aware guidance: formula_store precedence
+# ---------------------------------------------------------------------------
+
+_MATCHED_FORMULA = _Formula(
+    id="sre:db-latency:1",
+    name="db-connection-pool",
+    agent_role="sre",
+    version=1,
+    status="active",
+    description="Diagnose connection pool exhaustion causing DB latency",
+    input_schema={},
+    steps=[
+        {"tool": "observability_query", "params": {"query": "connection pool metrics"}},
+        {"tool": "log_search", "params": {"query": "connection pool exhausted"}},
+    ],
+    output_contract={},
+    promoted_by="human_operator",
+)
+
+
+class _FakeFormulaStore:
+    def __init__(self, formula=None):
+        self.calls: list[dict] = []
+        self._formula = formula
+
+    def lookup(self, agent_role: str, task: str):
+        self.calls.append({"agent_role": agent_role, "task": task})
+        return self._formula
+
+
+async def test_formula_steps_injected_into_opening_message():
+    """Matched formula → its name and steps appear in the opening user message."""
+    from harness_agents.dynamic_sre import DynamicSREAgent
+
+    llm = _Turns(_respond(_VALID_REPORT))
+    gw = _Gateway()
+
+    await DynamicSREAgent(
+        gateway=gw, llm_provider=llm, formula_store=_FakeFormulaStore(_MATCHED_FORMULA)
+    ).run(_state())
+
+    opening = llm.messages_received[0][1]["content"]
+    assert "db-connection-pool" in opening
+    assert "observability_query" in opening
+    assert "log_search" in opening
+
+
+async def test_no_formula_block_when_no_match():
+    """formula_store.lookup returns None → no formula block in the opening message."""
+    from harness_agents.dynamic_sre import DynamicSREAgent
+
+    llm = _Turns(_respond(_VALID_REPORT))
+    gw = _Gateway()
+
+    await DynamicSREAgent(
+        gateway=gw, llm_provider=llm, formula_store=_FakeFormulaStore(None)
+    ).run(_state())
+
+    opening = llm.messages_received[0][1]["content"]
+    assert "Proven formula" not in opening
+
+
+async def test_no_formula_store_backward_compatible():
+    """No formula_store → agent runs unchanged, no formula block."""
+    from harness_agents.dynamic_sre import DynamicSREAgent
+
+    llm = _Turns(_respond(_VALID_REPORT))
+    gw = _Gateway()
+
+    result = await DynamicSREAgent(gateway=gw, llm_provider=llm).run(_state())
+
+    assert result.get("error") is None
+    opening = llm.messages_received[0][1]["content"]
+    assert "Proven formula" not in opening
+
+
+async def test_formula_lookup_uses_agent_role():
+    """formula_store.lookup is called with the agent's own role name."""
+    from harness_agents.dynamic_sre import DynamicSREAgent
+
+    store = _FakeFormulaStore(None)
+    llm = _Turns(_respond(_VALID_REPORT))
+    gw = _Gateway()
+
+    await DynamicSREAgent(gateway=gw, llm_provider=llm, formula_store=store).run(_state())
+
+    assert store.calls[0]["agent_role"] == "sre"
+
+
+# ---------------------------------------------------------------------------
+# Behavior 15 — supervisor routes incident tasks to DynamicSREAgent (integration)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration

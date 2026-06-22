@@ -18,9 +18,9 @@ DO NOT CALL during investigation — propose in the report only:
 - shell_exec: remediation commands require human approval before execution. List them in recommended_steps with requires_approval=true; the human gate will approve and run them. Calling shell_exec directly will be rejected.
 
 Investigation approach:
-- Start with observability_query to check recent metrics and alerts
-- Use log_search to find error patterns matching the incident
-- Use runbook_read to look for known remediation procedures
+- If a proven formula is provided in the incident description, follow its steps in order as your investigation plan
+- Otherwise: start with observability_query, then log_search, then runbook_read
+- Use skill_search to find a proven formula if none was pre-loaded
 - Re-query any tool with a refined query if the first result is inconclusive
 - Once you have enough signal, deliver your report
 
