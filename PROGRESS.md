@@ -260,6 +260,17 @@ Agent quality benchmarking added — separate from the integration suite (ADR 00
 - First run (7b model): **100% verdict accuracy, 80% recall** — above both thresholds
 - Run with: `pytest -m eval -v -s`
 
+### Architect eval suite (2026-06-22)
+
+Quality benchmarking for the four-phase `ArchitectAgent`, after the prompt/phase rewrite.
+
+- `eval-fixtures/architecture/<case>/` — fixture repos as canned tool responses (recon/hotspots/files/interfaces/adrs), one dir per case; `labels/<case>.json` carries `expect_high_severity` + `must_flag`
+- 3 cases: `clean_layered` (control), `god_controller` (logic+SQL in handler), `leaky_persistence` (ORM leaking through a domain port)
+- `packages/harness-tests/test_eval_architect.py` — `@pytest.mark.eval`; `_MockGateway` routes `codebase_search` by query keyword to the right phase file; real Ollama
+- Pass bars: schema validity 100%, detection ≥ 66%, avg recall ≥ 50%
+- First run (7b model): **100% schema validity, 3/3 detected, recall 2/2 on both smells** — all above thresholds
+- Fixed a latent bug surfaced while building this: `ARCHITECT_OUTPUT_SCHEMA` was still the old ADR shape and diverged from the review-report shape the prompt emits. Updated the schema to match; `run()` still doesn't validate at runtime (eval is the only enforcement) — follow-up.
+
 ### Semgrep linter replacement
 
 Replaced the naive pattern-matching `linter_server.py` with a real semgrep scan.

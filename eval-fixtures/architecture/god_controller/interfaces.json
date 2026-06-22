@@ -1,0 +1,13 @@
+{
+  "repo": "https://github.com/example/shopflow",
+  "query": "interfaces, abstractions, and their implementations",
+  "results": [
+    {
+      "path": "shopflow/routes.py",
+      "repo": "example/shopflow",
+      "matches": [
+        {"fragment": "# No interfaces or abstract base classes defined anywhere in the package.\n# Pricing, inventory, payment and persistence logic are all written\n# inline inside each Flask route function. grep -r 'class .*ABC' shopflow/ -> no matches."}
+      ]
+    }
+  ]
+}

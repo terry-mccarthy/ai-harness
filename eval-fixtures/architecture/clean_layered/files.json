@@ -1,0 +1,20 @@
+{
+  "repo": "https://github.com/example/notes",
+  "query": "entry point, service layer, data access",
+  "results": [
+    {
+      "path": "api/routers.py",
+      "repo": "example/notes",
+      "matches": [
+        {"fragment": "@router.post('/notes')\nasync def create_note(body: CreateNote, svc: NoteService = Depends(get_service)):\n    note = await svc.create(body.title, body.text)   # thin: delegates to domain\n    return NoteOut.from_domain(note)"}
+      ]
+    },
+    {
+      "path": "domain/note_service.py",
+      "repo": "example/notes",
+      "matches": [
+        {"fragment": "class NoteService:\n    def __init__(self, repo: NoteRepository):   # depends on the port, not the adapter\n        self._repo = repo\n    async def create(self, title: str, text: str) -> Note:\n        note = Note.new(title, text)            # pure domain entity, validates itself\n        await self._repo.save(note)\n        return note"}
+      ]
+    }
+  ]
+}

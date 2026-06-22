@@ -1,0 +1,4 @@
+[
+  {"path": "billing/domain/invoice_service.py", "complexity": 41, "lines": 320, "rank": 1},
+  {"path": "billing/domain/repository.py", "complexity": 12, "lines": 90, "rank": 2}
+]

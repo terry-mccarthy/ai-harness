@@ -1,0 +1,13 @@
+{
+  "repo": "https://github.com/example/billing",
+  "query": "InvoiceRepository abstractions and implementations",
+  "results": [
+    {
+      "path": "billing/domain/repository.py",
+      "repo": "example/billing",
+      "matches": [
+        {"fragment": "from abc import ABC, abstractmethod\nfrom sqlalchemy.orm import Session\nfrom billing.persistence.models import InvoiceORM   # domain imports persistence!\n\nclass InvoiceRepository(ABC):\n    @abstractmethod\n    def get(self, invoice_id: int, session: Session) -> InvoiceORM:\n        # the 'domain' interface leaks SQLAlchemy Session and the ORM model type\n        ...\n    @abstractmethod\n    def add(self, model: InvoiceORM, session: Session) -> None: ..."}
+      ]
+    }
+  ]
+}

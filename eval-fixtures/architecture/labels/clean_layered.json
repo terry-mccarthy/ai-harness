@@ -1,0 +1,5 @@
+{
+  "description": "Textbook hexagonal app: thin routers, framework-free domain, ports in domain terms, single adapter per port. Control case — the architect should NOT raise CRITICAL or HIGH structural findings.",
+  "expect_high_severity": false,
+  "must_flag": []
+}

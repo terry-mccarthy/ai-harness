@@ -1,0 +1,4 @@
+[
+  {"path": "shopflow/routes.py", "complexity": 184, "lines": 1421, "rank": 1},
+  {"path": "shopflow/db.py", "complexity": 22, "lines": 140, "rank": 2}
+]

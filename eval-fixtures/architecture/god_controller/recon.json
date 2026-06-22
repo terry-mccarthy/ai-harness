@@ -1,0 +1,27 @@
+{
+  "repo": "https://github.com/example/shopflow",
+  "query": "directory structure and dependencies",
+  "results": [
+    {
+      "path": "README.md",
+      "repo": "example/shopflow",
+      "matches": [
+        {"fragment": "ShopFlow — a small order-management web service. Flask app, single package `shopflow/`, talks directly to PostgreSQL via psycopg2. No service or domain layer; everything lives in the route handlers."}
+      ]
+    },
+    {
+      "path": "requirements.txt",
+      "repo": "example/shopflow",
+      "matches": [
+        {"fragment": "flask==3.0.0\npsycopg2-binary==2.9.9\nstripe==7.0.0"}
+      ]
+    },
+    {
+      "path": "shopflow/__init__.py",
+      "repo": "example/shopflow",
+      "matches": [
+        {"fragment": "# package layout:\n#   shopflow/routes.py     (1400 lines — all HTTP handlers)\n#   shopflow/db.py         (raw psycopg2 connection helper)\n# No domain/, no services/, no repositories/."}
+      ]
+    }
+  ]
+}

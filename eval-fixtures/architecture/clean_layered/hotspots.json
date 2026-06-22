@@ -1,0 +1,4 @@
+[
+  {"path": "domain/note_service.py", "complexity": 9, "lines": 70, "rank": 1},
+  {"path": "adapters/postgres_note_repo.py", "complexity": 7, "lines": 60, "rank": 2}
+]

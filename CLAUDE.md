@@ -450,6 +450,26 @@ pytest -m eval -v -s   # runs against live Ollama; slow (~2 min for 7b model)
 
 Eval tests use a `_MockGateway` that returns the fixture diff for `git_diff` and empty findings for `run_linter`, bypassing the live stack entirely.
 
+## Architect eval suite
+
+`eval-fixtures/architecture/` benchmarks the four-phase `ArchitectAgent` against fixture "repositories" expressed as **canned tool responses** — no live stack, no GitHub. `test_eval_architect.py` (`pytest -m eval`) is the architect counterpart to the reviewer eval.
+
+**Fixture format** — one directory per case plus a matching label:
+- `eval-fixtures/architecture/<case>/recon.json` — `codebase_search` result for the reconnaissance phase (query contains "directory structure")
+- `.../hotspots.json` — `codebase_hotspots` result (a JSON list)
+- `.../files.json` — `codebase_search` result for flow_trace (query contains "entry point")
+- `.../interfaces.json` — `codebase_search` result for abstraction_analysis (any other query)
+- `.../adrs.json` — `adr_read` result for synthesis
+- `eval-fixtures/architecture/labels/<case>.json` — `{"expect_high_severity": bool, "must_flag": [{"pattern": "...", "category": "...", "min_severity": "HIGH"}]}`
+
+The `_MockGateway` routes `codebase_search` to the right file **by keyword in the query** (the agent issues a different query per phase). Returns shapes mirror the real `github-mcp` / `review-server` tools: `codebase_search` → `{"results": [{"path", "matches": [{"fragment"}]}]}`, `codebase_hotspots` → a list, `adr_read` → `{"adrs": [...]}`.
+
+**Pass bars:** schema validity 100%, detection accuracy ≥ 66%, average recall ≥ 50%. Detection = a smell fixture raises a HIGH+ finding; the control (`clean_layered`) must not raise a CRITICAL. Bars are coarse for a small live-LLM set — tune as fixtures grow.
+
+**`must_flag` matching** is against HIGH+ findings only (`title`+`message`+`location`+`category`), filtered by `min_severity`. As with the reviewer eval, when the model phrases a finding differently than your pattern, fix the label — the labels are as much under test as the model.
+
+**Schema dimension:** the eval validates synthesis output against `ARCHITECT_OUTPUT_SCHEMA` (`harness_agents/types.py`). That schema is the architecture-**review-report** shape the prompt actually emits (`findings`/`recommendations`/`technical_debt_hotspots`/...), not the old ADR shape. `ArchitectAgent.run()` imports the schema but does **not** yet validate against it at runtime — the eval is currently the only enforcement. Wiring runtime validation into `run()` is a sensible follow-up.
+
 ## Linter stub (semgrep)
 
 `stub_servers/linter_server.py` runs semgrep against the added lines extracted from the diff. Rules are in `stub_servers/semgrep-rules.yml` — edit this file to add or tune rules, then `docker compose cp` to test without a full rebuild.

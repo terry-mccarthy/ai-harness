@@ -1,0 +1,8 @@
+{
+  "description": "Fat Flask route: pricing, inventory, payment and SQL all inline in the HTTP handler. Violates the repo's own ADR-0001 (domain logic must be isolated from transport/persistence).",
+  "expect_high_severity": true,
+  "must_flag": [
+    {"pattern": "business logic|domain logic|service layer|inline|in the (route|handler|controller)", "category": "layering", "min_severity": "HIGH"},
+    {"pattern": "psycopg2|sql|persistence|database|tightly coupl", "category": "coupling", "min_severity": "MEDIUM"}
+  ]
+}

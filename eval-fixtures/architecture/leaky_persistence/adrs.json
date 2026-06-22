@@ -1,0 +1,12 @@
+{
+  "repo": "example/billing",
+  "adrs": [
+    {
+      "id": "0007",
+      "title": "Ports and adapters — domain must not depend on infrastructure",
+      "status": "accepted",
+      "path": "docs/adr/0007-ports-and-adapters.md",
+      "content": "# 0007 — Ports and adapters\n\nStatus: accepted\n\n## Decision\nThe domain layer defines ports (abstract interfaces) in terms of domain types only. It MUST NOT import SQLAlchemy, sessions, or ORM models. Adapters in persistence/ implement the ports and translate to/from ORM. Swapping the database must not touch domain code."
+    }
+  ]
+}

@@ -14,15 +14,43 @@ class AgentState(TypedDict, total=False):
     token_budget: int | None    # None = unlimited; agent aborts retries when exceeded
 
 
+# Matches the Phase-4 synthesis output produced by prompts/architect.md.
+# The architect now emits an architecture-review report, not an ADR. Extra keys
+# (e.g. the `_phases` trace appended by ArchitectAgent.run) are tolerated.
+_SEVERITY = {"type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]}
+
 ARCHITECT_OUTPUT_SCHEMA = {
     "type": "object",
-    "required": ["title", "status", "context", "decision", "consequences", "alternatives_considered"],
+    "required": ["title", "status", "summary", "findings", "recommendations"],
     "properties": {
-        "title":      {"type": "string"},
-        "status":     {"type": "string", "enum": ["proposed", "accepted", "deprecated", "superseded"]},
-        "context":    {"type": "string"},
-        "decision":   {"type": "string"},
-        "consequences": {"type": "string"},
+        "title":   {"type": "string"},
+        "status":  {"type": "string"},
+        "summary": {"type": "string"},
+        "current_state_assessment": {"type": "string"},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["severity", "message"],
+                "properties": {
+                    "severity": _SEVERITY,
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "modularity", "coupling", "abstraction",
+                            "layering", "scalability", "security",
+                        ],
+                    },
+                    "title":        {"type": "string"},
+                    "message":      {"type": "string"},
+                    "location":     {"type": "string"},
+                    "phase_origin": {"type": "string"},
+                },
+            },
+        },
+        "technical_debt_hotspots": {"type": "array"},
+        "nfr_risks": {"type": "array"},
+        "recommendations": {"type": "array"},
         "alternatives_considered": {
             "type": "array",
             "items": {
@@ -35,7 +63,7 @@ ARCHITECT_OUTPUT_SCHEMA = {
             },
         },
     },
-    "additionalProperties": False,
+    # additionalProperties intentionally open: run() appends `_phases`.
 }
 
 SRE_OUTPUT_SCHEMA = {

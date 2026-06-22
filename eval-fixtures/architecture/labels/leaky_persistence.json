@@ -1,0 +1,8 @@
+{
+  "description": "Has domain/ and persistence/ packages but the domain 'port' imports SQLAlchemy, takes a Session, and returns ORM models — infrastructure leaks through the abstraction. Violates ADR-0007.",
+  "expect_high_severity": true,
+  "must_flag": [
+    {"pattern": "leak|sqlalchemy|orm|session|infrastructure|persistence detail", "category": "abstraction", "min_severity": "HIGH"},
+    {"pattern": "swap|depend|domain.*(import|depend)|coupl", "category": "coupling", "min_severity": "MEDIUM"}
+  ]
+}
