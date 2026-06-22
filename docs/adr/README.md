@@ -26,7 +26,7 @@ as its Decision Log row and the row links to it.
 |------|-----------------------------------|-------|
 | 0036 | `0036-architect-mcp-server.md`    | Superseded in part by 0038, 0039 |
 
-All other decisions (0001–0035, 0037–0039) are table-only in the Decision Log.
+All other decisions (0001–0035, 0037–0040) are table-only in the Decision Log.
 
 ## Tooling note
 

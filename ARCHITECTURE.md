@@ -71,13 +71,17 @@ consistent with all existing stub servers and service implementations.
 ## Package Dependency Direction
 
 ```
-harness-tests
-    ↓ (test imports only)
-harness-supervisor                         (orchestration — top of the runtime stack)
-    ↓                ↓                ↓
-harness-agents   harness-memory   harness-gateway
-    ↓                                 ↑
-harness-gateway     (harness-memory standalone — no runtime package deps)
+harness-supervisor       (orchestration — top of the runtime stack)
+   │ may import ↓
+harness-agents           harness-memory     (standalone — no runtime package deps)
+   │ may import ↓
+harness-gateway          (leaf — no runtime deps on other harness packages)
+
+harness-tests            (test-only — may import any runtime package above)
+
+Allowed imports (top → bottom only):
+  harness-supervisor → harness-agents, harness-memory, harness-gateway
+  harness-agents     → harness-gateway
 
 ✗  harness-gateway    → harness-agents      [HARD violation]
 ✗  harness-gateway    → harness-memory      [HARD violation]
