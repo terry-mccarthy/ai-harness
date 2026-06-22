@@ -30,6 +30,7 @@ TOOL_NAME_MAP = {
     "runbook_read": "sre_stub__runbook_read",
     "log_search": "sre_stub__log_search",
     "shell_exec": "sre_stub__shell_exec",
+    "skill_search": "sre_stub__skill_search",
 }
 
 

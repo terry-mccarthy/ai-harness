@@ -17,6 +17,7 @@ mcp = FastMCP(
 
 _store = None
 _store_lock = asyncio.Lock()
+_dolt_store = None
 
 
 async def _get_store():
@@ -37,6 +38,24 @@ async def _get_store():
             await s.setup()
             _store = s
     return _store
+
+
+def _get_dolt_store():
+    """Lazy-initialise DoltFormulaStore when DOLT_HOST is configured."""
+    global _dolt_store
+    dolt_host = os.environ.get("DOLT_HOST")
+    if not dolt_host:
+        return None
+    if _dolt_store is None:
+        from harness_memory.formula_store import DoltFormulaStore
+        _dolt_store = DoltFormulaStore(
+            host=dolt_host,
+            port=int(os.environ.get("DOLT_PORT", "3306")),
+            user=os.environ.get("DOLT_USER", "root"),
+            password=os.environ.get("DOLT_PASSWORD", "root"),
+            database=os.environ.get("DOLT_DATABASE", "harness"),
+        )
+    return _dolt_store
 
 
 @mcp.tool()
@@ -63,6 +82,16 @@ async def log_search(query: str) -> dict:
         return {"result": "stub", "tool": "log_search", "query": query}
     from harness_memory.log_retriever import retrieve_logs
     return await retrieve_logs(store, query)
+
+
+@mcp.tool()
+def skill_search(agent_role: str, task: str) -> dict:
+    """Find the best matching skill formula for an agent role and task description."""
+    store = _get_dolt_store()
+    if store is None:
+        return {"result": "stub", "tool": "skill_search", "agent_role": agent_role, "task": task}
+    from harness_memory.skill_retriever import retrieve_skill
+    return retrieve_skill(store, agent_role, task)
 
 
 @mcp.tool()

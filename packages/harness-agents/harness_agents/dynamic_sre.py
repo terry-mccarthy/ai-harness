@@ -34,7 +34,7 @@ def _coerce_approval(report: dict) -> dict:
 
 class DynamicSREAgent:
     name = "sre"
-    allowed_tools = ["observability_query", "log_search", "runbook_read", "shell_exec"]
+    allowed_tools = ["observability_query", "log_search", "runbook_read", "shell_exec", "skill_search"]
     memory_namespace = "sre"
 
     def __init__(self, gateway: GatewayClient, llm_provider: LLMProvider, memory_store=None):

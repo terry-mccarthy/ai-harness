@@ -14,7 +14,7 @@ allow if {
 
 allow if {
     input.agent_role == "sre"
-    input.tool_name in {"observability_query", "runbook_read", "log_search", "shell_exec"}
+    input.tool_name in {"observability_query", "runbook_read", "log_search", "shell_exec", "skill_search"}
 }
 
 # ---------------------------------------------------------------------------
