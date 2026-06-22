@@ -102,9 +102,15 @@ To enable debug logging without restarting the whole stack:
 LOG_LEVEL=DEBUG docker compose up -d diff-proxy linter-stub review-server governance
 ```
 
-### Review-server runtime config
+### Runtime LLM config (shared via `server_config` table)
 
 `GET /config` and `PUT /config` on the review-server (`:9003`) let you change LLM provider settings at runtime without rebuilding or restarting. Changes are persisted in PostgreSQL (`server_config` table) and survive container restarts. Auth via `Authorization: Bearer <REVIEW_API_KEY>` (unset key = open in dev).
+
+The `server_config` table is the **shared LLM config store** — `make demo-sre` reads it at startup via `build_llm_from_env(config=...)`, so the SRE demo always uses the same provider/model as the review-server. The capability banner shows the active provider and config source:
+
+```
+llm           : gemini/gemini-2.5-flash (source: db config)
+```
 
 | Method | Path | Description |
 |---|---|---|
@@ -126,9 +132,9 @@ Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`,
 
 ## Tests
 
-### Integration suite (229 tests: all green) — `make test-integration`
+### Integration suite (222 tests: all green) — `make test-integration`
 
-### Unit suite (182 tests: all green) — `make test-unit`
+### Unit suite (205 tests: all green) — `make test-unit`
 
 ### Phase 0 — Core reviewer (9 tests)
 

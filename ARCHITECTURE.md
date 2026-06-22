@@ -161,11 +161,11 @@ Every tool call the agent makes produces:
 
 ```
 packages/
-  harness-gateway/   — GatewayClient + ContextForgeGatewayClient
-  harness-agents/    — CodeReviewerAgent + AgentState TypedDict + output schema
+  harness-gateway/   — GatewayClient + ContextForgeGatewayClient + report_llm_usage()
+  harness-agents/    — CodeReviewerAgent, DynamicSREAgent, ArchitectAgent, AgentState TypedDict, output schemas, build_llm_from_env() factory
   harness-memory/    — PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker, runbook_retriever, log_retriever, skill_retriever
   harness-supervisor/ — LangGraph supervisor orchestration, graph nodes, approval tokens
-  harness-tests/     — pytest integration tests (77 tests across 5 test files + load test)
+  harness-tests/     — pytest integration + unit tests (440 total)
 
 services/
   governance/        — OAuth 2.1 + OPA policy check + async Dolt audit + /metrics (rate limiting delegated to gateway)
@@ -198,7 +198,7 @@ dependency on other harness packages). See
 1. **`POST /oauth/token`** — client credentials grant. Three clients: `architect`, `code-reviewer`, `sre`. Issues **RS256 JWTs** with `sub`, `role`, 15-min TTL, signed with a private RSA key loaded from `JWT_PRIVATE_KEY_FILE`. Verifier uses the derived public key — downstream services cannot mint tokens.
 2. **`GET /jwks`** — returns the RSA public key as a JWK set for downstream verifiers.
 3. **`POST /check`** — validates Bearer JWT, calls OPA `POST /v1/data/harness/allow`; returns `{"allowed": true, "role": ..., "agent_id": ..., "rule": ...}` on allow, 403 on deny. Also gates `shell_exec` behind `X-Human-Approval-Token`.
-4. **`POST /audit`** — accepts an audit record from GatewayClient and writes to Dolt async (202 response, background task). Also writes an `episodes` row (independent background task). Emits Prometheus counters/histograms. Auto-triggers expiry pass every `EXPIRY_PASS_INTERVAL` (default 1000) audit events.
+4. **`POST /audit`** — accepts an audit record from GatewayClient and writes to Dolt async (202 response, background task). Also writes an `episodes` row (independent background task). Emits Prometheus counters/histograms (`harness_tool_calls_total`, `harness_tool_call_latency_ms`). If the body contains `tool_name: "__llm__"` + `llm_tokens`, also increments `harness_llm_calls_total` and `harness_llm_tokens_total` (LLM usage reporting path). Auto-triggers expiry pass every `EXPIRY_PASS_INTERVAL` (default 1000) audit events.
 5. **`POST /episodes/{id}/label`** — sets outcome + outcome_signal + outcome_labeled_at. Requires `episode:label` OPA scope (sre, code_reviewer). Enforces independence rule: labeler ≠ agent_principal.
 6. **`POST /candidates`** / **`GET /candidates/{id}`** — propose a candidate from a qualified episode set (N_min=5, K=2 principals, M=2 recent). Requires `candidate:propose` scope.
 7. **`POST /candidates/{id}/promote`** / **`POST /candidates/{id}/reject`** — human gate. Requires `skill:promote` scope (human-operator client only; no agent role has this). Promotion re-validates criteria, creates/versions a `skills` row with 90-day expiry.

@@ -244,6 +244,47 @@ docker compose up -d --no-deps review-server
 
 **`OPENROUTER_API_KEY` validation:** the key is `.strip()`-ed before the empty check, so a whitespace-only value is caught at startup rather than producing a 401 at review time. Unknown provider names raise `ValueError` with the supported list (`ollama`, `gemini`, `openrouter`) — previously they silently fell through to Ollama.
 
+## LLM provider factory — `build_llm_from_env()`
+
+All agents and scripts must construct LLM providers via the canonical factory in `harness_agents/llm.py`. **Do not construct `OllamaProvider`, `GeminiProvider`, or `OpenRouterProvider` directly** in scripts or tests.
+
+```python
+from harness_agents.llm import build_llm_from_env
+
+# env-driven (LLM_PROVIDER, OLLAMA_MODEL, etc.)
+provider = build_llm_from_env()
+
+# kwarg overrides
+provider = build_llm_from_env(model="qwen3.6:27b", max_tokens=2048)
+
+# config dict layer (from DB or any source) — same schema as server_config JSONB
+provider = build_llm_from_env(config={"llm_provider": "gemini", "gemini": {"model": "gemini-2.5-flash"}})
+```
+
+Resolution order: **kwarg > config dict > env var > default**.
+
+Provider dispatch uses `_PROVIDER_BUILDERS` dict; adding a new provider means adding a `_build_<name>()` function and an entry there.
+
+**`harness-agents` has no asyncpg dependency.** If you need to read the `server_config` table to populate `config=`, do it in the calling script (see `scripts/demo_sre.py:_load_llm_config_from_pg()`). The factory itself stays DB-agnostic.
+
+## Runtime LLM config via Postgres (`server_config` table)
+
+The review-server's `PUT /config` endpoint writes LLM settings to the `server_config` Postgres table (JSONB column `config`). Any process that reads from this table at startup will pick up the same provider/model without a restart.
+
+**`demo_sre.py`** does this: it calls `_load_llm_config_from_pg(pg_dsn)` before constructing the agent, so `make demo-sre` automatically uses whichever LLM the review-server is configured to use.
+
+The table schema:
+```json
+{
+  "llm_provider": "gemini",
+  "gemini": { "model": "gemini-2.5-flash", "api_key": "..." },
+  "ollama": { "model": "qwen2.5-coder:7b" },
+  "openrouter": { "model": "anthropic/claude-3.5-sonnet" }
+}
+```
+
+Only the active provider's sub-dict is used; the others are ignored.
+
 ## Ollama from inside Docker
 
 The `review-server` container needs to reach Ollama on the host. Docker Desktop exposes this via `host.docker.internal`:

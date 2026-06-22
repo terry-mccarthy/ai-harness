@@ -999,3 +999,65 @@ Completed four slices that wire real data into the SRE agent's investigation loo
 make seed-runbooks   # docs/runbooks/*.md → pgvector "runbooks" namespace
 make seed-logs       # docs/logs/*.jsonl  → pgvector "logs" namespace
 ```
+
+---
+
+## LLM Token Metrics in Grafana (2026-06-23)
+
+Grafana "LLM tokens per model" and "LLM calls per model" panels now populate from `make demo-sre`.
+
+**Tests** — 6 unit tests (`test_unit_llm_audit.py`):
+- [x] `test_report_llm_usage_posts_correct_payload`
+- [x] `test_report_llm_usage_noop_when_no_governance`
+- [x] `test_report_llm_usage_swallows_exceptions`
+- [x] `test_llm_usage_reported_after_successful_run`
+- [x] `test_llm_usage_reported_on_max_turns_exceeded`
+- [x] `test_llm_usage_not_reported_when_gateway_lacks_method`
+
+**Definition of Done**
+- [x] `GatewayClient.report_llm_usage()` POSTs synthetic `tool_name: "__llm__"` audit record to governance after agent run
+- [x] Governance `/audit` calls `record_llm_usage()` — increments `harness_llm_calls_total` and `harness_llm_tokens_total` (labels: `agent_role`, `provider`, `model`, `token_type`)
+- [x] `DynamicSREAgent._report_llm_usage()` called in `try/finally` — fires on all exit paths including `max_turns_exceeded`
+- [x] Prometheus counters verified live at `curl http://localhost:8090/metrics | grep harness_llm`
+- [x] Grafana panels populated after `make demo-sre`
+
+**Notes**
+- Bug: `get_token()` in `report_llm_usage` was missing `await` — returned coroutine object as Bearer token → silent 401 from governance. Fixed with one-character change.
+- LLM calls use `tool_name: "__llm__"` in the audit body; governance routes based on presence of `llm_tokens` key.
+
+---
+
+## Centralised LLM Provider Factory (2026-06-23)
+
+`build_llm_from_env()` is now the single entry point for provider selection across all agents and scripts.
+
+**Tests** — 15 unit tests (`test_unit_llm_factory.py`):
+- [x] `test_defaults_to_ollama_provider`
+- [x] `test_ollama_reads_env_vars`
+- [x] `test_ollama_kwarg_overrides_env`
+- [x] `test_openrouter_provider`
+- [x] `test_openrouter_max_tokens_kwarg`
+- [x] `test_openrouter_raises_without_api_key`
+- [x] `test_gemini_provider`
+- [x] `test_gemini_raises_without_api_key`
+- [x] `test_unknown_provider_raises`
+- [x] `test_provider_kwarg_overrides_env`
+- [x] `test_config_dict_selects_provider`
+- [x] `test_config_dict_model_overrides_env`
+- [x] `test_kwarg_overrides_config_dict`
+- [x] `test_config_dict_provider_kwarg_still_wins`
+- [x] `test_empty_config_dict_falls_through_to_env`
+
+**Definition of Done**
+- [x] `build_llm_from_env(provider=None, config=None, **overrides)` added to `harness_agents/llm.py`
+- [x] Resolution order: kwarg > `config` dict > env var > default
+- [x] `config` dict mirrors `server_config` JSONB schema: `{"llm_provider": "gemini", "gemini": {"model": "...", "api_key": "..."}, ...}`
+- [x] `_pick()` helper extracts per-value resolution; `build_llm_from_env` CCN = 3, health 9.8/10
+- [x] Call sites updated: `demo_sre.py`, `conftest.py`, `test_eval_architect.py`, `test_eval_reviewer.py`
+- [x] SRE demo loads `server_config` from Postgres at startup via `_load_llm_config_from_pg()`; capability banner shows `llm: <provider>/<model> (source: db config | env/default)`
+- [x] Review-server keeps its own `_build_llm_provider()` with DB config layer on top (unchanged)
+
+**Notes**
+- The `server_config` Postgres table is owned by the review-server but consumed by any component that reads it. This is de facto a shared config store; a dedicated config service would be the next step if more services need runtime LLM switching.
+- `test_eval_architect.py` sets `max_tokens=4096` via kwarg to prevent synthesis truncation on OpenRouter — this is the only call site that overrides the default.
+- Unit test total: **205 pass**, integration total: **222 pass** (440 total collected).
