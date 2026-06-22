@@ -172,6 +172,64 @@ async def test_architect_produces_review():
     assert "abstraction_analysis" in output["_phases"]
 
 
+def _architect_state(task: str) -> "AgentState":
+    return {
+        "task": task,
+        "diff": "",
+        "thread_id": str(uuid.uuid4()),
+        "agent_output": None,
+        "requires_human_approval": False,
+        "error": None,
+        "human_approval_token": None,
+        "memory_context": None,
+    }
+
+
+# Schema-invalid synthesis: parses as JSON but omits required findings/recommendations.
+_INVALID_SYNTHESIS = json.dumps({
+    "title": "Architecture Review: AI Harness",
+    "status": "completed",
+    "summary": "missing the required findings and recommendations arrays",
+})
+
+
+async def test_architect_synthesis_retries_on_schema_violation():
+    """A synthesis output that violates ARCHITECT_OUTPUT_SCHEMA is rejected and retried;
+    a subsequent schema-valid response is accepted."""
+    from harness_agents.architect import ArchitectAgent
+
+    agent = ArchitectAgent(
+        gateway=_mock_gateway(),
+        llm_provider=MockLLMProvider(
+            [_PHASE_RECON, _PHASE_FLOW, _PHASE_ABSTRACTION, _INVALID_SYNTHESIS, _PHASE_SYNTHESIS]
+        ),
+    )
+    result = await agent.run(_architect_state("Design the persistent memory layer"))
+
+    assert result["error"] is None
+    output = result["agent_output"]
+    assert len(output["findings"]) > 0
+    assert len(output["recommendations"]) > 0
+
+
+async def test_architect_errors_when_synthesis_never_schema_valid():
+    """If synthesis never produces schema-valid output across all retries, run() errors."""
+    from harness_agents.architect import ArchitectAgent
+
+    agent = ArchitectAgent(
+        gateway=_mock_gateway(),
+        llm_provider=MockLLMProvider(
+            [_PHASE_RECON, _PHASE_FLOW, _PHASE_ABSTRACTION,
+             _INVALID_SYNTHESIS, _INVALID_SYNTHESIS, _INVALID_SYNTHESIS]
+        ),
+    )
+    result = await agent.run(_architect_state("Design the persistent memory layer"))
+
+    assert result["agent_output"] is None
+    assert result["error"] is not None
+    assert result["error"]["code"] == "invalid_output"
+
+
 @pytest.mark.integration
 async def test_architect_tool_calls_go_via_gateway():
     """Architect's codebase_search call is visible in gateway audit log."""
