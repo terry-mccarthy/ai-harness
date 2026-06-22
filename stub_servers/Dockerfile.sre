@@ -5,7 +5,7 @@ WORKDIR /app
 COPY stub_servers/requirements.txt .
 RUN pip install --no-deps -r requirements.txt
 
-# Copy harness-memory workspace package and install with its deps
+# Copy harness-memory and install it (pip resolves its transitive deps from PyPI)
 COPY packages/harness-memory /app/packages/harness-memory
 RUN pip install -e /app/packages/harness-memory
 
