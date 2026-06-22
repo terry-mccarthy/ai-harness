@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from mcp.server.fastmcp import FastMCP
@@ -14,6 +15,29 @@ mcp = FastMCP(
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
+_store = None
+_store_lock = asyncio.Lock()
+
+
+async def _get_store():
+    """Lazy-initialise PostgresMemoryStore when PG_DSN is configured."""
+    global _store
+    pg_dsn = os.environ.get("PG_DSN")
+    if not pg_dsn:
+        return None
+    async with _store_lock:
+        if _store is None:
+            from harness_memory.memory_store import PostgresMemoryStore
+            s = PostgresMemoryStore(
+                pg_dsn,
+                os.environ.get("REDIS_URL", "redis://localhost:6379"),
+                os.environ.get("EMBED_MODEL", "nomic-embed-text"),
+                os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+            )
+            await s.setup()
+            _store = s
+    return _store
+
 
 @mcp.tool()
 def observability_query(query: str) -> dict:
@@ -22,9 +46,13 @@ def observability_query(query: str) -> dict:
 
 
 @mcp.tool()
-def runbook_read(runbook_name: str) -> dict:
-    """Read a runbook by name."""
-    return {"result": "stub", "tool": "runbook_read", "runbook_name": runbook_name}
+async def runbook_read(runbook_name: str) -> dict:
+    """Search runbooks semantically by incident description."""
+    store = await _get_store()
+    if store is None:
+        return {"result": "stub", "tool": "runbook_read", "runbook_name": runbook_name}
+    from harness_memory.runbook_retriever import retrieve_runbooks
+    return await retrieve_runbooks(store, runbook_name)
 
 
 @mcp.tool()

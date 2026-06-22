@@ -172,12 +172,16 @@ services:
 
   sre-stub:
     build:
-      context: ./stub_servers
-      dockerfile: Dockerfile.stub
+      context: .
+      dockerfile: stub_servers/Dockerfile.sre
     command: python sre_server.py
     ports: ["9005:9005"]
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PG_DSN: postgresql://harness:harness@postgres:5432/harness
+      REDIS_URL: redis://redis:6379
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      OLLAMA_HOST: http://host.docker.internal:11434
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9005)); s.close()\""]
       interval: 5s

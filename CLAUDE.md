@@ -292,6 +292,23 @@ Build context must be `.` (repo root), not the service subdirectory, so the `pac
 docker compose build dolt && docker compose up -d --no-deps dolt
 ```
 
+## Runbook retrieval (slice 4)
+
+`packages/harness-memory/harness_memory/runbook_retriever.py` — `retrieve_runbooks(store, query, top_k=3) -> dict`. Searches the pgvector store under the `"runbooks"` namespace using cosine similarity and returns `{"runbooks": [...], "query": "..."}` with each entry having `id`, `signature`, `body`, `score` (rounded to 3 dp).
+
+`sre_stub` (`stub_servers/sre_server.py`) lazy-inits a `PostgresMemoryStore` the first time `runbook_read` is called when `PG_DSN` is set. Falls back to stub when `PG_DSN` is absent (existing unit tests still pass without infra).
+
+**sre-stub Docker gotcha**: sre-stub now uses its own `Dockerfile.sre` (not `Dockerfile.stub`) with **build context `.` (repo root)** so it can COPY `packages/harness-memory`. diff-proxy and linter-stub continue to use `Dockerfile.stub` with `context: ./stub_servers`. When rebuilding:
+```bash
+docker compose build sre-stub
+docker compose up -d --no-deps sre-stub
+```
+
+Before the agent can find runbooks, seed them once with:
+```bash
+make seed-runbooks   # requires Postgres + Ollama running locally
+```
+
 ## Agent orchestration (Phases 3–4)
 
 ### Task classification — LLM-primary with keyword fallback

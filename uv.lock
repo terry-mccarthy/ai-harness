@@ -2085,12 +2085,14 @@ name = "stub-servers"
 version = "0.1.0"
 source = { editable = "stub_servers" }
 dependencies = [
+    { name = "harness-memory" },
     { name = "mcp", extra = ["cli"] },
     { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "harness-memory", editable = "packages/harness-memory" },
     { name = "mcp", extras = ["cli"] },
     { name = "uvicorn", specifier = ">=0.27" },
 ]

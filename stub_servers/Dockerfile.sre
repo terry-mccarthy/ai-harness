@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+WORKDIR /app
+
+# Install pinned external deps (build context is repo root)
+COPY stub_servers/requirements.txt .
+RUN pip install --no-deps -r requirements.txt
+
+# Copy harness-memory workspace package and install with its deps
+COPY packages/harness-memory /app/packages/harness-memory
+RUN pip install -e /app/packages/harness-memory
+
+COPY stub_servers/sre_server.py .
