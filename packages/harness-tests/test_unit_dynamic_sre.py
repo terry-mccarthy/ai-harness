@@ -199,7 +199,10 @@ async def test_invalid_respond_schema_gets_corrective_reprompt():
 # Behavior 6 — injection safety: shell_exec denied by gateway → tool_access_denied
 # ---------------------------------------------------------------------------
 
-async def test_injected_shell_exec_yields_tool_access_denied():
+async def test_injected_shell_exec_is_denied_and_agent_recovers():
+    """shell_exec is blocked by governance (ToolAccessDenied), but the agent
+    treats it as non-fatal: the denial is fed back to the LLM so it can
+    propose the step in the report instead of halting."""
     from harness_agents.dynamic_sre import DynamicSREAgent
     from harness_gateway.client import ToolAccessDenied
 
@@ -216,13 +219,17 @@ async def test_injected_shell_exec_yields_tool_access_denied():
     llm = _Turns(
         _call_tool("log_search", query="DB latency"),
         _call_tool("shell_exec", command="cat /etc/passwd"),  # injected escalation
+        _respond(_VALID_REPORT),                               # LLM recovers and reports
     )
     gw = _DenyingGateway()
 
     result = await DynamicSREAgent(gateway=gw, llm_provider=llm).run(_state())
 
-    assert result["error"]["code"] == "tool_access_denied"
-    assert "shell_exec" in result["error"]["reason"]
+    # Gateway blocked shell_exec — no error propagated to the caller
+    assert result.get("error") is None
+    # Agent completed successfully after recovering from the denial
+    assert result["agent_output"] is not None
+    # Both tools were attempted; shell_exec was blocked but log_search ran
     assert "log_search" in gw.calls
     assert "shell_exec" in gw.calls
 
