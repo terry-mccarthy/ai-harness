@@ -258,10 +258,11 @@ async def test_formula_outcome_recorded():
 async def test_agent_executes_ad_hoc_without_formula():
     """When formula_id is None, SRE agent runs freely and does not error."""
     from harness_supervisor.nodes import run_agent_node
-    from harness_agents.sre import SREAgent
+    from harness_agents.dynamic_sre import DynamicSREAgent
 
+    _react_respond = json.dumps({"action": "respond", "result": json.loads(_VALID_INCIDENT)})
     gw = _mock_gateway({"observability_query": {}, "log_search": {}, "runbook_read": {}})
-    agent = SREAgent(gateway=gw, llm_provider=MockLLMProvider(_VALID_INCIDENT))
+    agent = DynamicSREAgent(gateway=gw, llm_provider=MockLLMProvider(_react_respond))
     state = {
         **_base_state("DB latency spike"),
         "task_type": "incident",
@@ -306,15 +307,16 @@ async def test_propose_formula_on_novel_task():
 async def test_agent_executes_formula_steps():
     """When formula_id is set, SRE agent calls tools in formula step order."""
     from harness_supervisor.nodes import run_agent_node
-    from harness_agents.sre import SREAgent
+    from harness_agents.dynamic_sre import DynamicSREAgent
     from harness_memory.formula_store import DoltFormulaStore
 
     fstore = DoltFormulaStore(**DOLT_CONN)
     formula = fstore.get("sre:triage-incident")
     assert formula is not None
 
+    _react_respond = json.dumps({"action": "respond", "result": json.loads(_VALID_INCIDENT)})
     gw = _mock_gateway({"observability_query": {}, "log_search": {}, "runbook_read": {}})
-    agent = SREAgent(gateway=gw, llm_provider=MockLLMProvider(_VALID_INCIDENT))
+    agent = DynamicSREAgent(gateway=gw, llm_provider=MockLLMProvider(_react_respond))
 
     state = {
         **_base_state("DB latency alert"),

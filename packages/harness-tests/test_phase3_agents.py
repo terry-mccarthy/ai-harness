@@ -126,9 +126,9 @@ def test_agent_node_contract_compliance():
     from harness_agents.protocols import AgentNode
     from harness_agents.architect import ArchitectAgent
     from harness_agents.reviewer import CodeReviewerAgent
-    from harness_agents.sre import SREAgent
+    from harness_agents.dynamic_sre import DynamicSREAgent
 
-    for cls in (ArchitectAgent, CodeReviewerAgent, SREAgent):
+    for cls in (ArchitectAgent, CodeReviewerAgent, DynamicSREAgent):
         for attr in ("name", "allowed_tools", "memory_namespace"):
             assert hasattr(cls, attr), f"{cls.__name__} missing Protocol attr: {attr}"
         assert "run" in {m for m, _ in inspect.getmembers(cls, predicate=inspect.isfunction)}, \
@@ -451,18 +451,20 @@ async def test_reviewer_loop_max_iterations():
 # ---------------------------------------------------------------------------
 
 async def test_sre_produces_incident_report():
-    """Given an alert input, SRE returns a dict matching the incident output contract."""
-    from harness_agents.sre import SREAgent
+    """Given an alert input, dynamic SRE returns a dict matching the incident output contract."""
+    from harness_agents.dynamic_sre import DynamicSREAgent
     from harness_agents.types import AgentState, SRE_OUTPUT_SCHEMA
     import jsonschema
 
-    agent = SREAgent(
+    _react_respond = json.dumps({"action": "respond", "result": json.loads(_VALID_INCIDENT)})
+
+    agent = DynamicSREAgent(
         gateway=_mock_gateway({
             "observability_query": {"metrics": []},
             "log_search": {"logs": []},
             "runbook_read": {"runbook": None},
         }),
-        llm_provider=MockLLMProvider(_VALID_INCIDENT),
+        llm_provider=MockLLMProvider(_react_respond),
     )
     state: AgentState = {
         "task": "DB latency alert fired — p99 > 5s",

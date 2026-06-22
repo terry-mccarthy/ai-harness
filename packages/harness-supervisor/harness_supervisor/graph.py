@@ -8,7 +8,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # used in buil
 
 from harness_agents.architect import ArchitectAgent
 from harness_agents.reviewer import CodeReviewerAgent
-from harness_agents.sre import SREAgent
+from harness_agents.dynamic_sre import DynamicSREAgent
 from harness_memory.formula_store import DoltFormulaStore
 
 from .state import HarnessState
@@ -169,7 +169,7 @@ async def build_supervisor(
 
     architect = ArchitectAgent(gateway=gateway, llm_provider=llm_provider, memory_store=memory_store)
     reviewer  = CodeReviewerAgent(gateway=gateway, llm_provider=llm_provider, memory_store=memory_store)
-    sre       = SREAgent(gateway=gateway, llm_provider=llm_provider, memory_store=memory_store)
+    sre       = DynamicSREAgent(gateway=gateway, llm_provider=llm_provider, memory_store=memory_store)
 
     builder = StateGraph(HarnessState)
     _build_nodes(builder, llm_provider, fstore, gateway, architect, reviewer, sre)
