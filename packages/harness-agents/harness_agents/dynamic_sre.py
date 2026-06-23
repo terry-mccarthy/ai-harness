@@ -11,7 +11,7 @@ from harness_agents.llm import LLMProvider
 
 logger = logging.getLogger(__name__)
 
-MAX_TURNS = 8
+MAX_TURNS = 16
 
 _PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", Path(__file__).resolve().parents[3] / "prompts"))
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -131,12 +131,7 @@ class DynamicSREAgent:
         except Exception:
             pass
 
-    async def run(self, state: AgentState) -> AgentState:
-        task = state.get("task", "")
-        token_usage = self._init_token_usage(state)
-        token_budget = state.get("token_budget")
-
-        formula = self._load_formula(task)
+    def _build_prompt_blocks(self, task: str, formula, memory_context) -> tuple[str, str]:
         formula_block = ""
         if formula:
             steps_text = "\n".join(
@@ -147,12 +142,56 @@ class DynamicSREAgent:
                 f"Follow these steps in order:\n{steps_text}\n"
                 f"Deviate only if a step's result is clearly inapplicable.\n"
             )
-
-        memory_context = await self._load_memory(task)
         context_block = (
             f"\nPast incidents from memory:\n{json.dumps(memory_context, indent=2)}\n"
             if memory_context else ""
         )
+        return formula_block, context_block
+
+    async def _react_loop(
+        self, messages: list, state: AgentState, token_usage: dict, token_budget: int | None
+    ) -> AgentState:
+        for turn in range(MAX_TURNS):
+            response, error = await self._llm_chat(messages, token_usage)
+            if error:
+                return {**state, "token_usage": token_usage, "error": {"code": "provider_error", "reason": error}}
+            if response is None or response.content is None:
+                return {**state, "token_usage": token_usage, "error": {"code": "provider_error", "reason": "empty response from LLM"}}
+            if token_budget is not None and token_usage["completion_tokens"] >= token_budget:
+                return {**state, "token_usage": token_usage, "error": {
+                    "code": "token_budget_exceeded",
+                    "reason": f"completion tokens {token_usage['completion_tokens']} exceeded budget {token_budget}",
+                }}
+
+            raw = _clean(response.content)
+            logger.debug("turn %d: %s", turn + 1, raw)
+
+            try:
+                action = json.loads(raw)
+            except json.JSONDecodeError:
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "user", "content": "Invalid JSON. Respond with exactly one JSON object."})
+                continue
+
+            handled = await self._dispatch(action, raw, messages, state, token_usage)
+            if handled is not None:
+                if handled.get("agent_output"):
+                    await self._save_memory(state, handled["agent_output"])
+                return handled
+
+        return {**state, "token_usage": token_usage, "error": {
+            "code": "max_turns_exceeded",
+            "reason": f"exceeded {MAX_TURNS} turns without final response",
+        }}
+
+    async def run(self, state: AgentState) -> AgentState:
+        task = state.get("task", "")
+        token_usage = self._init_token_usage(state)
+        token_budget = state.get("token_budget")
+
+        formula = self._load_formula(task)
+        memory_context = await self._load_memory(task)
+        formula_block, context_block = self._build_prompt_blocks(task, formula, memory_context)
 
         system_prompt = (_PROMPTS_DIR / "react_sre.md").read_text()
         messages = [
@@ -161,36 +200,6 @@ class DynamicSREAgent:
         ]
 
         try:
-            for turn in range(MAX_TURNS):
-                response, error = await self._llm_chat(messages, token_usage)
-                if error:
-                    return {**state, "token_usage": token_usage, "error": {"code": "provider_error", "reason": error}}
-
-                if token_budget is not None and token_usage["completion_tokens"] >= token_budget:
-                    return {**state, "token_usage": token_usage, "error": {
-                        "code": "token_budget_exceeded",
-                        "reason": f"completion tokens {token_usage['completion_tokens']} exceeded budget {token_budget}",
-                    }}
-
-                raw = _clean(response.content)
-                logger.debug("turn %d: %s", turn + 1, raw)
-
-                try:
-                    action = json.loads(raw)
-                except json.JSONDecodeError:
-                    messages.append({"role": "assistant", "content": raw})
-                    messages.append({"role": "user", "content": "Invalid JSON. Respond with exactly one JSON object."})
-                    continue
-
-                handled = await self._dispatch(action, raw, messages, state, token_usage)
-                if handled is not None:
-                    if handled.get("agent_output"):
-                        await self._save_memory(state, handled["agent_output"])
-                    return handled
-
-            return {**state, "token_usage": token_usage, "error": {
-                "code": "max_turns_exceeded",
-                "reason": f"exceeded {MAX_TURNS} turns without final response",
-            }}
+            return await self._react_loop(messages, state, token_usage, token_budget)
         finally:
             await self._report_llm_usage(token_usage)

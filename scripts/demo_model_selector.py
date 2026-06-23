@@ -121,7 +121,25 @@ def _make_gateway() -> GatewayClient:
 
 
 _RETRY_DELAY_RE = re.compile(r"retry in (\d+\.?\d*)s", re.IGNORECASE)
+_HARD_LIMIT_RE = re.compile(r"limit:\s*0", re.IGNORECASE)
 _MAX_RETRIES = 3
+
+
+def _retry_delay(reason: str, attempt: int) -> float | None:
+    """Return seconds to wait before retrying, or None if non-retryable."""
+    if "429" in reason:
+        if _HARD_LIMIT_RE.search(reason):
+            print("    quota exhausted (limit: 0) — model not available on free tier", flush=True)
+            return None
+        m = _RETRY_DELAY_RE.search(reason)
+        delay = float(m.group(1)) if m else 20.0
+        print(f"    rate-limited — waiting {delay:.0f}s (attempt {attempt + 1}/{_MAX_RETRIES})", flush=True)
+        return delay
+    if "503" in reason:
+        delay = 15.0 * (attempt + 1)
+        print(f"    model overloaded (503) — waiting {delay:.0f}s (attempt {attempt + 1}/{_MAX_RETRIES})", flush=True)
+        return delay
+    return None
 
 
 async def _run_task(
@@ -141,10 +159,10 @@ async def _run_task(
     for attempt in range(_MAX_RETRIES):
         result = await agent.run(state)
         err = result.get("error") or {}
-        if err.get("code") == "provider_error" and "429" in str(err.get("reason", "")):
-            m = _RETRY_DELAY_RE.search(str(err["reason"]))
-            delay = float(m.group(1)) if m else 20.0
-            print(f"    rate-limited — waiting {delay:.0f}s (attempt {attempt + 1}/{_MAX_RETRIES})", flush=True)
+        if err.get("code") == "provider_error":
+            delay = _retry_delay(str(err.get("reason", "")), attempt)
+            if delay is None:
+                return result
             await asyncio.sleep(delay)
             continue
         return result
@@ -162,14 +180,13 @@ async def _run_pass(
 
     for name, tier, prompt in TASK_BATCH:
         if use_baseline:
+            bp = config.get("baseline_provider") or config.get("llm_provider", "openrouter")
             llm = build_llm_from_env(
+                provider=bp,
                 config={
                     **config,
-                    config.get("llm_provider", "openrouter"): {
-                        **config.get(config.get("llm_provider", "openrouter"), {}),
-                        "model": baseline_model,
-                    },
-                }
+                    bp: {**config.get(bp, {}), "model": baseline_model},
+                },
             )
             model_name = baseline_model
         else:

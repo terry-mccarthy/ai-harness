@@ -130,6 +130,7 @@ def _build_ollama(overrides: dict, cfg: dict) -> "OllamaProvider":
         num_ctx=int(_pick(overrides.get("num_ctx"), cfg.get("num_ctx"), "OLLAMA_NUM_CTX", "8192")),
         temperature=float(_pick(overrides.get("temperature"), cfg.get("temperature"), "LLM_TEMPERATURE", "OLLAMA_TEMPERATURE", "0.1")),
         num_predict=int(_pick(overrides.get("num_predict") or overrides.get("max_tokens"), cfg.get("num_predict"), "OLLAMA_NUM_PREDICT", "LLM_MAX_TOKENS", "1024")),
+        timeout=float(_pick(overrides.get("timeout"), cfg.get("timeout"), "OLLAMA_TIMEOUT", "120.0")),
     )
 
 
