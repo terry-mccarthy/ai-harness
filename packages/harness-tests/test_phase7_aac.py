@@ -80,6 +80,9 @@ _GATE_FAIL_COMPLEXITY = {
 _VALID_ADR = json.dumps({
     "title": "ADR-001: Use PostgreSQL",
     "status": "proposed",
+    "summary": "PostgreSQL is the recommended storage layer for this service.",
+    "findings": [],
+    "recommendations": [],
     "context": "Need persistent storage.",
     "decision": "Use PostgreSQL.",
     "consequences": "Requires pgvector.",
