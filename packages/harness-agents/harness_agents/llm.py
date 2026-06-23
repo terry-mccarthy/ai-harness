@@ -2,6 +2,7 @@ import os
 import re
 from typing import Protocol, List, Dict
 from dataclasses import dataclass
+import httpx
 
 # OpenAI o-series reasoning models reject the temperature parameter outright.
 _O_SERIES_RE = re.compile(r"openai/o\d", re.IGNORECASE)
@@ -183,6 +184,52 @@ def build_llm_from_env(
             f"Unknown LLM provider: {provider_name!r}. Supported: ollama, gemini, openrouter"
         )
     return builder(overrides, cfg.get(provider_name, {}))
+
+
+async def list_available_models(provider: str, config: dict | None = None) -> list[str]:
+    """Return model names/ids available from the given provider.
+
+    Does not require a running LLM — queries the provider's catalogue API.
+    Raises ValueError for unsupported providers.
+    """
+    cfg = (config or {}).get(provider, {})
+    if provider == "ollama":
+        host = cfg.get("host") or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{host}/api/tags")
+            return [m["name"] for m in r.json().get("models", [])]
+    if provider == "openrouter":
+        key = cfg.get("api_key") or os.environ.get("OPENROUTER_API_KEY", "")
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+            return [m["id"] for m in r.json().get("data", [])]
+    raise ValueError(f"list_available_models: unsupported provider {provider!r}")
+
+
+def build_role_llm(role: str, config: dict | None = None, **overrides) -> "LLMProvider":
+    """Build an LLM provider for a specific agent role.
+
+    Checks config['role_models'][role] for a provider/model override, then
+    falls back to the global config and env vars via build_llm_from_env.
+
+    role_models entry schema:
+      {"provider": "openrouter", "model": "claude-opus-4-8"}
+    Both keys are optional — omitting provider keeps the global provider.
+    """
+    cfg = config or {}
+    role_cfg = cfg.get("role_models", {}).get(role, {})
+    provider = role_cfg.get("provider") or cfg.get("llm_provider") or None
+    # Merge role model into provider sub-dict so _pick resolution works
+    if role_cfg.get("model"):
+        provider_name = provider or overrides.get("provider") or \
+            __import__("os").environ.get("LLM_PROVIDER", "ollama")
+        merged_cfg = {**cfg, provider_name: {**cfg.get(provider_name, {}), "model": role_cfg["model"]}}
+    else:
+        merged_cfg = cfg
+    return build_llm_from_env(provider=provider, config=merged_cfg, **overrides)
 
 
 class OpenRouterProvider:

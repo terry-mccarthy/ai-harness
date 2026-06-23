@@ -145,3 +145,132 @@ def test_empty_config_dict_falls_through_to_env(monkeypatch):
     llm = build_llm_from_env(config={})
     assert isinstance(llm, OllamaProvider)
     assert llm.model == "qwen2.5-coder:7b"
+
+
+# ---------------------------------------------------------------------------
+# build_role_llm — per-role model selection
+# ---------------------------------------------------------------------------
+
+def test_build_role_llm_no_role_models_uses_global_provider(monkeypatch):
+    """Without role_models in config, build_role_llm behaves like build_llm_from_env."""
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
+    from harness_agents.llm import OllamaProvider, build_role_llm
+    llm = build_role_llm("architect", config={})
+    assert isinstance(llm, OllamaProvider)
+    assert llm.model == "qwen2.5-coder:7b"
+
+
+def test_build_role_llm_role_model_overrides_global_model(monkeypatch):
+    """role_models[role].model takes precedence over the global provider model."""
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
+    from harness_agents.llm import OllamaProvider, build_role_llm
+    config = {
+        "llm_provider": "ollama",
+        "ollama": {"model": "qwen2.5-coder:7b"},
+        "role_models": {
+            "architect": {"model": "qwen2.5-coder:32b"},
+        },
+    }
+    llm = build_role_llm("architect", config=config)
+    assert isinstance(llm, OllamaProvider)
+    assert llm.model == "qwen2.5-coder:32b"
+
+
+def test_build_role_llm_other_role_unaffected(monkeypatch):
+    """A role not in role_models still gets the global model."""
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+    from harness_agents.llm import OllamaProvider, build_role_llm
+    config = {
+        "role_models": {"architect": {"model": "qwen2.5-coder:32b"}},
+    }
+    llm = build_role_llm("sre", config=config)
+    assert isinstance(llm, OllamaProvider)
+    assert llm.model == "qwen2.5-coder:7b"  # default
+
+
+def test_build_role_llm_role_can_switch_provider(monkeypatch):
+    """role_models[role].provider switches to a different LLM provider."""
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    from harness_agents.llm import OpenRouterProvider, build_role_llm
+    config = {
+        "llm_provider": "ollama",
+        "ollama": {"model": "qwen2.5-coder:7b"},
+        "openrouter": {"model": "claude-opus-4-8"},
+        "role_models": {
+            "architect": {"provider": "openrouter", "model": "claude-opus-4-8"},
+        },
+    }
+    llm = build_role_llm("architect", config=config)
+    assert isinstance(llm, OpenRouterProvider)
+    assert llm.model == "claude-opus-4-8"
+
+
+# ---------------------------------------------------------------------------
+# list_available_models — provider model discovery
+# ---------------------------------------------------------------------------
+
+import pytest
+
+@pytest.mark.asyncio
+async def test_list_available_models_ollama(monkeypatch):
+    """list_available_models('ollama') returns model names from GET /api/tags."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    fake_response = MagicMock()
+    fake_response.json.return_value = {
+        "models": [
+            {"name": "qwen2.5-coder:7b"},
+            {"name": "qwen2.5-coder:32b"},
+            {"name": "nomic-embed-text:latest"},
+        ]
+    }
+    mock_get = AsyncMock(return_value=fake_response)
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=MagicMock(get=mock_get))
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("harness_agents.llm.httpx.AsyncClient", return_value=mock_client):
+        from harness_agents.llm import list_available_models
+        models = await list_available_models("ollama")
+
+    assert models == ["qwen2.5-coder:7b", "qwen2.5-coder:32b", "nomic-embed-text:latest"]
+
+
+@pytest.mark.asyncio
+async def test_list_available_models_openrouter(monkeypatch):
+    """list_available_models('openrouter') returns model ids from GET /api/v1/models."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    fake_response = MagicMock()
+    fake_response.json.return_value = {
+        "data": [
+            {"id": "anthropic/claude-sonnet-4-6"},
+            {"id": "anthropic/claude-opus-4-8"},
+            {"id": "google/gemini-2.5-flash"},
+        ]
+    }
+    mock_get = AsyncMock(return_value=fake_response)
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=MagicMock(get=mock_get))
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("harness_agents.llm.httpx.AsyncClient", return_value=mock_client):
+        from harness_agents.llm import list_available_models
+        models = await list_available_models("openrouter")
+
+    assert models == [
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-opus-4-8",
+        "google/gemini-2.5-flash",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_available_models_unknown_provider_raises():
+    """list_available_models raises ValueError for unsupported providers."""
+    from harness_agents.llm import list_available_models
+    with pytest.raises(ValueError, match="cohere"):
+        await list_available_models("cohere")

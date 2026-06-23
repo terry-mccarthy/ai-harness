@@ -9,6 +9,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # used in buil
 from harness_agents.architect import ArchitectAgent
 from harness_agents.reviewer import CodeReviewerAgent
 from harness_agents.dynamic_sre import DynamicSREAgent
+from harness_agents.llm import build_role_llm
 from harness_memory.formula_store import DoltFormulaStore
 
 from .state import HarnessState
@@ -98,14 +99,14 @@ def _after_human_gate(state: HarnessState) -> str:
     return "error_handler"
 
 
-def _build_nodes(builder: StateGraph, llm_provider, fstore, gateway, architect, reviewer, sre):
-    builder.add_node("classify",        partial(classify_node,       llm_provider=llm_provider))
+def _build_nodes(builder: StateGraph, classify_llm, synthesise_llm, fstore, gateway, architect, reviewer, sre):
+    builder.add_node("classify",        partial(classify_node,       llm_provider=classify_llm))
     builder.add_node("formula_lookup",  partial(formula_lookup_node, formula_store=fstore))
     builder.add_node("route",           route_span_node)
     builder.add_node("architect",       partial(run_agent_node,      agent=architect))
     builder.add_node("code_reviewer",   partial(run_agent_node,      agent=reviewer))
     builder.add_node("sre",             partial(run_agent_node,      agent=sre))
-    builder.add_node("synthesise",      partial(synthesise_node,     formula_store=fstore, llm_provider=llm_provider))
+    builder.add_node("synthesise",      partial(synthesise_node,     formula_store=fstore, llm_provider=synthesise_llm))
     builder.add_node("propose_formula", partial(propose_formula_node, formula_store=fstore))
     builder.add_node("architectural_gate", partial(architectural_gate_node, gateway=gateway))
     builder.add_node("human_gate",         _human_gate_node)
@@ -160,6 +161,7 @@ async def build_supervisor(
     memory_store=None,
     tracer_provider=None,
     checkpointer=None,
+    config: dict | None = None,
 ):
     if tracer_provider is not None:
         from opentelemetry import trace as otel_trace
@@ -167,12 +169,21 @@ async def build_supervisor(
 
     fstore = formula_store or DoltFormulaStore(**DOLT_CONN)
 
-    architect = ArchitectAgent(gateway=gateway, llm_provider=llm_provider, memory_store=memory_store)
-    reviewer  = CodeReviewerAgent(gateway=gateway, llm_provider=llm_provider, memory_store=memory_store)
-    sre       = DynamicSREAgent(gateway=gateway, llm_provider=llm_provider, memory_store=memory_store)
+    if config:
+        architect_llm  = build_role_llm("architect",     config)
+        reviewer_llm   = build_role_llm("code_reviewer", config)
+        sre_llm        = build_role_llm("sre",           config)
+        classify_llm   = build_role_llm("classify",      config)
+        synthesise_llm = build_role_llm("synthesise",    config)
+    else:
+        architect_llm = reviewer_llm = sre_llm = classify_llm = synthesise_llm = llm_provider
+
+    architect = ArchitectAgent(gateway=gateway, llm_provider=architect_llm, memory_store=memory_store)
+    reviewer  = CodeReviewerAgent(gateway=gateway, llm_provider=reviewer_llm, memory_store=memory_store)
+    sre       = DynamicSREAgent(gateway=gateway, llm_provider=sre_llm, memory_store=memory_store)
 
     builder = StateGraph(HarnessState)
-    _build_nodes(builder, llm_provider, fstore, gateway, architect, reviewer, sre)
+    _build_nodes(builder, classify_llm, synthesise_llm, fstore, gateway, architect, reviewer, sre)
     _build_edges(builder)
 
     if checkpointer is None:

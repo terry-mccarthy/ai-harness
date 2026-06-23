@@ -638,3 +638,39 @@ def _base_state(task: str) -> dict:
 
 def _harness_input(task: str) -> dict:
     return {**_base_state(task), "thread_id": str(uuid.uuid4())}
+
+
+# ---------------------------------------------------------------------------
+# Role-model routing — build_supervisor wires per-role LLM providers
+# ---------------------------------------------------------------------------
+
+async def test_build_supervisor_uses_role_models_config():
+    """build_supervisor(config=...) builds a distinct provider per agent role."""
+    from unittest.mock import patch
+    from langgraph.checkpoint.memory import InMemorySaver
+    from harness_supervisor import graph as graph_module
+    from harness_supervisor.graph import build_supervisor
+    from harness_agents.llm import build_role_llm
+
+    config = {
+        "llm_provider": "ollama",
+        "ollama": {"model": "qwen2.5-coder:7b"},
+        "role_models": {
+            "architect":     {"model": "qwen2.5-coder:32b"},
+            "code_reviewer": {"model": "qwen2.5-coder:7b"},
+            "sre":           {"model": "qwen2.5-coder:7b"},
+            "classify":      {"model": "qwen2.5-coder:7b"},
+            "synthesise":    {"model": "qwen2.5-coder:7b"},
+        },
+    }
+
+    with patch.object(graph_module, "build_role_llm", wraps=build_role_llm) as spy:
+        await build_supervisor(
+            llm_provider=MockLLMProvider("{}"),
+            gateway=_mock_gateway(),
+            config=config,
+            checkpointer=InMemorySaver(),
+        )
+
+    called_roles = {c.args[0] for c in spy.call_args_list}
+    assert called_roles == {"architect", "code_reviewer", "sre", "classify", "synthesise"}
