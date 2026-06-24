@@ -371,7 +371,13 @@ When `formula_store` is provided, `_load_formula(task)` calls `store.lookup(self
 
 ### Task classification — LLM-primary with keyword fallback
 
-`classify_node` asks the LLM for structured JSON (`{"task_type": "design|review|incident"}`) and parses it leniently (`<think>` blocks stripped, first `{...}` extracted). Fallback order: LLM JSON → keyword heuristic → `review`. Keywords are a *fallback only* — do not reintroduce them as the primary path; surface keywords misroute (e.g. "Review the alert that fired" is an incident). Mocks in tests must return the JSON contract, not a bare word.
+`classify_node` asks the LLM for structured JSON (`{"task_type": "design|review|incident|bootstrap"}`) and parses it leniently (`<think>` blocks stripped, first `{...}` extracted). Fallback order: LLM JSON → keyword heuristic → `review`. Keywords are a *fallback only* — do not reintroduce them as the primary path; surface keywords misroute (e.g. "Review the alert that fired" is an incident). Mocks in tests must return the JSON contract, not a bare word.
+
+`bootstrap` is the fourth task type — triggered by tasks like "generate ARCHITECTURE.md" or "document the architecture". It routes to the architect, runs the full four-phase analysis, adds a fifth `_phase_bootstrap_doc` pass that converts phase results to a markdown document, and stores the result in `agent_output["architecture_md"]`. Bootstrap tasks bypass the architectural gate (no sandbox validation needed for doc generation).
+
+**`bootstrap_architecture` MCP tool** — `review_server__bootstrap_architecture` is now registered with MCPJungle. Accepts `repo` (GitHub URL), optional `task`, and LLM provider overrides. Calls `ArchitectAgent` directly (no supervisor graph), uses `architect` OAuth credentials (`ARCHITECT_SECRET`). Returns `{"architecture_md": "...", "summary": "...", "findings": [...], "recommendations": [...]}`. **Timeout note:** this tool runs 5 LLM calls sequentially and will exceed Claude Code's default 60s MCP timeout — launch with `MCP_TOOL_TIMEOUT=300000 claude`. See the Claude Code MCP tool timeout section.
+
+**`ArchitectAgent.repo` param** — The architect agent previously passed `self.gateway.gateway_url` (the MCPJungle URL) as the `repo` parameter to `codebase_search` and `adr_read`. This was a latent bug hidden by mock gateways in tests. Fixed: `ArchitectAgent.__init__` now accepts `repo: str = ""` and uses `self.repo` in all tool calls. Always pass a GitHub URL (`https://github.com/owner/repo`) when constructing the agent for real usage.
 
 ### Stale pytest processes can deadlock the suite
 
@@ -391,7 +397,7 @@ The `human_approval_token` is a short-lived JWT (10-min TTL) scoped to a specifi
 
 ## Architectural gate — Phase 7 gotchas
 
-- **Graph wiring change for architect path:** The architect agent no longer goes through `_should_propose_formula` — it now goes `architect → architectural_gate → route_after_gate`. Code reviewer and SRE agents are unaffected (still use `_should_propose_formula`). If you add a new agent that should also go through the gate, add its own `builder.add_edge("agent", "architectural_gate")`.
+- **Graph wiring change for architect path:** The architect agent goes through `_route_after_architect` (a conditional edge), not a hard edge. `_route_after_architect` sends `bootstrap` tasks straight to `synthesise` (gate skipped) and `design` tasks to `architectural_gate → route_after_gate`. Code reviewer and SRE agents are unaffected (still use `_should_propose_formula`). If you add a new task type that should also skip the gate, add a branch to `_route_after_architect`.
 - **`route_after_gate` routing:** PASS → `synthesise`, FAIL with HARD → `human_gate`, FAIL with SOFT without `human_justification` → `human_gate`, FAIL with SOFT with `human_justification` → `synthesise`. No gate signal → `error_handler`.
 - **`human_gate` now has two resume paths:** `human_justification` (gate soft-fail) → resume to `synthesise`; `human_approval_token` (shell_exec) → resume to `sre`. The justification check comes first.
 - **`execute_architecture_check` is a stub:** Mapped to `review_server__execute_architecture_check` in the TOOL_NAME_MAP. The actual sandbox isolation (Docker-in-Docker) is not implemented. The graph wiring, OPA policy, Dolt schema, and governance endpoint are all functional — only the stub handler needs to be replaced when sandboxes are built.
@@ -416,6 +422,20 @@ MCPJungle exposes itself as an MCP server at `http://localhost:8080/mcp`. Add to
 ```
 
 This gives Claude Code access to all registered tools, including `review_server__review_diff`.
+
+## Claude Code MCP tool timeout
+
+Claude Code's MCP client has a **hard ~60-second timeout** derived from the MCP TypeScript SDK default (`DEFAULT_REQUEST_TIMEOUT_MSEC = 60000`). Long-running tools like `bootstrap_architecture` (5 LLM calls + 5 tool round-trips) routinely exceed this.
+
+**Workaround — launch Claude Code with an extended timeout:**
+
+```bash
+MCP_TOOL_TIMEOUT=300000 claude   # 5 minutes
+```
+
+`MCP_TOOL_TIMEOUT` is honoured by Claude Code CLI. The per-server `timeout` field in `.mcp.json` was working in ≤ v2.1.107 but is silently ignored for HTTP transport since v2.1.113 (open regression: [anthropics/claude-code#50289](https://github.com/anthropics/claude-code/issues/50289)).
+
+**Why ContextForge doesn't fix this:** ContextForge's `TOOL_TIMEOUT` (default 60s, configurable) controls how long ContextForge waits for the upstream server — but Claude Code's client-side timeout fires first regardless. Both would need to be extended, and only `MCP_TOOL_TIMEOUT` is actually configurable today.
 
 ## git_diff tool modes
 

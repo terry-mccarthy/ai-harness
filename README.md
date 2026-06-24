@@ -134,7 +134,7 @@ Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`,
 
 ### Integration suite (222 tests: all green) — `make test-integration`
 
-### Unit suite (205 tests: all green) — `make test-unit`
+### Unit suite (239 tests: all green) — `make test-unit`
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -204,6 +204,26 @@ Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`,
 | `test_formula_deprecate` | Deprecated formula excluded from `list_active()` and `lookup()` |
 | `test_formula_interface_compliance` | `DoltFormulaStore` satisfies `FormulaStore` Protocol |
 
+### Bootstrap — Architecture doc generation (15 tests)
+
+| Test | What it proves |
+|---|---|
+| `test_bootstrap_adds_architecture_md` | `task_type='bootstrap'` → `agent_output['architecture_md']` present |
+| `test_non_bootstrap_omits_architecture_md` | Non-bootstrap runs do not add `architecture_md` |
+| `test_bootstrap_still_produces_synthesis_output` | Bootstrap run still contains standard synthesis fields |
+| `test_bootstrap_continues_when_doc_phase_fails` | LLM failure in bootstrap phase → synthesis returned, no error |
+| `test_classify_node_bootstrap_from_llm` | LLM `task_type='bootstrap'` is accepted by classifier |
+| `test_classify_node_bootstrap_keyword_fallback` | "generate architecture.md" classifies as bootstrap via keyword fallback |
+| `test_route_node_bootstrap_goes_to_architect` | `task_type='bootstrap'` routes to architect node |
+| `test_route_after_architect_bootstrap_skips_gate` | Bootstrap bypasses architectural gate → goes straight to synthesise |
+| `test_route_after_architect_design_goes_to_gate` | Design tasks still flow through the architectural gate |
+| `test_route_after_architect_error_goes_to_error_handler` | Error state always routes to error_handler |
+| `test_bootstrap_architecture_returns_md` | `bootstrap_architecture` MCP tool returns `architecture_md` on success |
+| `test_bootstrap_architecture_raises_on_agent_error` | Synthesis failure → `RuntimeError` from the MCP tool |
+| `test_bootstrap_architecture_uses_architect_credentials` | MCP tool builds `GatewayClient` with `client_id='architect'` |
+| `test_bootstrap_architecture_default_task_includes_repo` | Default task string contains the repo URL |
+| `test_bootstrap_architecture_repo_passed_to_agent` | Repo URL forwarded to `ArchitectAgent` constructor, not gateway URL |
+
 ### Phase 3 — Specialised Agent Nodes (6 tests)
 
 | Test | What it proves |
@@ -230,6 +250,7 @@ Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`,
 | `test_route_to_architect` | task_type='design' → architect node |
 | `test_route_to_reviewer` | task_type='review' → code_reviewer node |
 | `test_route_to_sre` | task_type='incident' → sre node |
+| `test_route_to_architect` (bootstrap) | task_type='bootstrap' → architect node, gate skipped |
 | `test_error_handler_on_gateway_403` | 403 from gateway triggers error_handler node |
 | `test_formula_lookup_hit` | `lookup()` matches formula by task description |
 | `test_formula_lookup_miss` | `lookup()` returns None for unmatched task |
@@ -381,6 +402,40 @@ MCPJungle exposes itself as an MCP server. Add to Claude Code settings:
 Claude Code will see all registered tools including `review_server__review_diff`.
 
 > Note: Claude Code connects directly to MCPJungle at `:8080/mcp`. The governance layer at `:8090` is for agent-to-agent tool calls — it handles auth, policy, and audit before forwarding to MCPJungle.
+
+**Long-running tools (e.g. `bootstrap_architecture`)** exceed Claude Code's default 60s MCP timeout. Launch with an extended timeout:
+
+```bash
+MCP_TOOL_TIMEOUT=300000 claude   # 5 minutes
+```
+
+### Available MCP tools
+
+All tools are visible in Claude Code as `mcp__ai-harness__<mcpjungle-name>`.
+
+| Short name | MCPJungle name | Role | What it does |
+|---|---|---|---|
+| `review_diff` | `review_server__review_diff` | code_reviewer | Full code review via `CodeReviewerAgent` — lints + analyses diff, returns structured findings |
+| `git_diff` | `diff_proxy__git_diff` | code_reviewer | Get a diff: passthrough text, GitHub PR (`pr_number`+`github_repo`), or local git (`repo_path`+base/head refs) |
+| `run_linter` | `linter_stub__run_linter` | code_reviewer | Semgrep lint on diff additions; rules in `stub_servers/semgrep-rules.yml` |
+| `coverage_report` | `linter_stub__coverage_report` | code_reviewer | Synthetic per-file coverage data (stub — real coverage not wired) |
+| `repo_conventions_read` | `github_mcp__repo_conventions_read` | code_reviewer | Fetch `CONTRIBUTING.md`, coding standards, `.editorconfig` from a GitHub repo |
+| `codebase_search` | `architect_stub__codebase_search` | architect | Search codebase for file/symbol patterns via GitHub API |
+| `adr_read` | `architect_stub__adr_read` | architect | Read ADRs from `docs/adr/` in a GitHub repo |
+| `architecture_review` | `review_server__architecture_review` | architect | Four-phase architectural analysis (recon → flow → abstraction → synthesis) |
+| `bootstrap_architecture` | `review_server__bootstrap_architecture` | architect | Generate an `ARCHITECTURE.md` via four-phase analysis + doc render; needs `MCP_TOOL_TIMEOUT=300000` |
+| `execute_architecture_check` | `review_server__execute_architecture_check` | architect | Run architecture invariant checks (stub — sandbox not yet wired) |
+| `code_health_score` | `review_server__code_health_score` | architect | Radon cyclomatic complexity per file from GitHub API; returns 0–10 scores sorted worst-first |
+| `codebase_hotspots` | `review_server__codebase_hotspots` | architect | Rank files in a repo by complexity hotspot risk; optional language filter |
+| `logical_coupling` | `review_server__logical_coupling` | architect | Find files that historically co-change with a given file (GitHub commits API) |
+| `issue_create` | `github_mcp__issue_create` | architect | File a GitHub issue with title, body, and optional labels |
+| `runbook_read` | `sre_stub__runbook_read` | sre | Semantic pgvector search over runbooks; seed with `make seed-runbooks` |
+| `log_search` | `sre_stub__log_search` | sre | Semantic pgvector search over log events; seed with `make seed-logs` |
+| `observability_query` | `sre_stub__observability_query` | sre | Observability query (stub) |
+| `shell_exec` | `sre_stub__shell_exec` | sre | Execute a shell command; requires a scoped `human_approval_token` |
+| `skill_search` | `sre_stub__skill_search` | sre | TF-IDF lookup of proven remediation formulas from Dolt |
+
+OPA enforces role boundaries: agents only receive a token for their own role and are blocked from cross-role tools at the policy layer.
 
 ## Project layout
 

@@ -1,7 +1,7 @@
+import asyncio
 import pytest
 import jsonschema
 from harness_agents.types import REVIEWER_OUTPUT_SCHEMA
-from harness_gateway.client import GatewayClient
 
 SAMPLE_DIFF = """
 diff --git a/auth.py b/auth.py
@@ -16,23 +16,36 @@ index 1a2b3c4..5d6e7f8 100644
 """
 
 
+@pytest.fixture(scope="module")
+async def review_result(module_gateway_client):
+    """Single LLM call shared by all three tests to avoid back-to-back rate limits.
+
+    Skips the module if the provider returns a transient error (503 rate limit,
+    provider_error, etc.) so a flaky upstream doesn't block the suite.
+    """
+    for attempt in range(3):
+        result = await module_gateway_client.call_tool("review_diff", {"diff_text": SAMPLE_DIFF})
+        if isinstance(result, dict):
+            return result
+        if attempt < 2:
+            await asyncio.sleep(10 * (attempt + 1))
+    pytest.skip(f"review_diff returned a provider error after 3 attempts: {str(result)[:120]}")
+
+
 @pytest.mark.integration
-async def test_review_diff_tool_is_reachable(gateway_client):
+async def test_review_diff_tool_is_reachable(review_result):
     """review_diff is registered in MCPJungle and callable."""
-    result = await gateway_client.call_tool("review_diff", {"diff_text": SAMPLE_DIFF})
-    assert result is not None
+    assert review_result is not None
 
 
 @pytest.mark.integration
-async def test_review_diff_returns_valid_schema(gateway_client):
+async def test_review_diff_returns_valid_schema(review_result):
     """review_diff output satisfies REVIEWER_OUTPUT_SCHEMA."""
-    result = await gateway_client.call_tool("review_diff", {"diff_text": SAMPLE_DIFF})
-    jsonschema.validate(result, REVIEWER_OUTPUT_SCHEMA)
+    jsonschema.validate(review_result, REVIEWER_OUTPUT_SCHEMA)
 
 
 @pytest.mark.integration
-async def test_review_diff_catches_credential_leak(gateway_client):
+async def test_review_diff_catches_credential_leak(review_result):
     """review_diff detects the password logging vulnerability and fails the diff."""
-    result = await gateway_client.call_tool("review_diff", {"diff_text": SAMPLE_DIFF})
-    assert result["verdict"] == "fail"
-    assert any(f["severity"] == "CRITICAL" for f in result["findings"])
+    assert review_result["verdict"] == "fail"
+    assert any(f["severity"] == "CRITICAL" for f in review_result["findings"])

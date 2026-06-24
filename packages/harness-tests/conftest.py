@@ -24,6 +24,17 @@ def gateway_client():
     )
 
 
+@pytest.fixture(scope="module")
+def module_gateway_client():
+    """Module-scoped gateway client for tests that share a single LLM call."""
+    return GatewayClient(
+        gateway_url=MCPJUNGLE_URL,
+        governance_url=GOVERNANCE_URL,
+        client_id="code-reviewer",
+        client_secret=os.environ["CODE_REVIEWER_SECRET"],
+    )
+
+
 from harness_agents.llm import build_llm_from_env
 
 @pytest.fixture
