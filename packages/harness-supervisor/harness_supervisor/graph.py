@@ -39,6 +39,15 @@ DOLT_CONN = dict(
 )
 
 
+def _route_after_architect(state: HarnessState) -> str:
+    """Bootstrap tasks skip the gate; design tasks go through it."""
+    if state.get("error"):
+        return "error_handler"
+    if state.get("task_type") == "bootstrap":
+        return "synthesise"
+    return "architectural_gate"
+
+
 def _should_propose_formula(state: HarnessState) -> str:
     """After agent run: if no formula was used and no error, offer to propose one."""
     if state.get("error"):
@@ -121,7 +130,9 @@ def _build_edges(builder: StateGraph):
         "architect": "architect", "code_reviewer": "code_reviewer", "sre": "sre",
     })
 
-    builder.add_edge("architect", "architectural_gate")
+    builder.add_conditional_edges("architect", _route_after_architect, {
+        "architectural_gate": "architectural_gate", "synthesise": "synthesise", "error_handler": "error_handler",
+    })
     builder.add_conditional_edges("architectural_gate", route_after_gate, {
         "synthesise": "synthesise", "human_gate": "human_gate", "error_handler": "error_handler",
     })

@@ -104,6 +104,23 @@ class DynamicSREAgent:
             return None
         return self.formula_store.lookup(self.name, task)
 
+    async def _execute_formula_steps(self, formula, messages: list[dict]) -> None:
+        """Call each non-LLM formula step directly and append results to messages."""
+        for step in formula.steps:
+            action = step.get("action", "")
+            if action == "llm_synthesise" or action not in self.allowed_tools:
+                continue
+            params = step.get("params", {})
+            tool_raw = json.dumps({"action": "call_tool", "tool": action, "params": params})
+            try:
+                result = await self.gateway.call_tool(action, params)
+            except ToolAccessDenied:
+                result = {"error": f"access denied for tool '{action}'"}
+            except Exception as e:
+                result = {"error": str(e)}
+            messages.append({"role": "assistant", "content": tool_raw})
+            messages.append({"role": "user", "content": f"Tool result:\n{json.dumps(result, indent=2)}"})
+
     async def _load_memory(self, task: str) -> list:
         if not self.memory:
             return []
@@ -189,7 +206,7 @@ class DynamicSREAgent:
         token_usage = self._init_token_usage(state)
         token_budget = state.get("token_budget")
 
-        formula = self._load_formula(task)
+        formula = state.get("formula") or self._load_formula(task)
         memory_context = await self._load_memory(task)
         formula_block, context_block = self._build_prompt_blocks(task, formula, memory_context)
 
@@ -198,6 +215,9 @@ class DynamicSREAgent:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Incident: {task}{formula_block}{context_block}\n\nBegin your investigation."},
         ]
+
+        if formula:
+            await self._execute_formula_steps(formula, messages)
 
         try:
             return await self._react_loop(messages, state, token_usage, token_budget)

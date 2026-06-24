@@ -18,9 +18,10 @@ _PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", Path(__file__).resolve().paren
 _CLASSIFY_SYSTEM = (_PROMPTS_DIR / "classify.md").read_text()
 _SYNTHESISE_SYSTEM = (_PROMPTS_DIR / "synthesise.md").read_text()
 
-_TASK_TYPES = ("design", "review", "incident")
+_TASK_TYPES = ("design", "review", "incident", "bootstrap")
 
 _KEYWORDS: dict[str, tuple] = {
+    "bootstrap": ("bootstrap", "generate architecture", "architecture.md", "document the architecture"),
     "design":   ("design", "architect", "adr", "schema", "blueprint"),
     "review":   ("review", "diff", "pr", "pull request", "lint"),
     "incident": ("alert", "incident", "spike", "latency", "error", "p1", "p2", "p3", "p4", "fired"),
@@ -69,7 +70,7 @@ async def classify_node(state: HarnessState, llm_provider: LLMProvider) -> dict:
 
 def route_node(state: dict) -> str:
     """Conditional edge selector — returns the next node name based on task_type."""
-    mapping = {"design": "architect", "review": "code_reviewer", "incident": "sre"}
+    mapping = {"design": "architect", "bootstrap": "architect", "review": "code_reviewer", "incident": "sre"}
     return mapping.get(state.get("task_type", "review"), "code_reviewer")
 
 
@@ -84,7 +85,7 @@ async def route_span_node(state: HarnessState) -> dict:
 async def formula_lookup_node(state: HarnessState, formula_store) -> dict:
     tracer = trace.get_tracer(__name__)
     with tracer.start_as_current_span("formula_lookup"):
-        task_type_to_role = {"design": "architect", "review": "code_reviewer", "incident": "sre"}
+        task_type_to_role = {"design": "architect", "bootstrap": "architect", "review": "code_reviewer", "incident": "sre"}
         role = task_type_to_role.get(state.get("task_type", ""), "")
         formula = formula_store.lookup(role, state["task"]) if role else None
         if formula:
@@ -145,6 +146,7 @@ async def run_agent_node(state: HarnessState, agent, formula=None) -> dict:
             "error": None,
             "human_approval_token": state.get("human_approval_token"),
             "memory_context": state.get("memory_context"),
+            "formula": formula,
         }
         result = await agent.run(agent_state)
         agent_output = result.get("agent_output") or {}
@@ -197,7 +199,7 @@ async def propose_formula_node(state: HarnessState, formula_store) -> dict:
     tracer = trace.get_tracer(__name__)
     with tracer.start_as_current_span("propose_formula"):
         from harness_memory.models import Formula
-        task_type_to_role = {"design": "architect", "review": "code_reviewer", "incident": "sre"}
+        task_type_to_role = {"design": "architect", "bootstrap": "architect", "review": "code_reviewer", "incident": "sre"}
         role = task_type_to_role.get(state.get("task_type", ""), "sre")
         task_slug = state["task"][:30].lower().replace(" ", "-").replace(":", "")
         draft_id = f"draft:{role}:{task_slug}"

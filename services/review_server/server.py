@@ -616,6 +616,91 @@ async def architecture_review(
 
 
 # ---------------------------------------------------------------------------
+# MCP tool: bootstrap_architecture
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def bootstrap_architecture(
+    repo: str,
+    task: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    num_ctx: int | None = None,
+    num_predict: int | None = None,
+    host: str | None = None,
+) -> dict:
+    """Generate an ARCHITECTURE.md document via four-phase codebase analysis.
+
+    Runs reconnaissance, flow trace, abstraction analysis, and synthesis against
+    the target GitHub repository, then renders the results as structured markdown.
+    Returns the document plus the synthesis findings list.
+
+    Args:
+        repo: GitHub URL (e.g. ``"https://github.com/owner/repo"``).
+        task: Optional analysis focus. Default: ``"Bootstrap ARCHITECTURE.md for <repo>"``.
+        provider: Optional LLM provider override (``ollama``, ``gemini``, ``openrouter``).
+        model: Override the model name.
+        temperature: Override temperature.
+        max_tokens: Override max output tokens.
+        num_ctx: Override context window (Ollama only).
+        num_predict: Override num_predict (Ollama only).
+        host: Override Ollama host URL.
+    """
+    import uuid
+    from harness_agents.architect import ArchitectAgent
+    from harness_agents.types import AgentState
+
+    resolved_provider = (
+        provider
+        or _CONFIG.get("llm_provider")
+        or os.environ.get("LLM_PROVIDER", "ollama")
+    ).lower()
+    llm = MonitoredLLMProvider(
+        _build_llm_provider(
+            resolved_provider,
+            host=host,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            num_ctx=num_ctx,
+            num_predict=num_predict,
+        ),
+        agent_role="architect",
+    )
+    gateway = GatewayClient(
+        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://mcpjungle:8080"),
+        governance_url=os.environ.get("GOVERNANCE_URL"),
+        client_id="architect",
+        client_secret=os.environ.get("ARCHITECT_SECRET", ""),
+    )
+    agent = ArchitectAgent(gateway=gateway, llm_provider=llm, repo=repo)
+    state: AgentState = {
+        "task": task or f"Bootstrap ARCHITECTURE.md for {repo}",
+        "task_type": "bootstrap",
+        "diff": "",
+        "thread_id": str(uuid.uuid4()),
+        "agent_output": None,
+        "requires_human_approval": False,
+        "error": None,
+        "human_approval_token": None,
+        "memory_context": None,
+    }
+    result = await agent.run(state)
+    if result.get("error"):
+        raise RuntimeError(result["error"].get("reason", "bootstrap failed"))
+    output = result.get("agent_output") or {}
+    return {
+        "architecture_md": output.get("architecture_md", ""),
+        "summary": output.get("summary", ""),
+        "findings": output.get("findings", []),
+        "recommendations": output.get("recommendations", []),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Architecture review HTTP endpoint (no MCP timeout limit)
 # ---------------------------------------------------------------------------
 

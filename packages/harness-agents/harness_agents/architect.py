@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 _PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", Path(__file__).resolve().parents[3] / "prompts"))
 SYSTEM_PROMPT = (_PROMPTS_DIR / "architect.md").read_text()
+_BOOTSTRAP_PROMPT = (_PROMPTS_DIR / "architecture_bootstrap.md").read_text()
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 MAX_ITERATIONS = 3
@@ -60,10 +61,11 @@ class ArchitectAgent:
     allowed_tools = ["codebase_search", "adr_read", "code_health_score", "codebase_hotspots", "logical_coupling", "issue_create"]
     memory_namespace = "architect"
 
-    def __init__(self, gateway: GatewayClient, llm_provider: LLMProvider, memory_store=None):
+    def __init__(self, gateway: GatewayClient, llm_provider: LLMProvider, memory_store=None, repo: str = ""):
         self.gateway = gateway
         self.llm = llm_provider
         self.memory = memory_store
+        self.repo = repo
 
     async def _call_tool(self, tool_name: str, params: dict) -> dict | None:
         try:
@@ -98,9 +100,9 @@ class ArchitectAgent:
 
     async def _phase_reconnaissance(self, task: str, phase_results: dict) -> dict | None:
         logger.info("phase: reconnaissance")
-        tree = await self._call_tool("codebase_search", {"query": f"directory structure and dependencies for: {task}", "repo": self.gateway.gateway_url, "top_k": 10})
+        tree = await self._call_tool("codebase_search", {"query": f"directory structure and dependencies for: {task}", "repo": self.repo, "top_k": 10})
         tree_data = tree or {"result": "no data"}
-        hotspots = await self._call_tool("codebase_hotspots", {"repo": self.gateway.gateway_url, "top_n": 10})
+        hotspots = await self._call_tool("codebase_hotspots", {"repo": self.repo, "top_n": 10})
         hotspot_data = hotspots or {"result": "no data"}
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -117,7 +119,7 @@ class ArchitectAgent:
         logger.info("phase: flow_trace")
         recon = phase_results.get("reconnaissance") or {}
         critical_path = recon.get("critical_path_suggestion", task)
-        files = await self._call_tool("codebase_search", {"query": f"entry point, service layer, data access for: {critical_path}", "repo": self.gateway.gateway_url, "top_k": 10})
+        files = await self._call_tool("codebase_search", {"query": f"entry point, service layer, data access for: {critical_path}", "repo": self.repo, "top_k": 10})
         files_data = files or {"result": "no data"}
         context = {k: v for k, v in recon.items() if k != "phase"}
         messages = [
@@ -146,7 +148,7 @@ class ArchitectAgent:
         query = "interfaces, abstractions, and their implementations"
         if interfaces_to_examine:
             query = " and ".join(interfaces_to_examine[:5])
-        abstractions = await self._call_tool("codebase_search", {"query": query, "repo": self.gateway.gateway_url, "top_k": 10})
+        abstractions = await self._call_tool("codebase_search", {"query": query, "repo": self.repo, "top_k": 10})
         abs_data = abstractions or {"result": "no data"}
         context = await self._build_context(phase_results, "reconnaissance", "flow_trace")
         messages = [
@@ -162,7 +164,7 @@ class ArchitectAgent:
 
     async def _phase_synthesis(self, task: str, phase_results: dict) -> dict | None:
         logger.info("phase: synthesis")
-        adrs = await self._call_tool("adr_read", {"query": task, "repo": self.gateway.gateway_url, "top_k": 5})
+        adrs = await self._call_tool("adr_read", {"query": task, "repo": self.repo, "top_k": 5})
         adr_data = adrs or {"result": "no data"}
         context = await self._build_context(phase_results, *PHASES)
         messages = [
@@ -175,6 +177,20 @@ class ArchitectAgent:
             })},
         ]
         return await self._llm_retry(messages, validate=_validate_synthesis)
+
+    async def _phase_bootstrap_doc(self, task: str, phase_results: dict) -> str | None:
+        logger.info("phase: bootstrap_doc")
+        context = await self._build_context(phase_results, *PHASES)
+        messages = [
+            {"role": "system", "content": _BOOTSTRAP_PROMPT},
+            {"role": "user", "content": json.dumps({"task": task, "phase_results": context})},
+        ]
+        try:
+            response = await self.llm.chat(messages=messages)
+        except Exception as e:
+            logger.warning("bootstrap_doc LLM call failed: %s", e)
+            return None
+        return _clean_raw(response.content) or None
 
     async def _load_memory_context(self, task: str) -> list:
         if not self.memory:
@@ -214,6 +230,7 @@ class ArchitectAgent:
 
     async def run(self, state: AgentState) -> AgentState:
         task = state["task"]
+        task_type = state.get("task_type", "")
 
         memory_context = await self._load_memory_context(task)
         token_usage = self._init_token_usage(state)
@@ -226,6 +243,12 @@ class ArchitectAgent:
             return {**state, "token_usage": token_usage, "error": {"code": "invalid_output", "reason": "architecture review synthesis failed — no valid JSON produced"}}
 
         final_output["_phases"] = self._filter_phase_results(phase_results)
+
+        if task_type == "bootstrap":
+            architecture_md = await self._phase_bootstrap_doc(task, phase_results)
+            if architecture_md:
+                final_output["architecture_md"] = architecture_md
+
         await self._save_to_memory(final_output, task)
 
         return {**state, "agent_output": final_output, "token_usage": token_usage}

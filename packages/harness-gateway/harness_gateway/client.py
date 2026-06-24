@@ -22,6 +22,7 @@ TOOL_NAME_MAP = {
     "adr_read": "architect_stub__adr_read",
     "issue_create": "github_mcp__issue_create",
     "architecture_review": "review_server__architecture_review",
+    "bootstrap_architecture": "review_server__bootstrap_architecture",
     "execute_architecture_check": "review_server__execute_architecture_check",
     "code_health_score": "review_server__code_health_score",
     "codebase_hotspots": "review_server__codebase_hotspots",

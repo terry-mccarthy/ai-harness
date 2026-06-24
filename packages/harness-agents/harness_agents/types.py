@@ -3,6 +3,7 @@ from typing import TypedDict
 
 class AgentState(TypedDict, total=False):
     task: str
+    task_type: str
     diff: str
     thread_id: str
     agent_output: dict | None
@@ -12,6 +13,7 @@ class AgentState(TypedDict, total=False):
     memory_context: list | None
     token_usage: dict           # {"prompt_tokens": int, "completion_tokens": int}
     token_budget: int | None    # None = unlimited; agent aborts retries when exceeded
+    formula: object | None      # pre-loaded Formula injected by run_agent_node
 
 
 # Matches the Phase-4 synthesis output produced by prompts/architect.md.

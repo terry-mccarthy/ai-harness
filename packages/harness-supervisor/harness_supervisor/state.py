@@ -17,7 +17,7 @@ class GateSignalContract(TypedDict):
 class HarnessState(TypedDict):
     task:                    str
     diff:                    str
-    task_type:               str | None      # 'design' | 'review' | 'incident'
+    task_type:               str | None      # 'design' | 'review' | 'incident' | 'bootstrap'
     formula_id:              str | None
     formula_instance_id:     str | None
     active_agent:            str | None
