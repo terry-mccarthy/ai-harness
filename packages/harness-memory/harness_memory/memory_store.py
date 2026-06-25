@@ -98,6 +98,7 @@ class PostgresMemoryStore:
         *,
         memory_type: str = "episodic",
         _expires_at: datetime | None = None,
+        _embedding_text: str | None = None,
     ) -> None:
         if _expires_at is not None:
             expires_at = _expires_at
@@ -106,7 +107,7 @@ class PostgresMemoryStore:
         else:
             expires_at = None
 
-        embedding = await self._embed(json.dumps(value))
+        embedding = await self._embed(_embedding_text if _embedding_text is not None else json.dumps(value))
 
         async with self._pool.acquire() as conn:
             await conn.execute(

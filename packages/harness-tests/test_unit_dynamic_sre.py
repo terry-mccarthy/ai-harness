@@ -281,10 +281,15 @@ async def test_memory_context_injected_into_opening_message():
     from harness_agents.dynamic_sre import DynamicSREAgent
 
     class _MockMemory:
-        async def search(self, namespace, query, top_k=3):
-            return [{"key": "incident:abc123", "value": {"likely_cause": "past OOM"}}]
+        async def read(self, namespace, key):
+            return None
 
-        async def write(self, namespace, key, value):
+        async def search(self, namespace, query, top_k=3):
+            if namespace == "sre":
+                return [{"key": "incident:abc123", "value": {"likely_cause": "past OOM"}, "score": 0.9}]
+            return []
+
+        async def write(self, namespace, key, value, **_):
             pass
 
     llm = _Turns(_respond(_VALID_REPORT))
@@ -306,10 +311,13 @@ async def test_resolved_report_written_to_memory():
     written: list[dict] = []
 
     class _MockMemory:
+        async def read(self, namespace, key):
+            return None
+
         async def search(self, namespace, query, top_k=3):
             return []
 
-        async def write(self, namespace, key, value):
+        async def write(self, namespace, key, value, **_):
             written.append({"namespace": namespace, "key": key, "value": value})
 
     llm = _Turns(_respond(_VALID_REPORT))
@@ -318,10 +326,10 @@ async def test_resolved_report_written_to_memory():
 
     await DynamicSREAgent(gateway=gw, llm_provider=llm, memory_store=_MockMemory()).run(state)
 
-    assert len(written) == 1
-    assert written[0]["namespace"] == "sre"
-    assert written[0]["key"].startswith("incident:")
-    assert written[0]["value"]["severity"] == "P2"
+    sre_writes = [w for w in written if w["namespace"] == "sre"]
+    assert len(sre_writes) == 1
+    assert sre_writes[0]["key"].startswith("incident:")
+    assert sre_writes[0]["value"]["severity"] == "P2"
 
 
 # ---------------------------------------------------------------------------

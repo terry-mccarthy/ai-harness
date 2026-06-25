@@ -104,30 +104,70 @@ Nothing may depend on `harness-supervisor` except `harness-tests`.
 
 ## Request Flow
 
-```
-Claude Code (MCP client)
-  │  :8080/mcp  (streamable-HTTP)
-  ▼
-MCPJungle  :8080
-  │
-  │  review_server__review_diff
-  ▼
-review-server  :9003  (FastMCP)
-  GatewayClient
+The sequence below shows an SRE incident task end-to-end — the richest path through the system, covering the semantic cache, formula/memory retrieval, the ReAct tool-call loop with governance, and the write-back on success. The code-reviewer and architect paths are structurally identical from the governance sidecar onwards but omit the cache lookup.
 
-    │  ① POST /oauth/token  ────────────────→  governance :8090  (sidecar) [HARD]
-    │                                           ├── JWT (RS256, 15-min)
-    │  ② POST /check (Bearer JWT, tool_name) ─→  governance :8090
-    │                                           └── → OPA :8181
-    │                                                 ├── 200 allow
-    │                                                 └── 403 deny  →  ToolAccessDenied
-    │
-    │  (if allowed)
-    ├── ③ POST /api/v0/tools/invoke (direct) ─→  MCPJungle :8080  /  ContextForge :4444
-    │                                            └── → MCP server (stub or real)
-    │
-    └── ④ async POST /audit ────────────────→  governance :8090  →  Dolt :3306
-                                                                    (INSERT + DOLT_COMMIT)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as Client<br/>(Claude Code / script)
+    participant GOV as Governance :8090
+    participant OPA as OPA :8181
+    participant MJ as MCPJungle :8080
+    participant Agent as DynamicSREAgent
+    participant LLM as LLM Provider<br/>(Ollama / Gemini / OpenRouter)
+    participant MEM as PostgresMemoryStore<br/>(Redis + pgvector)
+    participant FS as DoltFormulaStore
+    participant TOOL as sre-stub :9005
+    participant Dolt as Dolt :3306
+
+    Client->>Agent: run(state {task, thread_id})
+
+    rect rgb(235,245,255)
+        Note over Agent,MEM: Cache lookup — before any LLM call
+        Agent->>MEM: read("cache", "cache:{hash(task)}")
+        MEM-->>Agent: Redis exact-key hit / miss
+        opt Redis miss
+            Agent->>MEM: search("cache", task, top_k=1)
+            MEM-->>Agent: [{value, score}]
+        end
+    end
+
+    alt score ≥ cache_threshold (cache hit)
+        Agent-->>Client: {cache_hit: true, agent_output: …}
+    else cache miss — run ReAct loop
+        Agent->>FS: lookup("sre", task)
+        FS-->>Agent: Formula | None
+        Agent->>MEM: search("sre", task, top_k=3)
+        MEM-->>Agent: past incident summaries
+
+        loop ReAct loop (≤ 16 turns)
+            Agent->>LLM: chat(messages)
+            LLM-->>Agent: {action: "call_tool" | "respond"}
+
+            opt action == call_tool
+                Agent->>GOV: POST /oauth/token
+                GOV-->>Agent: JWT (RS256, 15 min TTL)
+                Agent->>GOV: POST /check {Bearer JWT, tool_name}
+                GOV->>OPA: POST /v1/data/harness/allow
+                OPA-->>GOV: {allow: true | false}
+                alt allowed
+                    Agent->>MJ: POST /api/v0/tools/invoke
+                    MJ->>TOOL: forward
+                    TOOL-->>Agent: tool result
+                    Agent-->>GOV: POST /audit (async, fire-and-forget)
+                    GOV->>Dolt: INSERT audit_log + DOLT_COMMIT
+                else denied (403)
+                    Agent->>Agent: feed ToolAccessDenied back to LLM
+                end
+            end
+        end
+
+        Note over Agent,MEM: Write-back on successful completion
+        Agent->>MEM: write("sre", "incident:{id}", report)
+        Agent->>MEM: write("cache", "cache:{hash}", {task, agent_output},<br/>_embedding_text=task, ttl_hours=24)
+        Agent->>GOV: POST /metrics (token usage, best-effort)
+        Agent-->>Client: {agent_output: …, token_usage: …}
+    end
 ```
 
 Every tool call the agent makes produces:
@@ -157,6 +197,69 @@ Every tool call the agent makes produces:
 
 ---
 
+## Container View (C4)
+
+```mermaid
+C4Container
+    title AI Harness — Container Diagram
+
+    Person(user, "Developer / SRE", "Submits tasks via Claude Code or programmatic client")
+
+    System_Boundary(harness, "AI Harness") {
+        Container(cc, "Claude Code", "MCP Client", "Connects to MCPJungle as an MCP server; exposes all registered tools to the LLM")
+
+        Container_Boundary(gw, "Gateway") {
+            Container(mcpjungle, "MCPJungle", "MCP Proxy :8080", "Tool registry; routes /api/v0/tools/invoke to registered MCP servers; exposes /mcp for Claude Code")
+        }
+
+        Container_Boundary(agents, "Agent Servers") {
+            Container(review_server, "review-server", "FastMCP :9003", "CodeReviewerAgent + ArchitectAgent; exposes review_diff, architecture_review, bootstrap_architecture, execute_architecture_check")
+            Container(sre_stub, "sre-stub", "FastMCP :9005", "SRE tool server; runbook_read + log_search search pgvector; skill_search queries Dolt; DynamicSREAgent invoked from harness-supervisor or scripts")
+            Container(github_mcp, "github-mcp", "FastMCP :9010", "Read-only GitHub API tools: codebase_search, adr_read, issue_create")
+            Container(diff_proxy, "diff-proxy", "FastMCP :9001", "git_diff against baked sample repo or GitHub PR API")
+            Container(linter_stub, "linter-stub", "FastMCP :9002", "semgrep run_linter using rules in semgrep-rules.yml")
+        }
+
+        Container_Boundary(gov, "Governance Sidecar [HARD]") {
+            Container(governance, "Governance", "FastAPI :8090", "OAuth 2.1 RS256 JWT issuance, OPA policy check (/check), async Dolt audit (/audit), Prometheus /metrics")
+            Container(opa, "OPA", "Policy Engine :8181", "Evaluates policies/harness.rego; allow/deny keyed on (role, tool_name)")
+        }
+
+        Container_Boundary(data, "Data") {
+            ContainerDb(postgres, "PostgreSQL + pgvector", ":5432", "LangGraph checkpoints; memory_items table (namespaces: sre, cache, runbooks, logs, architect); MCPJungle state")
+            ContainerDb(redis, "Redis", ":6379", "Hot-read cache for PostgresMemoryStore.read(); invalidated on every write")
+            ContainerDb(dolt, "Dolt", ":3306", "Git-versioned audit_log; skills / candidates / episodes tables; formula history queryable with dolt log + dolt diff")
+            Container(ollama, "Ollama", ":11434", "LLM chat (qwen2.5-coder, qwen3, etc.); nomic-embed-text (768 dims) for pgvector embeddings")
+        }
+
+        Container_Boundary(obs, "Observability (monitoring profile)") {
+            Container(prometheus, "Prometheus", ":9090", "Scrapes governance /metrics")
+            Container(grafana, "Grafana", ":3000", "Cost-per-agent-role dashboard (pre-provisioned)")
+        }
+    }
+
+    Rel(user, cc, "submits task")
+    Rel(cc, mcpjungle, "MCP over HTTP :8080/mcp")
+    Rel(mcpjungle, review_server, "review_diff · architecture_review · bootstrap_architecture")
+    Rel(mcpjungle, sre_stub, "runbook_read · log_search · skill_search")
+    Rel(mcpjungle, github_mcp, "codebase_search · adr_read · issue_create")
+    Rel(mcpjungle, diff_proxy, "git_diff")
+    Rel(mcpjungle, linter_stub, "run_linter")
+    Rel(review_server, governance, "POST /oauth/token · /check · /audit (per tool call)")
+    Rel(sre_stub, governance, "POST /oauth/token · /check · /audit (per tool call)")
+    Rel(governance, opa, "POST /v1/data/harness/allow")
+    Rel(governance, dolt, "INSERT audit_log + DOLT_COMMIT")
+    Rel(review_server, ollama, "LLM chat + nomic-embed-text embeddings")
+    Rel(sre_stub, postgres, "pgvector search — runbooks + logs namespaces")
+    Rel(sre_stub, dolt, "skill lookup (TF-IDF on skills table)")
+    Rel(review_server, postgres, "PostgresMemoryStore (sre, cache namespaces) + LangGraph AsyncPostgresSaver")
+    Rel(review_server, redis, "read-through cache (hot keys)")
+    Rel(prometheus, governance, "GET /metrics (scrape)")
+    Rel(grafana, prometheus, "PromQL queries")
+```
+
+---
+
 ## Python Packages (Monorepo)
 
 ```
@@ -165,7 +268,7 @@ packages/
   harness-agents/    — CodeReviewerAgent, DynamicSREAgent, ArchitectAgent, AgentState TypedDict, output schemas, build_llm_from_env() factory
   harness-memory/    — PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker, runbook_retriever, log_retriever, skill_retriever
   harness-supervisor/ — LangGraph supervisor orchestration, graph nodes, approval tokens
-  harness-tests/     — pytest integration + unit tests (440 total)
+  harness-tests/     — pytest integration + unit tests (486 total)
 
 services/
   governance/        — OAuth 2.1 + OPA policy check + async Dolt audit + /metrics (rate limiting delegated to gateway)
@@ -296,13 +399,16 @@ from a raw psycopg connection will fail on `CREATE INDEX CONCURRENTLY inside a t
 `PostgresMemoryStore` (`packages/harness-memory/harness_memory/memory_store.py`):
 
 - **Write path**: stores value + Ollama embedding in `memory_items` (PostgreSQL); invalidates
-  Redis key.
+  Redis key. Pass `_embedding_text=<str>` to embed a different string than `json.dumps(value)`
+  — used by the SRE cache so similarity searches compare task strings, not full report JSON.
 - **Read path**: checks Redis first (cache hit → increments `cache_hits`); on miss, reads
   PostgreSQL and populates Redis with a 1-hour TTL.
 - **Semantic search**: pgvector `<=>` cosine distance on stored embeddings; returns items
   ordered by relevance.
 - **Episodic vs semantic**: agents write `memory_type='episodic'`; `ConsolidationWorker`
   clusters unconsolidated episodes and promotes clusters to `memory_type='semantic'`.
+- **Cache namespace**: `DynamicSREAgent` uses a dedicated `"cache"` namespace (separate from
+  `"sre"`, `"runbooks"`, `"logs"`) for the semantic response cache. Entries expire via `expires_at`.
 
 Embedding dimension is auto-detected at `setup()` time by calling the configured Ollama
 model. If the table already exists with a different dimension, it is dropped and recreated.
@@ -703,3 +809,4 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0040 | This Decision Log table is the canonical ADR index; `docs/adr/` holds optional long-form files for decisions that need depth, sharing the same number space — previously only ADR-0036 had a file with no stated relationship between the two stores, which let a numbering collision slip in; convention documented in `docs/adr/README.md` and the Decision Log header | Accepted |
 | 0041 | `bootstrap` fourth task type — routes to architect, runs the full four-phase analysis, then adds a fifth `_phase_bootstrap_doc` phase that converts phase results into a markdown `ARCHITECTURE.md`; stored in `agent_output["architecture_md"]`; bypasses the architectural gate (gate validates design proposals, not doc generation); `_route_after_architect` replaces the former hard `architect → architectural_gate` edge with a conditional that checks `task_type` | Accepted |
 | 0042 | `bootstrap_architecture` exposed as `review_server__bootstrap_architecture` MCP tool — calls `ArchitectAgent` directly (no supervisor graph in Docker, avoids adding langgraph/harness-supervisor/harness-memory to the image); uses `architect` OAuth credentials; fixes latent bug where `ArchitectAgent` passed `gateway.gateway_url` (MCPJungle URL) as the GitHub `repo` param to `codebase_search`/`adr_read` — now takes `repo: str = ""` in the constructor and uses `self.repo` | Accepted |
+| 0043 | Semantic response cache on `DynamicSREAgent` uses `PostgresMemoryStore("cache" namespace)` with two-tier lookup: exact key via `read()` (Redis O(1) for identical tasks) + pgvector `search()` for near-identical tasks (threshold 0.92). `_embedding_text=task` passed to `write()` so the stored vector represents the task string, not the full report JSON — without this, noisy report content dilutes similarity and near-identical tasks miss the threshold. Cache writes only on successful completion; `force_refresh: bool` in `AgentState` bypasses both lookup and write per-request. | Accepted |

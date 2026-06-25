@@ -367,6 +367,26 @@ When `formula_store` is provided, `_load_formula(task)` calls `store.lookup(self
 
 `make demo-sre` wires both stores when env vars are set; shows a capability banner on startup.
 
+## DynamicSREAgent — semantic response cache
+
+`DynamicSREAgent(gateway, llm_provider, memory_store=None, formula_store=None, cache_threshold=0.92, cache_ttl_seconds=86400)`.
+
+`run()` calls `_cache_lookup(task)` before `_load_formula` / `_load_memory`. A hit skips the entire ReAct loop (no LLM calls, no tool invocations, no `_report_llm_usage` call) and returns `{**cached_state, "cache_hit": True}`.
+
+**Two-tier lookup in `_cache_lookup`:**
+1. Exact key match via `memory.read("cache", f"cache:{hash(task)}")` — Redis-accelerated, O(1) for repeated identical tasks.
+2. Semantic match via `memory.search("cache", task, top_k=1)` — pgvector cosine similarity for near-identical tasks; hit only if score ≥ `cache_threshold`.
+
+**`_cache_write` gotcha — use `_embedding_text=task`:** `PostgresMemoryStore.write()` embeds `json.dumps(value)` by default. A cache entry stores `{"task": task, "agent_output": ...}` and passing `_embedding_text=task` makes the pgvector embedding represent the task string only, not the noisy report JSON. Without this, semantic search scores against the full value and near-identical tasks may not reach the threshold.
+
+**`cache` namespace:** separate from `"sre"`, `"runbooks"`, and `"logs"`. No DDL migration needed — it's a text column value, auto-created on first write.
+
+**`force_refresh: bool` in `AgentState`:** when `True`, `_cache_lookup` returns `None` unconditionally and `_cache_write` is skipped.
+
+**Cache write only on success:** `_cache_write` is called alongside `_save_memory` in `_react_loop` only when `agent_output` is set (i.e., the ReAct loop produced a valid report). Error states never populate the cache.
+
+**Threshold calibration:** 0.92 is the default. Same-topic pairs with `nomic-embed-text` score 0.82–0.93; different-topic pairs score 0.35–0.62. A threshold too low returns wrong cached answers; too high produces few hits. The integration tests use 0.88 for the near-identical paraphrase scenario to give headroom.
+
 ## Agent orchestration (Phases 3–4)
 
 ### Task classification — LLM-primary with keyword fallback

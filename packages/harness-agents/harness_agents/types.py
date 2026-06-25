@@ -14,6 +14,8 @@ class AgentState(TypedDict, total=False):
     token_usage: dict           # {"prompt_tokens": int, "completion_tokens": int}
     token_budget: int | None    # None = unlimited; agent aborts retries when exceeded
     formula: object | None      # pre-loaded Formula injected by run_agent_node
+    force_refresh: bool         # skip cache lookup and write for this request
+    cache_hit: bool             # True when result was served from the semantic cache
 
 
 # Matches the Phase-4 synthesis output produced by prompts/architect.md.

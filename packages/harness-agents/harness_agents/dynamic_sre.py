@@ -37,11 +37,21 @@ class DynamicSREAgent:
     allowed_tools = ["observability_query", "log_search", "runbook_read", "shell_exec", "skill_search"]
     memory_namespace = "sre"
 
-    def __init__(self, gateway: GatewayClient, llm_provider: LLMProvider, memory_store=None, formula_store=None):
+    def __init__(
+        self,
+        gateway: GatewayClient,
+        llm_provider: LLMProvider,
+        memory_store=None,
+        formula_store=None,
+        cache_threshold: float = 0.92,
+        cache_ttl_seconds: int = 86400,
+    ):
         self.gateway = gateway
         self.llm = llm_provider
         self.memory = memory_store
         self.formula_store = formula_store
+        self.cache_threshold = cache_threshold
+        self.cache_ttl_seconds = cache_ttl_seconds
 
     def _init_token_usage(self, state: AgentState) -> dict:
         current = state.get("token_usage")
@@ -99,6 +109,20 @@ class DynamicSREAgent:
         messages.append({"role": "user", "content": "Unrecognised action. Use 'call_tool' or 'respond'."})
         return None
 
+    async def _cache_lookup(self, task: str, force_refresh: bool = False):
+        if not self.memory or force_refresh:
+            return None
+        key = f"cache:{hash(task)}"
+        # Fast path: exact key match (Redis-accelerated for repeated identical tasks)
+        hit = await self.memory.read("cache", key)
+        if hit is not None:
+            return hit
+        # Semantic path: pgvector similarity for near-identical tasks
+        results = await self.memory.search("cache", task, top_k=1)
+        if results and results[0].get("score", 0) >= self.cache_threshold:
+            return results[0]["value"]
+        return None
+
     def _load_formula(self, task: str):
         if not self.formula_store:
             return None
@@ -131,6 +155,18 @@ class DynamicSREAgent:
             return
         key = f"incident:{state['thread_id'][:8]}"
         await self.memory.write(self.memory_namespace, key, report)
+
+    async def _cache_write(self, state: AgentState, agent_output: dict) -> None:
+        if not self.memory or state.get("force_refresh"):
+            return
+        task = state.get("task", "")
+        key = f"cache:{hash(task)}"
+        ttl_hours = self.cache_ttl_seconds / 3600 if self.cache_ttl_seconds else None
+        # Embed only the task string so pgvector similarity searches compare task ↔ task
+        await self.memory.write(
+            "cache", key, {"task": task, "agent_output": agent_output},
+            ttl_hours=ttl_hours, _embedding_text=task,
+        )
 
     async def _report_llm_usage(self, token_usage: dict) -> None:
         """Best-effort: send accumulated LLM token counts to governance for Prometheus."""
@@ -194,6 +230,7 @@ class DynamicSREAgent:
             if handled is not None:
                 if handled.get("agent_output"):
                     await self._save_memory(state, handled["agent_output"])
+                    await self._cache_write(state, handled["agent_output"])
                 return handled
 
         return {**state, "token_usage": token_usage, "error": {
@@ -203,6 +240,12 @@ class DynamicSREAgent:
 
     async def run(self, state: AgentState) -> AgentState:
         task = state.get("task", "")
+
+        force_refresh = state.get("force_refresh", False)
+        cached = await self._cache_lookup(task, force_refresh=force_refresh)
+        if cached is not None:
+            return {**cached, "cache_hit": True}
+
         token_usage = self._init_token_usage(state)
         token_budget = state.get("token_budget")
 
