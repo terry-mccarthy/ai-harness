@@ -122,6 +122,54 @@ async def test_semantically_equivalent_task_returns_cache_hit(memory_store):
 # Behavior 12 — expired cache entry treated as miss
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Behavior 13 — force_refresh=True on a cached task runs full loop, no cache_hit
+# ---------------------------------------------------------------------------
+
+async def test_force_refresh_bypasses_cached_result_and_runs_loop(memory_store):
+    from harness_agents.dynamic_sre import DynamicSREAgent
+
+    task = f"DB latency alert — force refresh [{uuid.uuid4()}]"
+    agent = DynamicSREAgent(
+        gateway=_Gateway(), llm_provider=_ScriptedLLM(), memory_store=memory_store
+    )
+
+    # Populate cache
+    first = await agent.run(_state(task))
+    assert first.get("error") is None
+    assert first.get("cache_hit") is None
+
+    # Confirm it's cached
+    second = await agent.run(_state(task))
+    assert second.get("cache_hit") is True
+
+    # force_refresh=True must bypass the cache and run the loop
+    call_count = {"n": 0}
+
+    class _CountingScriptedLLM:
+        async def chat(self, messages):
+            from harness_agents.llm import LLMResponse
+            call_count["n"] += 1
+            return LLMResponse(
+                content=json.dumps({"action": "respond", "result": _VALID_OUTPUT}),
+                prompt_tokens=10,
+                completion_tokens=5,
+            )
+
+    fresh_agent = DynamicSREAgent(
+        gateway=_Gateway(), llm_provider=_CountingScriptedLLM(), memory_store=memory_store
+    )
+    third = await fresh_agent.run(_state(task, force_refresh=True))
+
+    assert third.get("cache_hit") is None
+    assert third.get("agent_output") is not None
+    assert call_count["n"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Behavior 12 — expired cache entry treated as miss
+# ---------------------------------------------------------------------------
+
 async def test_expired_cache_entry_is_a_miss(memory_store):
     from harness_agents.dynamic_sre import DynamicSREAgent
 

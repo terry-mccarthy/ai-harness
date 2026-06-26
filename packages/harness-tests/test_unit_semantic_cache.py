@@ -264,3 +264,21 @@ async def test_empty_search_result_runs_loop():
 
     assert result.get("cache_hit") is None
     assert result.get("agent_output") is not None
+
+
+# ---------------------------------------------------------------------------
+# Behavior 10 — force_refresh=True suppresses cache write on successful run
+# ---------------------------------------------------------------------------
+
+async def test_force_refresh_does_not_write_to_cache():
+    from harness_agents.dynamic_sre import DynamicSREAgent
+
+    memory = _MockMemory(search_results=[])
+    agent = DynamicSREAgent(gateway=_Gateway(), llm_provider=_OneTurnLLM(), memory_store=memory)
+
+    result = await agent.run(_state(force_refresh=True))
+
+    assert result.get("error") is None
+    assert result.get("agent_output") is not None
+    cache_writes = [w for w in memory.written if w["namespace"] == "cache"]
+    assert cache_writes == []
