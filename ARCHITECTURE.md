@@ -268,7 +268,7 @@ packages/
   harness-agents/    — CodeReviewerAgent, DynamicSREAgent, ArchitectAgent, AgentState TypedDict, output schemas, build_llm_from_env() factory
   harness-memory/    — PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker, runbook_retriever, log_retriever, skill_retriever
   harness-supervisor/ — LangGraph supervisor orchestration, graph nodes, approval tokens
-  harness-tests/     — pytest integration + unit tests (486 total)
+  harness-tests/     — pytest integration + unit tests (488 total)
 
 services/
   governance/        — OAuth 2.1 + OPA policy check + async Dolt audit + /metrics (rate limiting delegated to gateway)
