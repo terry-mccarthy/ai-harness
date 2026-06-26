@@ -132,9 +132,9 @@ Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`,
 
 ## Tests
 
-### Integration suite (225 tests: all green) — `make test-integration`
+### Integration suite (226 tests: all green) — `make test-integration`
 
-### Unit suite (248 tests: all green) — `make test-unit`
+### Unit suite (249 tests: all green) — `make test-unit`
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -339,7 +339,7 @@ Scores the agents against labeled fixtures with known problems. Uses mock gatewa
 | `test_architect_fixture[leaky_persistence]` | Catches SQLAlchemy/ORM leaking through a domain "port" (abstraction/coupling) |
 | `test_architect_aggregate_score` | Asserts schema validity 100%, detection ≥ 66%, recall ≥ 50%, and that synthesis output matches `ARCHITECT_OUTPUT_SCHEMA` |
 
-### Semantic response cache (12 tests)
+### Semantic response cache (14 tests)
 
 | Test | What it proves |
 |---|---|
@@ -350,11 +350,13 @@ Scores the agents against labeled fixtures with known problems. Uses mock gatewa
 | `test_low_score_hit_runs_loop` | Score < threshold → ReAct loop runs, no `cache_hit` |
 | `test_llm_usage_not_reported_on_cache_hit` | `report_llm_usage` never called on cache hit |
 | `test_force_refresh_skips_cache_lookup` | `force_refresh=True` bypasses lookup even on a 0.99-score hit |
+| `test_force_refresh_does_not_write_to_cache` | `force_refresh=True` on a successful run produces no write to the `"cache"` namespace |
 | `test_empty_search_result_runs_loop` | Empty search → loop runs normally |
 | `test_no_memory_store_agent_runs_unchanged` | `memory_store=None` → no cache path, backward-compatible |
 | `test_same_task_twice_returns_cache_hit` | (integration) Identical task submitted twice → second call returns `cache_hit: True` via Redis exact key |
 | `test_semantically_equivalent_task_returns_cache_hit` | (integration) Near-identical paraphrase → cache hit via pgvector; requires live embedding + pgvector |
 | `test_expired_cache_entry_is_a_miss` | (integration) Entry with `expires_at` in the past is filtered out; ReAct loop runs |
+| `test_force_refresh_bypasses_cached_result_and_runs_loop` | (integration) Cached task re-submitted with `force_refresh=True` → LLM called, `cache_hit` absent |
 
 ### Token usage unit tests (9 tests) — `pytest packages/harness-tests/test_token_usage.py`
 
