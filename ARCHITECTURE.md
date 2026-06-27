@@ -193,6 +193,7 @@ Every tool call the agent makes produces:
 | `github-mcp`     | local build                    | 9010 | GitHub API MCP server — `codebase_search`, `adr_read`, `issue_create` |
 | `sre-stub`       | local build                    | 9005 | SRE-role MCP server: `runbook_read` + `log_search` do semantic pgvector search (`PG_DSN`); `skill_search` does Dolt formula lookup (`DOLT_HOST`); stub fallback without infra |
 | `review-server`  | local build                    | 9003 | `review_diff`, `architecture_review`, `execute_architecture_check` MCP tools — runs full code-reviewer agent, architecture review, and architectural gate |
+| `skills-registry-server` | local build             | 9006 | Skills registry MCP server — 14 tools wrapping governance skill lifecycle endpoints; uses `human-operator` OAuth credentials for all governance calls |
 | `register-*`     | mcpjungle image                | —    | One-shot init containers that register MCP servers           |
 
 ---
@@ -218,6 +219,7 @@ C4Container
             Container(github_mcp, "github-mcp", "FastMCP :9010", "Read-only GitHub API tools: codebase_search, adr_read, issue_create")
             Container(diff_proxy, "diff-proxy", "FastMCP :9001", "git_diff against baked sample repo or GitHub PR API")
             Container(linter_stub, "linter-stub", "FastMCP :9002", "semgrep run_linter using rules in semgrep-rules.yml")
+            Container(skills_registry, "skills-registry-server", "FastMCP :9006", "14 MCP tools wrapping governance skill lifecycle: list/get/create/revoke skills, label episodes, propose/promote/reject candidates, execute skills")
         }
 
         Container_Boundary(gov, "Governance Sidecar [HARD]") {
@@ -268,7 +270,7 @@ packages/
   harness-agents/    — CodeReviewerAgent, DynamicSREAgent, ArchitectAgent, AgentState TypedDict, output schemas, build_llm_from_env() factory
   harness-memory/    — PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker, runbook_retriever, log_retriever, skill_retriever
   harness-supervisor/ — LangGraph supervisor orchestration, graph nodes, approval tokens
-  harness-tests/     — pytest integration + unit tests (488 total)
+  harness-tests/     — pytest integration + unit tests (508 total)
 
 services/
   governance/        — OAuth 2.1 + OPA policy check + async Dolt audit + /metrics (rate limiting delegated to gateway)

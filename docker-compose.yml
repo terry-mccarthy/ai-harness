@@ -210,6 +210,37 @@ services:
         condition: service_healthy
     restart: "no"
 
+  skills-registry-server:
+    build:
+      context: .
+      dockerfile: services/skills_registry/Dockerfile
+    ports: ["9006:9006"]
+    environment:
+      GOVERNANCE_URL: http://governance:8090
+      MCPJUNGLE_URL: http://mcpjungle:8080
+      REGISTRY_OPERATOR_SECRET: ${REGISTRY_OPERATOR_SECRET:-human-operator-secret}
+      SRE_SECRET: ${SRE_SECRET:-sre-secret}
+      CODE_REVIEWER_SECRET: ${CODE_REVIEWER_SECRET:-code-reviewer-secret}
+      ARCHITECT_SECRET: ${ARCHITECT_SECRET:-architect-secret}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      governance:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9006)); s.close()\""]
+      interval: 5s
+      retries: 10
+
+  register-skills-registry:
+    image: mcpjungle/mcpjungle:latest
+    command: ["register", "--name", "registry", "--url", "http://skills-registry-server:9006/mcp", "--registry", "http://mcpjungle:8080", "--force"]
+    depends_on:
+      mcpjungle:
+        condition: service_healthy
+      skills-registry-server:
+        condition: service_healthy
+    restart: on-failure
+
   governance:
     build:
       context: ./services/governance

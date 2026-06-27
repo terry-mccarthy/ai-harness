@@ -132,9 +132,9 @@ Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`,
 
 ## Tests
 
-### Integration suite (226 tests: all green) — `make test-integration`
+### Integration suite (246 tests: all green) — `make test-integration`
 
-### Unit suite (249 tests: all green) — `make test-unit`
+### Unit suite (262 tests: all green) — `make test-unit`
 
 ### Phase 0 — Core reviewer (9 tests)
 
@@ -294,6 +294,13 @@ Supported per-provider keys: `model`, `temperature`, `max_tokens`/`num_predict`,
 | `test_skill_expiry.py` | 12 | `POST /skills/expire`, re-validation auto-proposal, auto-trigger, early-review flag |
 | `test_skill_select.py` | 7 | `POST /skills/select` — specificity/recency/success-rate tiebreaks, escalation, audit_log |
 | `test_skills_cli.py` | 19 | `GET /episodes`, `/candidates`, `/skills` list endpoints; CLI subprocess for full pipeline |
+
+### Phase 6 — Skills Registry (20 tests)
+
+| Suite | Tests | What it covers |
+|---|---|---|
+| `test_governance_author.py` | 10 | `POST /skills/author`, `GET /skills/{id}/prompt` — manual authoring path, `manually_authored` column, Dolt commit, 403 for SRE, 410 on revoke |
+| `test_skill_registry.py` | 10 | 14 MCP tools via `skills-registry-server` — list/get/create/revoke skills, label episodes, execute skill, access-control enforcement |
 
 ### Phase 7 — Architecture as Code (14 tests)
 
