@@ -54,16 +54,20 @@ def test_all_management_commands_exist():
     assert not missing, f"missing command files: {missing}"
 
 
+def _command_valid(filename: str, content: str) -> str | None:
+    if filename == "sync-skills.md":
+        if "sync-skills" not in content and "sync_skills" not in content:
+            return f"{filename}: missing sync-skills reference"
+        return None
+    if not any(t in content for t in REGISTRY_TOOLS):
+        return f"{filename}: no registry__* tool referenced"
+    return None
+
+
 def test_commands_reference_valid_tools():
-    failures = []
-    for filename in REQUIRED_COMMANDS:
-        path = COMMANDS_DIR / filename
-        content = path.read_text()
-        if filename == "sync-skills.md":
-            if "sync-skills" not in content and "sync_skills" not in content:
-                failures.append(f"{filename}: missing sync-skills reference")
-        else:
-            referenced = [t for t in REGISTRY_TOOLS if t in content]
-            if not referenced:
-                failures.append(f"{filename}: no registry__* tool referenced")
+    failures = [
+        msg
+        for filename in REQUIRED_COMMANDS
+        if (msg := _command_valid(filename, (COMMANDS_DIR / filename).read_text()))
+    ]
     assert not failures, "\n".join(failures)

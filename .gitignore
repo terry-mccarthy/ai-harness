@@ -10,3 +10,10 @@ AGENT-ORCHESTRATION-SPEC.md
 docs/agents/issue-tracker.md
 selector_config*.json
 .claude/commands/skill-*.md
+!.claude/commands/skill-view.md
+!.claude/commands/skill-create.md
+!.claude/commands/skill-label.md
+!.claude/commands/skill-propose.md
+!.claude/commands/skill-promote.md
+!.claude/commands/skill-reject.md
+!.claude/commands/skill-revoke.md
