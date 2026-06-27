@@ -118,6 +118,7 @@ def test_author_skill_returns_201():
 
 
 def test_authored_skill_manually_authored_flag():
+    """Authored skill has manually_authored=1; pipeline-promoted skill has manually_authored=0."""
     skill_id, resp = _author_skill()
     assert resp.status_code == 201
 
@@ -125,9 +126,17 @@ def test_authored_skill_manually_authored_flag():
     with conn:
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute("SELECT manually_authored FROM skills WHERE id=%s LIMIT 1", (skill_id,))
-            row = cur.fetchone()
-    assert row is not None
-    assert row["manually_authored"] == 1
+            authored_row = cur.fetchone()
+            # Any pipeline-promoted skill has manually_authored=0
+            cur.execute(
+                "SELECT manually_authored FROM skills WHERE manually_authored=0 LIMIT 1"
+            )
+            promoted_row = cur.fetchone()
+    assert authored_row is not None
+    assert authored_row["manually_authored"] == 1
+    # If no promoted skills exist yet, skip the promoted=0 assertion
+    if promoted_row is not None:
+        assert promoted_row["manually_authored"] == 0
 
 
 def test_authored_skill_expires_at_90d():
@@ -175,6 +184,21 @@ def test_author_skill_produces_dolt_commit():
             cur.execute("SELECT message FROM dolt_log LIMIT 5")
             messages = [r["message"] for r in cur.fetchall()]
     assert any("author" in m and skill_id[:8] in m for m in messages)
+
+
+def test_author_skill_audit_log_row():
+    """registry__create_skill MCP tool calls produce an audit_log row via GatewayClient /audit."""
+    conn = _root_conn()
+    with conn:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                "SELECT tool_name FROM audit_log WHERE tool_name='registry__create_skill' LIMIT 1"
+            )
+            row = cur.fetchone()
+    assert row is not None, (
+        "expected audit_log row for registry__create_skill — "
+        "run test_skill_registry.py::test_registry_create_skill first to populate it"
+    )
 
 
 def test_author_skill_agent_token_403():

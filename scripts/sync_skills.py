@@ -1,10 +1,11 @@
 """Sync active skills from the registry to .claude/commands/skill-*.md."""
 
+import json
 import os
-import sys
 from pathlib import Path
 
 import httpx
+import yaml
 
 GOVERNANCE_URL = os.environ.get("GOVERNANCE_URL", "http://localhost:8090").rstrip("/")
 HUMAN_OPERATOR_SECRET = os.environ.get("HUMAN_OPERATOR_SECRET", "human-operator-secret")
@@ -76,7 +77,6 @@ def _read_frontmatter_skill_id(path: Path) -> str | None:
         parts = content.split("---")
         if len(parts) < 3:
             return None
-        import yaml
         fm = yaml.safe_load(parts[1])
         return fm.get("skill_id")
     except Exception:
@@ -103,7 +103,6 @@ def main() -> None:
     for skill in active_skills:
         preconditions = skill.get("preconditions")
         if isinstance(preconditions, str):
-            import json
             preconditions = json.loads(preconditions) if preconditions else {}
         if not preconditions:
             preconditions = {}

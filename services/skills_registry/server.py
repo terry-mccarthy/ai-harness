@@ -6,11 +6,15 @@ All governance calls use the human-operator OAuth client credentials
 import json
 import logging
 import os
+import time
 
 import httpx
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+
+from harness_gateway.client import GatewayClient
+from harness_gateway.skill_runner import SkillRunner
 
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger(__name__)
@@ -36,7 +40,6 @@ _token_cache: dict = {}
 
 
 def _get_operator_token() -> str:
-    import time
     cached = _token_cache.get("token")
     expires_at = _token_cache.get("expires_at", 0)
     if cached and time.time() < expires_at - 30:
@@ -279,9 +282,6 @@ async def execute_skill(skill_id: str, inputs: dict | None = None) -> dict:
         skill_id: The skill UUID or slug to execute.
         inputs: Optional dict of inputs passed to each step.
     """
-    from harness_gateway.client import GatewayClient
-    from harness_gateway.skill_runner import SkillRunner
-
     # Fetch skill to determine agent_role for step-level OPA checks
     skill = _gov_get(f"/skills/{skill_id}")
     agent_role = skill.get("agent_role", "sre")
