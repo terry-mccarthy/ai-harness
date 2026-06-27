@@ -56,3 +56,9 @@ promote_allowed if {
     input.scope == "skill:promote"
     input.agent_role == "human_operator"
 }
+
+# Manual skill authoring — separate scope from promote for audit granularity; same role
+author_allowed if {
+    input.scope == "skill:author"
+    input.agent_role == "human_operator"
+}

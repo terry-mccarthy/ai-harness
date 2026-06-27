@@ -23,6 +23,88 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
+_SKILL_AUTHOR_EXPIRY_DAYS = 90
+
+
+@router.post("/skills/author", status_code=201)
+async def author_skill(
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    claims = decode_jwt(authorization)
+    if await check_opa("harness/author_allowed", {"scope": "skill:author", "agent_role": claims["role"]}) is not True:
+        raise HTTPException(403, "skill_author_not_permitted")
+
+    body = await request.json()
+    name = body.get("name")
+    agent_role = body.get("agent_role")
+    if not name or not agent_role:
+        raise HTTPException(422, "name and agent_role are required")
+
+    skill_id = str(uuid.uuid4())
+    expires_at = datetime.utcnow() + timedelta(days=_SKILL_AUTHOR_EXPIRY_DAYS)
+
+    conn = get_dolt_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO skills "
+                "(id, name, agent_role, description, version, status, prompt_template, "
+                "input_schema, steps, output_contract, preconditions, "
+                "manually_authored, promoted_by, expires_at, created_at) "
+                "VALUES (%s,%s,%s,%s,1,'active',%s,%s,%s,%s,%s,1,%s,%s,NOW())",
+                (
+                    skill_id,
+                    name,
+                    agent_role,
+                    body.get("description"),
+                    body.get("prompt_template"),
+                    json.dumps(body.get("input_schema") or {}),
+                    json.dumps(body.get("steps") or []),
+                    json.dumps(body.get("output_contract") or {}),
+                    json.dumps(body.get("preconditions")) if body.get("preconditions") else None,
+                    claims["sub"],
+                    expires_at,
+                ),
+            )
+            cur.execute(
+                "CALL DOLT_COMMIT('-Am', %s)",
+                (f"skill: author {skill_id[:8]} ({name}) by {claims['sub']}",),
+            )
+    finally:
+        conn.close()
+
+    return {"skill_id": skill_id, "status": "active", "version": 1, "expires_at": expires_at.isoformat()}
+
+
+@router.get("/skills/{skill_id}/prompt")
+async def get_skill_prompt(
+    skill_id: str,
+    authorization: str | None = Header(default=None),
+):
+    decode_jwt(authorization)
+    conn = get_dolt_conn()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                "SELECT id, name, status, prompt_template FROM skills WHERE id=%s ORDER BY version DESC LIMIT 1",
+                (skill_id,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        raise HTTPException(404, "skill_not_found")
+    if row["status"] in ("revoked", "expired"):
+        raise HTTPException(410, f"skill_{row['status']}")
+    return {
+        "skill_id": row["id"],
+        "name": row["name"],
+        "prompt_template": row["prompt_template"],
+    }
+
+
 @router.get("/skills/{skill_id}")
 async def get_skill(
     skill_id: str,
