@@ -9,4 +9,4 @@ __pycache__/
 AGENT-ORCHESTRATION-SPEC.md
 docs/agents/issue-tracker.md
 selector_config*.json
-
+.claude/commands/skill-*.md

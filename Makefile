@@ -60,6 +60,9 @@ seed-runbooks:
 seed-logs:
 	set -a && source .env && set +a && .venv/bin/python scripts/seed_logs.py
 
+sync-skills:
+	set -a && source .env && set +a && .venv/bin/python scripts/sync_skills.py
+
 demo-sre:
 	set -a && source .env && set +a && .venv/bin/python scripts/demo_sre.py
 
