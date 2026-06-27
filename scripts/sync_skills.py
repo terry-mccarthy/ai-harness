@@ -68,7 +68,8 @@ def _render_task_patterns(patterns: list[str]) -> str:
 
 
 def _skill_filename(name: str) -> str:
-    return f"skill-{name}.md"
+    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in name).strip("-")
+    return f"skill-{safe}.md"
 
 
 def _read_frontmatter_skill_id(path: Path) -> str | None:
