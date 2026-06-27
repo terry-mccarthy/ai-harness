@@ -703,6 +703,8 @@ suggestions — violating them breaks the system's core guarantees.
 
 - **[HARD]** Do not bypass the governance policy check. All agent tool calls must go through `GatewayClient` with `governance_url` set — `POST /check` is what enforces OPA policy before any tool executes.
 
+  **Where OPA enforcement lives — the trust model:** OPA enforcement is in the **caller's GatewayClient**, not in the MCP server that receives the call. MCP servers (`review-server`, `sre-stub`, `skills-registry-server`, etc.) trust that any call reaching them already passed `/check`. A new MCP server does NOT need to call `/check` itself for incoming requests — the gateway + GatewayClient handle that. The server only calls `/check` if it itself acts as a *client* making downstream tool calls (e.g. `execute_skill` builds a new GatewayClient). This is intentional: the enforcement boundary is at the gateway entry point, not replicated in every server.
+
 - **[HARD]** Do not add a new tool to any stub server or service without a corresponding entry
   in `policies/harness.rego`. Deploying a tool without a policy entry is a governance gap.
 
