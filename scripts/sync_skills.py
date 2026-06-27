@@ -61,10 +61,15 @@ def _list_active_skills(token: str) -> list[dict]:
     return resp.json()
 
 
+def _safe(value: str) -> str:
+    """Escape braces in user-provided content so .format() cannot expand them."""
+    return str(value).replace("{", "{{").replace("}", "}}")
+
+
 def _render_task_patterns(patterns: list[str]) -> str:
     if not patterns:
         return "_No specific task patterns defined._"
-    return "\n".join(f"- {p}" for p in patterns)
+    return "\n".join(f"- {_safe(p)}" for p in patterns)
 
 
 def _skill_filename(name: str) -> str:
@@ -110,12 +115,12 @@ def main() -> None:
         task_patterns = preconditions.get("task_patterns", [])
 
         content = _TEMPLATE.format(
-            skill_id=skill["id"],
+            skill_id=_safe(skill["id"]),
             version=skill.get("version", 1),
-            agent_role=skill.get("agent_role", ""),
-            expires_at=skill.get("expires_at", ""),
-            name=skill["name"],
-            description=skill.get("description") or "_No description provided._",
+            agent_role=_safe(skill.get("agent_role", "")),
+            expires_at=_safe(str(skill.get("expires_at", ""))),
+            name=_safe(skill["name"]),
+            description=_safe(skill.get("description") or "_No description provided._"),
             task_patterns=_render_task_patterns(task_patterns),
         )
         out = COMMANDS_DIR / _skill_filename(skill["name"])
