@@ -20,12 +20,33 @@ logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger(__name__)
 
 GOVERNANCE_URL = os.environ.get("GOVERNANCE_URL", "http://localhost:8090").rstrip("/")
-REGISTRY_OPERATOR_SECRET = os.environ.get("REGISTRY_OPERATOR_SECRET", "human-operator-secret")
+
+_ENV = os.environ.get("ENV", "production")
+_DEV_DEFAULTS = {
+    "REGISTRY_OPERATOR_SECRET": "human-operator-secret",
+    "SRE_SECRET": "sre-secret",
+    "CODE_REVIEWER_SECRET": "code-reviewer-secret",
+    "ARCHITECT_SECRET": "architect-secret",
+}
+
+
+def _get_secret(name: str) -> str:
+    val = os.environ.get(name)
+    if not val:
+        if _ENV == "test":
+            return _DEV_DEFAULTS[name]
+        raise RuntimeError(f"{name} must be set in non-test environments")
+    if _ENV != "test" and val == _DEV_DEFAULTS.get(name):
+        logger.warning("SECURITY: %s is using the default dev value — set a strong secret in production", name)
+    return val
+
+
+REGISTRY_OPERATOR_SECRET = _get_secret("REGISTRY_OPERATOR_SECRET")
 
 _ROLE_CREDENTIALS: dict[str, tuple[str, str]] = {
-    "sre": ("sre", os.environ.get("SRE_SECRET", "sre-secret")),
-    "code_reviewer": ("code-reviewer", os.environ.get("CODE_REVIEWER_SECRET", "code-reviewer-secret")),
-    "architect": ("architect", os.environ.get("ARCHITECT_SECRET", "architect-secret")),
+    "sre": ("sre", _get_secret("SRE_SECRET")),
+    "code_reviewer": ("code-reviewer", _get_secret("CODE_REVIEWER_SECRET")),
+    "architect": ("architect", _get_secret("ARCHITECT_SECRET")),
     "human_operator": ("human-operator", REGISTRY_OPERATOR_SECRET),
 }
 
