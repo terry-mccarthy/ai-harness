@@ -161,6 +161,14 @@ dolt add -A && dolt commit -m "seed: three starter skills (migrated from formula
   dolt add -A && dolt commit -m "migration: add preconditions to skills"; } \
   || echo "(preconditions migration already applied, skipping)"
 
+# Migration: add prompt_template and manually_authored columns (issue 01 — idempotent)
+{ dolt sql -q "ALTER TABLE skills ADD COLUMN prompt_template TEXT NULL" && \
+  dolt add -A && dolt commit -m "migration: add prompt_template to skills"; } \
+  || echo "(prompt_template migration already applied, skipping)"
+{ dolt sql -q "ALTER TABLE skills ADD COLUMN manually_authored TINYINT(1) NOT NULL DEFAULT 0" && \
+  dolt add -A && dolt commit -m "migration: add manually_authored to skills"; } \
+  || echo "(manually_authored migration already applied, skipping)"
+
 # Start SQL server in background — newer Dolt: root has no password by default
 dolt sql-server --host 0.0.0.0 --port 3306 &
 SERVER_PID=$!

@@ -193,6 +193,7 @@ Every tool call the agent makes produces:
 | `github-mcp`     | local build                    | 9010 | GitHub API MCP server — `codebase_search`, `adr_read`, `issue_create` |
 | `sre-stub`       | local build                    | 9005 | SRE-role MCP server: `runbook_read` + `log_search` do semantic pgvector search (`PG_DSN`); `skill_search` does Dolt formula lookup (`DOLT_HOST`); stub fallback without infra |
 | `review-server`  | local build                    | 9003 | `review_diff`, `architecture_review`, `execute_architecture_check` MCP tools — runs full code-reviewer agent, architecture review, and architectural gate |
+| `skills-registry-server` | local build             | 9006 | Skills registry MCP server — 14 tools wrapping governance skill lifecycle endpoints; uses `human-operator` OAuth credentials for all governance calls |
 | `register-*`     | mcpjungle image                | —    | One-shot init containers that register MCP servers           |
 
 ---
@@ -218,6 +219,7 @@ C4Container
             Container(github_mcp, "github-mcp", "FastMCP :9010", "Read-only GitHub API tools: codebase_search, adr_read, issue_create")
             Container(diff_proxy, "diff-proxy", "FastMCP :9001", "git_diff against baked sample repo or GitHub PR API")
             Container(linter_stub, "linter-stub", "FastMCP :9002", "semgrep run_linter using rules in semgrep-rules.yml")
+            Container(skills_registry, "skills-registry-server", "FastMCP :9006", "14 MCP tools wrapping governance skill lifecycle: list/get/create/revoke skills, label episodes, propose/promote/reject candidates, execute skills")
         }
 
         Container_Boundary(gov, "Governance Sidecar [HARD]") {
@@ -268,7 +270,7 @@ packages/
   harness-agents/    — CodeReviewerAgent, DynamicSREAgent, ArchitectAgent, AgentState TypedDict, output schemas, build_llm_from_env() factory
   harness-memory/    — PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker, runbook_retriever, log_retriever, skill_retriever
   harness-supervisor/ — LangGraph supervisor orchestration, graph nodes, approval tokens
-  harness-tests/     — pytest integration + unit tests (488 total)
+  harness-tests/     — pytest integration + unit tests (508 total)
 
 services/
   governance/        — OAuth 2.1 + OPA policy check + async Dolt audit + /metrics (rate limiting delegated to gateway)
@@ -279,6 +281,7 @@ services/
   postgres/          — PostgreSQL init: enables pgvector extension
   github_mcp/        — FastMCP server wrapping GitHub API (codebase_search, adr_read, issue_create)
   review_server/     — FastMCP server wrapping CodeReviewerAgent + architecture_review + execute_architecture_check
+  skills_registry/   — FastMCP server exposing 14 governance skill-lifecycle tools (list/get/create/revoke skills, label episodes, propose/promote/reject candidates, execute skills)
 
 security/
   owasp-review.md    — OWASP Agentic AI Top 10 review
@@ -700,6 +703,8 @@ suggestions — violating them breaks the system's core guarantees.
 
 - **[HARD]** Do not bypass the governance policy check. All agent tool calls must go through `GatewayClient` with `governance_url` set — `POST /check` is what enforces OPA policy before any tool executes.
 
+  **Where OPA enforcement lives — the trust model:** OPA enforcement is in the **caller's GatewayClient**, not in the MCP server that receives the call. MCP servers (`review-server`, `sre-stub`, `skills-registry-server`, etc.) trust that any call reaching them already passed `/check`. A new MCP server does NOT need to call `/check` itself for incoming requests — the gateway + GatewayClient handle that. The server only calls `/check` if it itself acts as a *client* making downstream tool calls (e.g. `execute_skill` builds a new GatewayClient). This is intentional: the enforcement boundary is at the gateway entry point, not replicated in every server.
+
 - **[HARD]** Do not add a new tool to any stub server or service without a corresponding entry
   in `policies/harness.rego`. Deploying a tool without a policy entry is a governance gap.
 
@@ -810,3 +815,4 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0041 | `bootstrap` fourth task type — routes to architect, runs the full four-phase analysis, then adds a fifth `_phase_bootstrap_doc` phase that converts phase results into a markdown `ARCHITECTURE.md`; stored in `agent_output["architecture_md"]`; bypasses the architectural gate (gate validates design proposals, not doc generation); `_route_after_architect` replaces the former hard `architect → architectural_gate` edge with a conditional that checks `task_type` | Accepted |
 | 0042 | `bootstrap_architecture` exposed as `review_server__bootstrap_architecture` MCP tool — calls `ArchitectAgent` directly (no supervisor graph in Docker, avoids adding langgraph/harness-supervisor/harness-memory to the image); uses `architect` OAuth credentials; fixes latent bug where `ArchitectAgent` passed `gateway.gateway_url` (MCPJungle URL) as the GitHub `repo` param to `codebase_search`/`adr_read` — now takes `repo: str = ""` in the constructor and uses `self.repo` | Accepted |
 | 0043 | Semantic response cache on `DynamicSREAgent` uses `PostgresMemoryStore("cache" namespace)` with two-tier lookup: exact key via `read()` (Redis O(1) for identical tasks) + pgvector `search()` for near-identical tasks (threshold 0.92). `_embedding_text=task` passed to `write()` so the stored vector represents the task string, not the full report JSON — without this, noisy report content dilutes similarity and near-identical tasks miss the threshold. Cache writes only on successful completion; `force_refresh: bool` in `AgentState` bypasses both lookup and write per-request. | Accepted |
+| 0044 | `skills-registry-server` (`:9006`) is a separate FastMCP service from `review-server`: the registry is an operator/developer surface (list, create, revoke, execute skills); `review-server` is the agent execution surface. Mixing them would create awkward OPA scoping between agent roles and human-operator role. The server uses a single `human-operator` OAuth client for all governance REST calls; `execute_skill` is the only tool that uses per-role credentials (resolved from the skill's `agent_role`) so OPA enforces the correct tool-access policy on each execution step. OPA enforcement for incoming tool calls is delegated to the caller's GatewayClient (same pattern as all other MCP servers). | Accepted |
