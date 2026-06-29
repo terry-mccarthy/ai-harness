@@ -2,26 +2,7 @@
 
 ## Ways of working
 
-These rules apply to every phase. Follow them without being asked.
-
-**1. Update docs when tests go green.**
-Before declaring a phase done, update:
-- `README.md` — stack section, test count, config table, project layout
-- `CLAUDE.md` — any new gotchas, changed startup commands, updated flow description
-- `ARCHITECTURE.md` — the current architecture and ADRs. 
-- `PROGRESS.md` — tick off passing tests and DoD items
-
-**2. Document gotchas immediately, not at end-of-phase.**
-If something takes more than one attempt to get right — a library quirk, an API difference from docs, a config flag that was removed, a subtle ordering issue — add it to the relevant section of this file *before* moving on. Future sessions start cold; anything not written here will be re-discovered the hard way.
-
-**3. Note divergences from the spec explicitly.**
-Record deliberate skips, pragmatic simplifications, and upstream differences in `PROGRESS.md` under that phase's Notes section. Don't silently drift.
-
-**4. Red before green.**
-Write the test file first. Run it, confirm it fails for the right reason, then implement. A test that was never red proves nothing.
-
-**5. Code health**
-Maintain code-health at >= 9
+See `.claude/rules/ways-of-working.md`.
 
 ---
 
@@ -428,20 +409,16 @@ The `human_approval_token` is a short-lived JWT (10-min TTL) scoped to a specifi
 
 ## Connecting Claude Code to the harness
 
-MCPJungle exposes itself as an MCP server at `http://localhost:8080/mcp`. Add to Claude Code settings:
+MCPJungle exposes itself as an MCP server at `http://localhost:8080/mcp`. Register it with a static `Authorization` header to bypass OAuth discovery (see gotcha below):
 
-```json
-{
-  "mcpServers": {
-    "ai-harness": {
-      "type": "http",
-      "url": "http://localhost:8080/mcp"
-    }
-  }
-}
+```bash
+claude mcp add -s user --transport http "ai-harness" "http://localhost:8080/mcp" \
+  -H "Authorization: Bearer no-auth"
 ```
 
 This gives Claude Code access to all registered tools, including `review_server__review_diff`.
+
+**OAuth discovery gotcha (Claude Code ≥ v2.1.181):** Claude Code now performs OAuth 2.0 discovery (`GET /.well-known/oauth-authorization-server`) before connecting to any HTTP MCP server. MCPJungle returns `404 page not found` as plain text, which the SDK can't parse as JSON — dropping the connection with "SDK auth failed: HTTP 404". The `-H "Authorization: Bearer no-auth"` flag makes the SDK treat the server as pre-authenticated and skip discovery entirely. MCPJungle ignores the header value.
 
 ## Claude Code MCP tool timeout
 
