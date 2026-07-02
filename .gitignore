@@ -6,6 +6,7 @@ __pycache__/
 *.egg-info/
 .env
 .DS_Store
+.scratch/
 AGENT-ORCHESTRATION-SPEC.md
 docs/agents/issue-tracker.md
 selector_config*.json

@@ -318,6 +318,15 @@ services:
         condition: service_healthy
     restart: "no"
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    profiles: [monitoring]
+    command: ["--config=/etc/otel-collector.yml"]
+    volumes:
+      - ./services/otel-collector/otel-collector.yml:/etc/otel-collector.yml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC — Claude Code pushes here from the Mac host
+
   prometheus:
     image: prom/prometheus:latest
     profiles: [monitoring]
@@ -330,6 +339,8 @@ services:
     depends_on:
       governance:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
 
   grafana:
     image: grafana/grafana:latest

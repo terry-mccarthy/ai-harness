@@ -1,0 +1,34 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # Claude Code defaults to delta temporality; Prometheus requires cumulative.
+  # This processor converts automatically so no extra env var is needed on the
+  # Claude Code side (though OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
+  # also works and bypasses this processor).
+  deltatocumulative:
+    max_stale: 5m
+  batch: {}
+
+exporters:
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    # Copy OTEL resource attributes (service.name, os.type, host.arch, etc.)
+    # to Prometheus metric labels so dashboards can filter by them.
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [deltatocumulative, batch]
+      exporters: [prometheus]
