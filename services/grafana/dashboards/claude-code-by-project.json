@@ -1,11 +1,18 @@
 {
-  "title": "Claude Code — By Project",
+  "title": "Claude Code \u2014 By Project",
   "uid": "claude-code-by-project",
-  "tags": ["claude-code", "telemetry", "project"],
+  "tags": [
+    "claude-code",
+    "telemetry",
+    "project"
+  ],
   "schemaVersion": 38,
   "version": 1,
   "refresh": "30s",
-  "time": { "from": "now-24h", "to": "now" },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
   "templating": {
     "list": [
       {
@@ -52,28 +59,143 @@
         "label": "Window",
         "type": "interval",
         "query": "1h,6h,12h,24h,7d",
-        "current": { "text": "24h", "value": "24h" }
+        "current": {
+          "text": "24h",
+          "value": "24h"
+        }
       }
     ]
   },
   "panels": [
     {
+      "id": 41,
+      "title": "All-time cost",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(claude_code_cost_usage_USD_total{project_name=~\"$project\"}[$__range]))",
+          "legendFormat": "USD"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 42,
+      "title": "All-time tokens",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(claude_code_token_usage_tokens_total{project_name=~\"$project\"}[$__range]))",
+          "legendFormat": "tokens"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
       "id": 1,
       "title": "Total tokens ($window)",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 0,
+        "y": 4
+      },
       "targets": [
         {
           "expr": "sum(increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
           "legendFormat": "tokens"
         }
       ],
-      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": { "mode": "thresholds" },
-          "thresholds": { "steps": [{ "color": "blue", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
         }
       }
     },
@@ -81,24 +203,47 @@
       "id": 2,
       "title": "Total cost ($window)",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 5,
+        "y": 4
+      },
       "targets": [
         {
           "expr": "sum(increase(claude_code_cost_usage_USD_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
           "legendFormat": "USD"
         }
       ],
-      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
           "decimals": 4,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 10 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
             ]
           }
         }
@@ -108,19 +253,40 @@
       "id": 3,
       "title": "Input tokens ($window)",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 5, "x": 10, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 10,
+        "y": 4
+      },
       "targets": [
         {
           "expr": "sum(increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=\"input\"}[$window]))",
           "legendFormat": "input"
         }
       ],
-      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": { "mode": "thresholds" },
-          "thresholds": { "steps": [{ "color": "blue", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
         }
       }
     },
@@ -128,19 +294,40 @@
       "id": 4,
       "title": "Output tokens ($window)",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 5, "x": 15, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 15,
+        "y": 4
+      },
       "targets": [
         {
           "expr": "sum(increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=\"output\"}[$window]))",
           "legendFormat": "output"
         }
       ],
-      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": { "mode": "thresholds" },
-          "thresholds": { "steps": [{ "color": "orange", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              }
+            ]
+          }
         }
       }
     },
@@ -148,19 +335,40 @@
       "id": 5,
       "title": "Cache read tokens ($window)",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 4
+      },
       "targets": [
         {
           "expr": "sum(increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=~\"cache.*\"}[$window]))",
           "legendFormat": "cache"
         }
       ],
-      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": { "mode": "thresholds" },
-          "thresholds": { "steps": [{ "color": "purple", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              }
+            ]
+          }
         }
       }
     },
@@ -168,7 +376,12 @@
       "id": 10,
       "title": "Tokens / min by project",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
       "targets": [
         {
           "expr": "label_replace(sum by (project_name) (rate(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[5m])) * 60, \"project_name\", \"unlabeled\", \"project_name\", \"^$\")",
@@ -178,16 +391,29 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2
+          }
         }
       },
-      "options": { "tooltip": { "mode": "multi", "sort": "desc" } }
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     },
     {
       "id": 11,
       "title": "Cost / min by project (USD)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
       "targets": [
         {
           "expr": "label_replace(sum by (project_name) (rate(claude_code_cost_usage_USD_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[5m])) * 60, \"project_name\", \"unlabeled\", \"project_name\", \"^$\")",
@@ -198,16 +424,29 @@
         "defaults": {
           "unit": "currencyUSD",
           "decimals": 6,
-          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2
+          }
         }
       },
-      "options": { "tooltip": { "mode": "multi", "sort": "desc" } }
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     },
     {
       "id": 20,
       "title": "Total tokens by project ($window)",
       "type": "bargauge",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
       "targets": [
         {
           "expr": "sort_desc(sum by (project_name) (increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window])))",
@@ -216,14 +455,27 @@
       ],
       "options": {
         "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "displayMode": "gradient"
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": { "mode": "palette-classic" },
-          "thresholds": { "steps": [{ "color": "blue", "value": null }] }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
         }
       }
     },
@@ -231,33 +483,62 @@
       "id": 21,
       "title": "Token share by project ($window)",
       "type": "piechart",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
       "targets": [
         {
           "expr": "sum by (project_name) (increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
           "legendFormat": "{{project_name}}"
         }
       ],
-      "options": { "pieType": "donut", "tooltip": { "mode": "multi" } },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } } }
+      "options": {
+        "pieType": "donut",
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      }
     },
     {
       "id": 22,
       "title": "Cost share by project ($window)",
       "type": "piechart",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
       "targets": [
         {
           "expr": "sum by (project_name) (increase(claude_code_cost_usage_USD_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
           "legendFormat": "{{project_name}}"
         }
       ],
-      "options": { "pieType": "donut", "tooltip": { "mode": "multi" } },
+      "options": {
+        "pieType": "donut",
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
           "decimals": 4,
-          "color": { "mode": "palette-classic" }
+          "color": {
+            "mode": "palette-classic"
+          }
         }
       }
     },
@@ -265,7 +546,12 @@
       "id": 30,
       "title": "Token type breakdown by project ($window)",
       "type": "barchart",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
       "targets": [
         {
           "expr": "sum by (project_name, type) (increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
@@ -276,10 +562,17 @@
         }
       ],
       "transformations": [
-        { "id": "merge", "options": {} },
+        {
+          "id": "merge",
+          "options": {}
+        },
         {
           "id": "organize",
-          "options": { "excludeByName": { "Time": true } }
+          "options": {
+            "excludeByName": {
+              "Time": true
+            }
+          }
         },
         {
           "id": "groupingToMatrix",
@@ -295,16 +588,34 @@
         "groupWidth": 0.7,
         "barWidth": 0.9,
         "stacking": "normal",
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "right" }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
       },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      }
     },
     {
       "id": 31,
       "title": "Per-project summary ($window)",
       "type": "table",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
       "targets": [
         {
           "expr": "sum by (project_name) (increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
@@ -329,57 +640,127 @@
         }
       ],
       "options": {
-        "sortBy": [{ "displayName": "Tokens", "desc": true }],
-        "footer": { "show": true, "reducer": ["sum"], "fields": ["Tokens", "Cost"] }
+        "sortBy": [
+          {
+            "displayName": "Tokens",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": true,
+          "reducer": [
+            "sum"
+          ],
+          "fields": [
+            "Tokens",
+            "Cost"
+          ]
+        }
       },
       "fieldConfig": {
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Value #Tokens" },
+            "matcher": {
+              "id": "byName",
+              "options": "Value #Tokens"
+            },
             "properties": [
-              { "id": "displayName", "value": "Tokens" },
-              { "id": "unit", "value": "short" },
-              { "id": "decimals", "value": 0 }
+              {
+                "id": "displayName",
+                "value": "Tokens"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Value #Cost" },
+            "matcher": {
+              "id": "byName",
+              "options": "Value #Cost"
+            },
             "properties": [
-              { "id": "displayName", "value": "Cost (USD)" },
-              { "id": "unit", "value": "currencyUSD" },
-              { "id": "decimals", "value": 4 }
+              {
+                "id": "displayName",
+                "value": "Cost (USD)"
+              },
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 4
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Value #Sessions" },
+            "matcher": {
+              "id": "byName",
+              "options": "Value #Sessions"
+            },
             "properties": [
-              { "id": "displayName", "value": "Sessions" },
-              { "id": "unit", "value": "short" },
-              { "id": "decimals", "value": 0 }
+              {
+                "id": "displayName",
+                "value": "Sessions"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "project_name" },
-            "properties": [{ "id": "displayName", "value": "Project" }]
+            "matcher": {
+              "id": "byName",
+              "options": "project_name"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Project"
+              }
+            ]
           }
         ]
       },
       "transformations": [
-        { "id": "merge", "options": {} },
+        {
+          "id": "merge",
+          "options": {}
+        },
         {
           "id": "organize",
           "options": {
-            "excludeByName": { "Time": true },
-            "indexByName": { "project_name": 0 }
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "project_name": 0
+            }
           }
         }
       ]
     },
     {
       "id": 40,
-      "title": "Tokens over time — input vs output vs cache ($project)",
+      "title": "Tokens over time \u2014 input vs output vs cache ($project)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
       "targets": [
         {
           "expr": "sum by (type) (rate(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=\"input\"}[5m])) * 60",
@@ -401,18 +782,86 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": { "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "none" } }
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "none"
+            }
+          }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "input" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
-          { "matcher": { "id": "byName", "options": "output" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
-          { "matcher": { "id": "byName", "options": "cache_read" }, "properties": [{ "id": "color", "value": { "fixedColor": "purple", "mode": "fixed" } }] },
-          { "matcher": { "id": "byName", "options": "cache_creation" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "input"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "output"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cache_read"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "purple",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cache_creation"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
         ]
       },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "list", "placement": "bottom" }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
       }
     }
   ]
