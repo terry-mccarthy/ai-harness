@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e test-load review consolidate alembic-upgrade monitoring-up seed-runbooks seed-logs demo-sre demo-model-selector
+.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e test-load review consolidate alembic-upgrade monitoring-up monitoring-down seed-runbooks seed-logs demo-sre demo-model-selector
 
 stack-up:
 	docker compose up -d --wait --remove-orphans
@@ -37,7 +37,10 @@ test-load:
 	.venv/bin/pytest packages/harness-tests/test_phase5_load.py -v -s -m load
 
 monitoring-up:
-	docker compose --profile monitoring up -d
+	docker compose -f docker-compose.monitoring.yml up -d
+
+monitoring-down:
+	docker compose -f docker-compose.monitoring.yml down
 
 test: test-integration
 
