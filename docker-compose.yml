@@ -10,7 +10,7 @@ services:
       - ./services/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U harness"]
-      interval: 5s
+      interval: 15s
       retries: 5
 
   redis:
@@ -18,7 +18,7 @@ services:
     ports: ["6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 15s
       retries: 5
 
   opa:
@@ -39,7 +39,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "/mcpjungle", "list", "servers", "--registry", "http://localhost:8080"]
-      interval: 5s
+      interval: 15s
       retries: 10
 
   diff-proxy:
@@ -53,7 +53,7 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9001)); s.close()\""]
-      interval: 5s
+      interval: 15s
       retries: 10
 
   linter-stub:
@@ -66,7 +66,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9002)); s.close()\""]
-      interval: 5s
+      interval: 15s
       retries: 10
 
   register-diff-proxy:
@@ -122,7 +122,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9003)); s.close()\""]
-      interval: 5s
+      interval: 15s
       retries: 10
 
   register-review-server:
@@ -143,7 +143,7 @@ services:
       - dolt-data:/doltdata
     healthcheck:
       test: ["CMD-SHELL", "mysql -h 127.0.0.1 -P 3306 -u root --connect-timeout=2 -e 'SELECT 1' 2>/dev/null || exit 1"]
-      interval: 5s
+      interval: 15s
       retries: 20
       start_period: 60s
 
@@ -158,7 +158,7 @@ services:
       ARCHITECT_DEFAULT_REPO: ${ARCHITECT_DEFAULT_REPO:-}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9010)); s.close()\""]
-      interval: 5s
+      interval: 15s
       retries: 10
 
   register-github-mcp:
@@ -185,7 +185,7 @@ services:
       OLLAMA_HOST: http://host.docker.internal:11434
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9005)); s.close()\""]
-      interval: 5s
+      interval: 15s
       retries: 10
 
   register-architect:
@@ -228,7 +228,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',9006)); s.close()\""]
-      interval: 5s
+      interval: 15s
       retries: 10
 
   register-skills-registry:
@@ -268,7 +268,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',8090)); s.close()\""]
-      interval: 5s
+      interval: 15s
       retries: 10
 
   contextforge:
