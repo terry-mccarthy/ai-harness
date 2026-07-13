@@ -2088,12 +2088,14 @@ version = "0.1.0"
 source = { editable = "stub_servers" }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
+    { name = "prometheus-client" },
     { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "mcp", extras = ["cli"] },
+    { name = "prometheus-client", specifier = ">=0.20" },
     { name = "uvicorn", specifier = ">=0.27" },
 ]
 

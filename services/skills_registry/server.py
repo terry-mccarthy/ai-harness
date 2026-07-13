@@ -12,6 +12,9 @@ import httpx
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from starlette.requests import Request
+from starlette.responses import Response
 
 from harness_gateway.client import GatewayClient
 from harness_gateway.skill_runner import SkillRunner
@@ -56,6 +59,12 @@ mcp = FastMCP(
     port=9006,
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
+
+
+@mcp.custom_route("/metrics", methods=["GET"])
+async def metrics_route(request: Request) -> Response:
+    """Prometheus metrics endpoint, scraped by the monitoring stack."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 _token_cache: dict = {}
 

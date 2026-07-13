@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 WORKDIR /app
 
-RUN pip install "mcp[cli]" uvicorn httpx --quiet
+RUN pip install "mcp[cli]" uvicorn httpx prometheus-client --quiet
 
 COPY packages/harness-gateway /app/packages/harness-gateway
 RUN pip install -e /app/packages/harness-gateway --quiet

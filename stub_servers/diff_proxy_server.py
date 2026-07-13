@@ -6,6 +6,9 @@ import urllib.error
 import urllib.request
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from starlette.requests import Request
+from starlette.responses import Response
 import uvicorn
 
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
@@ -17,6 +20,12 @@ mcp = FastMCP(
     port=9001,
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
+
+
+@mcp.custom_route("/metrics", methods=["GET"])
+async def metrics_route(request: Request) -> Response:
+    """Prometheus metrics endpoint, scraped by the monitoring stack."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 _GITHUB_API = "https://api.github.com/repos"
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
