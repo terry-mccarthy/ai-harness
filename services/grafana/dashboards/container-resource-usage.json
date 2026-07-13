@@ -1,0 +1,70 @@
+{
+  "title": "AI Harness — Service CPU & Memory",
+  "uid": "harness-container-resources",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU usage by service (cores)",
+      "type": "timeseries",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "none"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (job) (rate(process_cpu_seconds_total[5m]))",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Resident memory by service",
+      "type": "timeseries",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 9},
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "process_resident_memory_bytes",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Current CPU usage (cores, last value)",
+      "type": "bargauge",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
+      "fieldConfig": {"defaults": {"unit": "none"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (job) (rate(process_cpu_seconds_total[5m]))",
+          "legendFormat": "{{job}}"
+        }
+      ],
+      "transformations": [
+        {"id": "reduce", "options": {"reducers": ["lastNotNull"]}},
+        {"id": "rowsToFields", "options": {"nameField": "Field", "valueField": "Last (not null)"}}
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Current resident memory (last value)",
+      "type": "bargauge",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18},
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "process_resident_memory_bytes",
+          "legendFormat": "{{job}}"
+        }
+      ],
+      "transformations": [
+        {"id": "reduce", "options": {"reducers": ["lastNotNull"]}},
+        {"id": "rowsToFields", "options": {"nameField": "Field", "valueField": "Last (not null)"}}
+      ]
+    }
+  ]
+}

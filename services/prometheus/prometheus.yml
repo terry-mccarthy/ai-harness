@@ -17,3 +17,28 @@ scrape_configs:
     static_configs:
       - targets: ['otel-collector:8889']
     metrics_path: /metrics
+
+  - job_name: linter-stub
+    static_configs:
+      - targets: ['linter-stub:9002']
+    metrics_path: /metrics
+
+  - job_name: sre-stub
+    static_configs:
+      - targets: ['sre-stub:9005']
+    metrics_path: /metrics
+
+  - job_name: diff-proxy
+    static_configs:
+      - targets: ['diff-proxy:9001']
+    metrics_path: /metrics
+
+  - job_name: github-mcp
+    static_configs:
+      - targets: ['github-mcp:9010']
+    metrics_path: /metrics
+
+  - job_name: skills-registry-server
+    static_configs:
+      - targets: ['skills-registry-server:9006']
+    metrics_path: /metrics
