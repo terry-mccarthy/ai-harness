@@ -1,10 +1,10 @@
 {
-  "title": "Claude Code \u2014 By Project",
-  "uid": "claude-code-by-project",
+  "title": "Claude Code \u2014 By Model",
+  "uid": "claude-code-by-model",
   "tags": [
     "claude-code",
     "telemetry",
-    "project"
+    "model"
   ],
   "schemaVersion": 38,
   "version": 1,
@@ -16,37 +16,24 @@
   "templating": {
     "list": [
       {
+        "name": "model",
+        "label": "Model",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(claude_code_token_usage_tokens_total, model)",
+        "refresh": 2,
+        "sort": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {}
+      },
+      {
         "name": "project",
         "label": "Project",
         "type": "query",
         "datasource": "Prometheus",
-        "query": "label_values(claude_code_token_usage_tokens_total, project_name)",
-        "refresh": 2,
-        "sort": 1,
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "current": {}
-      },
-      {
-        "name": "branch",
-        "label": "Branch",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(claude_code_token_usage_tokens_total{project_name=~\"$project\"}, project_branch)",
-        "refresh": 2,
-        "sort": 1,
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "current": {}
-      },
-      {
-        "name": "terminal",
-        "label": "Terminal",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}, terminal_type)",
+        "query": "label_values(claude_code_token_usage_tokens_total{model=~\"$model\"}, project_name)",
         "refresh": 2,
         "sort": 1,
         "includeAll": true,
@@ -79,7 +66,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(claude_code_cost_usage_USD_total{project_name=~\"$project\"}[$__range]))",
+          "expr": "sum(increase(claude_code_cost_usage_USD_total{model=~\"$model\",project_name=~\"$project\"}[$__range]))",
           "legendFormat": "USD"
         }
       ],
@@ -129,7 +116,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(claude_code_token_usage_tokens_total{project_name=~\"$project\"}[$__range]))",
+          "expr": "sum(increase(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\"}[$__range]))",
           "legendFormat": "tokens"
         }
       ],
@@ -164,13 +151,13 @@
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 5,
+        "w": 6,
         "x": 0,
         "y": 4
       },
       "targets": [
         {
-          "expr": "sum(increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
+          "expr": "sum(increase(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\"}[$window]))",
           "legendFormat": "tokens"
         }
       ],
@@ -205,13 +192,13 @@
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 5,
-        "x": 5,
+        "w": 6,
+        "x": 6,
         "y": 4
       },
       "targets": [
         {
-          "expr": "sum(increase(claude_code_cost_usage_USD_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
+          "expr": "sum(increase(claude_code_cost_usage_USD_total{model=~\"$model\",project_name=~\"$project\"}[$window]))",
           "legendFormat": "USD"
         }
       ],
@@ -251,100 +238,18 @@
     },
     {
       "id": 3,
-      "title": "Input tokens ($window)",
+      "title": "Active models ($window)",
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 5,
-        "x": 10,
+        "w": 6,
+        "x": 12,
         "y": 4
       },
       "targets": [
         {
-          "expr": "sum(increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=\"input\"}[$window]))",
-          "legendFormat": "input"
-        }
-      ],
-      "options": {
-        "colorMode": "background",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "id": 4,
-      "title": "Output tokens ($window)",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 5,
-        "x": 15,
-        "y": 4
-      },
-      "targets": [
-        {
-          "expr": "sum(increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=\"output\"}[$window]))",
-          "legendFormat": "output"
-        }
-      ],
-      "options": {
-        "colorMode": "background",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "steps": [
-              {
-                "color": "orange",
-                "value": null
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "id": 5,
-      "title": "Cache read tokens ($window)",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 20,
-        "y": 4
-      },
-      "targets": [
-        {
-          "expr": "sum(increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=~\"cache.*\"}[$window]))",
-          "legendFormat": "cache"
+          "expr": "count(count by (model) (claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\"}))",
+          "legendFormat": "models"
         }
       ],
       "options": {
@@ -373,8 +278,49 @@
       }
     },
     {
+      "id": 4,
+      "title": "Sessions ($window)",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 4
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(claude_code_session_count_total{model=~\"$model\",project_name=~\"$project\"}[$window]))",
+          "legendFormat": "sessions"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
       "id": 10,
-      "title": "Tokens / min by project",
+      "title": "Tokens / min by model",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -384,8 +330,8 @@
       },
       "targets": [
         {
-          "expr": "label_replace(sum by (project_name) (rate(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[5m])) * 60, \"project_name\", \"unlabeled\", \"project_name\", \"^$\")",
-          "legendFormat": "{{project_name}}"
+          "expr": "sum by (model) (rate(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\"}[5m])) * 60",
+          "legendFormat": "{{model}}"
         }
       ],
       "fieldConfig": {
@@ -406,7 +352,7 @@
     },
     {
       "id": 11,
-      "title": "Cost / min by project (USD)",
+      "title": "Cost / min by model (USD)",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -416,8 +362,8 @@
       },
       "targets": [
         {
-          "expr": "label_replace(sum by (project_name) (rate(claude_code_cost_usage_USD_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[5m])) * 60, \"project_name\", \"unlabeled\", \"project_name\", \"^$\")",
-          "legendFormat": "{{project_name}}"
+          "expr": "sum by (model) (rate(claude_code_cost_usage_USD_total{model=~\"$model\",project_name=~\"$project\"}[5m])) * 60",
+          "legendFormat": "{{model}}"
         }
       ],
       "fieldConfig": {
@@ -439,7 +385,7 @@
     },
     {
       "id": 20,
-      "title": "Total tokens by project ($window)",
+      "title": "Total tokens by model ($window)",
       "type": "bargauge",
       "gridPos": {
         "h": 8,
@@ -449,8 +395,8 @@
       },
       "targets": [
         {
-          "expr": "sort_desc(sum by (project_name) (increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window])))",
-          "legendFormat": "{{project_name}}"
+          "expr": "sort_desc(sum by (model) (increase(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\"}[$window])))",
+          "legendFormat": "{{model}}"
         }
       ],
       "options": {
@@ -467,21 +413,13 @@
           "unit": "short",
           "color": {
             "mode": "palette-classic"
-          },
-          "thresholds": {
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
           }
         }
       }
     },
     {
       "id": 21,
-      "title": "Token share by project ($window)",
+      "title": "Token share by model ($window)",
       "type": "piechart",
       "gridPos": {
         "h": 8,
@@ -491,8 +429,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (project_name) (increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
-          "legendFormat": "{{project_name}}"
+          "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\"}[$window]))",
+          "legendFormat": "{{model}}"
         }
       ],
       "options": {
@@ -512,7 +450,7 @@
     },
     {
       "id": 22,
-      "title": "Cost share by project ($window)",
+      "title": "Cost share by model ($window)",
       "type": "piechart",
       "gridPos": {
         "h": 8,
@@ -522,8 +460,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (project_name) (increase(claude_code_cost_usage_USD_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
-          "legendFormat": "{{project_name}}"
+          "expr": "sum by (model) (increase(claude_code_cost_usage_USD_total{model=~\"$model\",project_name=~\"$project\"}[$window]))",
+          "legendFormat": "{{model}}"
         }
       ],
       "options": {
@@ -544,7 +482,7 @@
     },
     {
       "id": 30,
-      "title": "Token type breakdown by project ($window)",
+      "title": "Token type breakdown by model ($window)",
       "type": "barchart",
       "gridPos": {
         "h": 8,
@@ -554,7 +492,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (project_name, type) (increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
+          "expr": "sum by (model, type) (increase(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\"}[$window]))",
           "legendFormat": "",
           "instant": true,
           "format": "table",
@@ -578,13 +516,13 @@
           "id": "groupingToMatrix",
           "options": {
             "columnField": "type",
-            "rowField": "project_name",
+            "rowField": "model",
             "valueField": "Value"
           }
         }
       ],
       "options": {
-        "xField": "project_name",
+        "xField": "model",
         "groupWidth": 0.7,
         "barWidth": 0.9,
         "stacking": "normal",
@@ -608,7 +546,7 @@
     },
     {
       "id": 31,
-      "title": "Per-project summary ($window)",
+      "title": "Per-model summary ($window)",
       "type": "table",
       "gridPos": {
         "h": 8,
@@ -618,21 +556,21 @@
       },
       "targets": [
         {
-          "expr": "sum by (project_name) (increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
+          "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\"}[$window]))",
           "legendFormat": "",
           "instant": true,
           "format": "table",
           "refId": "Tokens"
         },
         {
-          "expr": "sum by (project_name) (increase(claude_code_cost_usage_USD_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
+          "expr": "sum by (model) (increase(claude_code_cost_usage_USD_total{model=~\"$model\",project_name=~\"$project\"}[$window]))",
           "legendFormat": "",
           "instant": true,
           "format": "table",
           "refId": "Cost"
         },
         {
-          "expr": "sum by (project_name) (increase(claude_code_session_count_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
+          "expr": "sum by (model) (increase(claude_code_session_count_total{model=~\"$model\",project_name=~\"$project\"}[$window]))",
           "legendFormat": "",
           "instant": true,
           "format": "table",
@@ -722,12 +660,12 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "project_name"
+              "options": "model"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Project"
+                "value": "Model"
               }
             ]
           }
@@ -745,7 +683,7 @@
               "Time": true
             },
             "indexByName": {
-              "project_name": 0
+              "model": 0
             }
           }
         }
@@ -753,7 +691,7 @@
     },
     {
       "id": 40,
-      "title": "Tokens over time \u2014 input vs output vs cache ($project)",
+      "title": "Tokens over time \u2014 input vs output vs cache (by model)",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -763,95 +701,26 @@
       },
       "targets": [
         {
-          "expr": "sum by (type) (rate(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=\"input\"}[5m])) * 60",
-          "legendFormat": "input"
+          "expr": "sum by (model) (rate(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\",type=\"input\"}[5m])) * 60",
+          "legendFormat": "{{model}} input"
         },
         {
-          "expr": "sum by (type) (rate(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=\"output\"}[5m])) * 60",
-          "legendFormat": "output"
+          "expr": "sum by (model) (rate(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\",type=\"output\"}[5m])) * 60",
+          "legendFormat": "{{model}} output"
         },
         {
-          "expr": "sum by (type) (rate(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=\"cache_read\"}[5m])) * 60",
-          "legendFormat": "cache_read"
-        },
-        {
-          "expr": "sum by (type) (rate(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\",type=\"cache_creation\"}[5m])) * 60",
-          "legendFormat": "cache_creation"
+          "expr": "sum by (model) (rate(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\",type=~\"cache.*\"}[5m])) * 60",
+          "legendFormat": "{{model}} cache"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
           "custom": {
-            "fillOpacity": 15,
-            "lineWidth": 2,
-            "stacking": {
-              "mode": "none"
-            }
+            "fillOpacity": 10,
+            "lineWidth": 2
           }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "input"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "blue",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "output"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "orange",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "cache_read"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "purple",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "cache_creation"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
+        }
       },
       "options": {
         "tooltip": {
@@ -859,8 +728,8 @@
           "sort": "desc"
         },
         "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
+          "displayMode": "table",
+          "placement": "right"
         }
       }
     }
