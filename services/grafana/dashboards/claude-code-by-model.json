@@ -395,8 +395,23 @@
       },
       "targets": [
         {
-          "expr": "sort_desc(sum by (model) (increase(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\"}[$window])))",
+          "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total{model=~\"$model\",project_name=~\"$project\"}[$window]))",
           "legendFormat": "{{model}}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "reduce",
+          "options": {
+            "reducers": ["lastNotNull"]
+          }
+        },
+        {
+          "id": "rowsToFields",
+          "options": {
+            "nameField": "Field",
+            "valueField": "Last (not null)"
+          }
         }
       ],
       "options": {
@@ -411,6 +426,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "min": 0,
           "color": {
             "mode": "palette-classic"
           }
