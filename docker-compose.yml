@@ -8,6 +8,7 @@ services:
     ports: ["5432:5432"]
     volumes:
       - ./services/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U harness"]
       interval: 15s
@@ -324,3 +325,4 @@ services:
 
 volumes:
   dolt-data:
+  postgres-data:
