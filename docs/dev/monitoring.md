@@ -45,7 +45,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 claude
 **Config files:**
 - `services/otel-collector/otel-collector.yml` — collector config
 - `services/grafana/dashboards/claude-code-telemetry.json` — overview (sessions, cost, tokens)
-- `services/grafana/dashboards/claude-code-by-project.json` — per-project/branch breakdown
+- `services/grafana/dashboards/claude-code-by-project.json` — per-project/branch breakdown. `$branch` was originally filter-only (narrowed every query but never grouped by it); panels 50/51/52 (bargauge + 2 piecharts) now group `by (project_name, project_branch)` so branch usage is actually visible as its own chart, not just a dropdown. Legend uses `{{project_name}}/{{project_branch}}` since branch names like `main` collide across projects.
 
 **Delta → cumulative gotcha:** Claude Code emits delta temporality; Prometheus requires cumulative. The `deltatocumulative` processor in `otel-collector.yml` converts automatically — no env var needed on the Claude side. Alternatively, `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative` bypasses the processor.
 

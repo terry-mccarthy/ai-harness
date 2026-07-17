@@ -863,6 +863,111 @@
           "placement": "bottom"
         }
       }
+    },
+    {
+      "id": 50,
+      "title": "Total tokens by branch ($window)",
+      "type": "bargauge",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (project_name, project_branch) (increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window])))",
+          "legendFormat": "{{project_name}}/{{project_branch}}"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "displayMode": "gradient"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 51,
+      "title": "Token share by branch ($window)",
+      "type": "piechart",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "sum by (project_name, project_branch) (increase(claude_code_token_usage_tokens_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
+          "legendFormat": "{{project_name}}/{{project_branch}}"
+        }
+      ],
+      "options": {
+        "pieType": "donut",
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      }
+    },
+    {
+      "id": 52,
+      "title": "Cost share by branch ($window)",
+      "type": "piechart",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "sum by (project_name, project_branch) (increase(claude_code_cost_usage_USD_total{project_name=~\"$project\",project_branch=~\"$branch\",terminal_type=~\"$terminal\"}[$window]))",
+          "legendFormat": "{{project_name}}/{{project_branch}}"
+        }
+      ],
+      "options": {
+        "pieType": "donut",
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      }
     }
   ]
 }
