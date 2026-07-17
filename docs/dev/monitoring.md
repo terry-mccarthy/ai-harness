@@ -13,12 +13,13 @@ make monitoring-down   # docker compose -f docker-compose.monitoring.yml down
 # Grafana: admin/admin — dashboards are pre-provisioned (see services/grafana/dashboards/)
 ```
 
-**Shared network:** Prometheus scrapes the app services by their compose DNS names
-(`governance:8090`, `review-server:9003`, `sre-stub:9005`, …). Those containers run
-in the main `friday` stack, so the monitoring stack attaches to that stack's network
-as an external network (`friday_default`). Bring the main stack up first — there is
-nothing to scrape otherwise, and until then Prometheus reports the app targets as
-down. Config: `docker-compose.monitoring.yml` (`networks: friday_default: external: true`).
+**Decoupled from the app stack:** the monitoring stack has no shared network with
+`friday` and no startup-order dependency — it can be brought up/down independently
+in either order. Prometheus scrapes the app services (`governance`, `review-server`,
+`sre-stub`, …) via `host.docker.internal` and their host-published ports, since the
+main `friday` compose already exposes all of them to the host (`extra_hosts:
+host.docker.internal:host-gateway` on the `prometheus` service). If `friday` isn't
+running, those targets just show as down in Prometheus.
 
 Governance exposes `GET /metrics`. Metrics: `harness_tool_calls_total`, `harness_tool_call_latency_ms`. (`harness_rate_limit_rejections_total` was removed — rate limiting delegated to CF.)
 

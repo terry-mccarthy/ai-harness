@@ -5,12 +5,12 @@ global:
 scrape_configs:
   - job_name: governance
     static_configs:
-      - targets: ['governance:8090']
+      - targets: ['host.docker.internal:8090']
     metrics_path: /metrics
 
   - job_name: review-server
     static_configs:
-      - targets: ['review-server:9003']
+      - targets: ['host.docker.internal:9003']
     metrics_path: /metrics
 
   - job_name: otel-collector
@@ -20,25 +20,25 @@ scrape_configs:
 
   - job_name: linter-stub
     static_configs:
-      - targets: ['linter-stub:9002']
+      - targets: ['host.docker.internal:9002']
     metrics_path: /metrics
 
   - job_name: sre-stub
     static_configs:
-      - targets: ['sre-stub:9005']
+      - targets: ['host.docker.internal:9005']
     metrics_path: /metrics
 
   - job_name: diff-proxy
     static_configs:
-      - targets: ['diff-proxy:9001']
+      - targets: ['host.docker.internal:9001']
     metrics_path: /metrics
 
   - job_name: github-mcp
     static_configs:
-      - targets: ['github-mcp:9010']
+      - targets: ['host.docker.internal:9010']
     metrics_path: /metrics
 
   - job_name: skills-registry-server
     static_configs:
-      - targets: ['skills-registry-server:9006']
+      - targets: ['host.docker.internal:9006']
     metrics_path: /metrics
