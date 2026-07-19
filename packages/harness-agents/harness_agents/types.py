@@ -120,23 +120,19 @@ ADVERSARIAL_CODE_CRITIC_SCHEMA = {
                     "message":  {"type": "string"},
                     "exploit_scenario": {"type": "string"},
                 },
-                "allOf": [
-                    {
-                        "if": {
-                            "properties": {
-                                "outcome":  {"enum": ["confirmed", "escalated"]},
-                                "severity": {"const": "CRITICAL"},
-                            },
-                            "required": ["outcome", "severity"],
-                        },
-                        "then": {
-                            "required": ["exploit_scenario"],
-                            "properties": {
-                                "exploit_scenario": {"type": "string", "minLength": 1},
-                            },
-                        },
+                "if": {
+                    "properties": {
+                        "outcome":  {"enum": ["confirmed", "escalated"]},
+                        "severity": {"const": "CRITICAL"},
                     },
-                ],
+                    "required": ["outcome", "severity"],
+                },
+                "then": {
+                    "required": ["exploit_scenario"],
+                    "properties": {
+                        "exploit_scenario": {"type": "string", "minLength": 1},
+                    },
+                },
             },
         },
         "summary": {"type": "string"},

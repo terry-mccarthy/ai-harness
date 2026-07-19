@@ -113,6 +113,16 @@ async def test_http_adversarial_review_missing_first_pass_output_returns_422():
     assert resp.status_code == 422
 
 
+async def test_http_adversarial_review_empty_dict_first_pass_output_is_accepted():
+    """{} is a valid (if degenerate) dict, not a missing field — must not 422."""
+    async with _adversarial_client() as client:
+        resp = await client.post("/review-adversarial", json={
+            "diff_text": _SAMPLE_DIFF,
+            "first_pass_output": {},
+        })
+    assert resp.status_code == 200
+
+
 async def test_http_adversarial_review_agent_error_returns_400():
     review_server = _load_review_server()
     mock_gateway = MagicMock()

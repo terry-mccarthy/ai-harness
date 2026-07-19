@@ -601,7 +601,7 @@ async def http_adversarial_review(request: Request) -> JSONResponse:
         return JSONResponse({"error": "diff_text is required"}, status_code=422)
 
     first_pass_output = body.get("first_pass_output")
-    if not first_pass_output:
+    if first_pass_output is None:
         return JSONResponse({"error": "first_pass_output is required"}, status_code=422)
 
     task = body.get("task", _DEFAULT_ADVERSARIAL_TASK)

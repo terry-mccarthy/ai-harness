@@ -36,10 +36,9 @@ class AdversarialCodeCritic:
     allowed_tools = ["git_diff", "run_linter"]
     memory_namespace = "adversarial_code_critic"
 
-    def __init__(self, gateway: GatewayClient, llm_provider: LLMProvider, memory_store=None):
+    def __init__(self, gateway: GatewayClient, llm_provider: LLMProvider):
         self.gateway = gateway
         self.llm = llm_provider
-        self.memory = memory_store
 
     def _check_token_budget(self, token_usage: dict, token_budget: int | None) -> dict | None:
         if token_budget is None or token_usage["completion_tokens"] < token_budget:
