@@ -48,8 +48,8 @@ def _parse_task_type(raw: str) -> str | None:
     return value if value in _TASK_TYPES else None
 
 
-async def classify_node(state: HarnessState, llm_provider: LLMProvider) -> dict:
-    tracer = trace.get_tracer(__name__)
+async def classify_node(state: HarnessState, llm_provider: LLMProvider, tracer_provider=None) -> dict:
+    tracer = (tracer_provider or trace).get_tracer(__name__)
     with tracer.start_as_current_span("classify"):
         tokens_used = state.get("tokens_used", 0)
         try:
@@ -74,16 +74,16 @@ def route_node(state: dict) -> str:
     return mapping.get(state.get("task_type", "review"), "code_reviewer")
 
 
-async def route_span_node(state: HarnessState) -> dict:
+async def route_span_node(state: HarnessState, tracer_provider=None) -> dict:
     """No-op node that emits a 'route' OTel span before the conditional dispatch."""
-    tracer = trace.get_tracer(__name__)
+    tracer = (tracer_provider or trace).get_tracer(__name__)
     with tracer.start_as_current_span("route"):
         logger.info("route: task_type=%s", state.get("task_type"))
     return {}
 
 
-async def formula_lookup_node(state: HarnessState, formula_store) -> dict:
-    tracer = trace.get_tracer(__name__)
+async def formula_lookup_node(state: HarnessState, formula_store, tracer_provider=None) -> dict:
+    tracer = (tracer_provider or trace).get_tracer(__name__)
     with tracer.start_as_current_span("formula_lookup"):
         task_type_to_role = {"design": "architect", "bootstrap": "architect", "review": "code_reviewer", "incident": "sre"}
         role = task_type_to_role.get(state.get("task_type", ""), "")
@@ -118,9 +118,9 @@ def _sum_tokens(state: HarnessState, result: dict) -> int:
     return state.get("tokens_used", 0) + agent_tokens.get("prompt_tokens", 0) + agent_tokens.get("completion_tokens", 0)
 
 
-async def run_agent_node(state: HarnessState, agent, formula=None) -> dict:
+async def run_agent_node(state: HarnessState, agent, formula=None, tracer_provider=None) -> dict:
     """Run a specialist agent node, optionally guided by formula steps."""
-    tracer = trace.get_tracer(__name__)
+    tracer = (tracer_provider or trace).get_tracer(__name__)
     span_name = getattr(agent, "name", "agent")
     with tracer.start_as_current_span(span_name) as span:
         agent_role = getattr(agent, "name", "unknown")
@@ -162,8 +162,8 @@ async def run_agent_node(state: HarnessState, agent, formula=None) -> dict:
         }
 
 
-async def synthesise_node(state: HarnessState, formula_store=None, llm_provider=None) -> dict:
-    tracer = trace.get_tracer(__name__)
+async def synthesise_node(state: HarnessState, formula_store=None, llm_provider=None, tracer_provider=None) -> dict:
+    tracer = (tracer_provider or trace).get_tracer(__name__)
     with tracer.start_as_current_span("synthesise"):
         output = state.get("agent_output") or {}
         tokens_used = state.get("tokens_used", 0)
@@ -195,8 +195,8 @@ def _fallback_summary(state: HarnessState, output: dict) -> str:
     return f"[{state.get('active_agent', 'agent').upper()}] {summary}"
 
 
-async def propose_formula_node(state: HarnessState, formula_store) -> dict:
-    tracer = trace.get_tracer(__name__)
+async def propose_formula_node(state: HarnessState, formula_store, tracer_provider=None) -> dict:
+    tracer = (tracer_provider or trace).get_tracer(__name__)
     with tracer.start_as_current_span("propose_formula"):
         from harness_memory.models import Formula
         task_type_to_role = {"design": "architect", "bootstrap": "architect", "review": "code_reviewer", "incident": "sre"}
@@ -221,8 +221,8 @@ async def propose_formula_node(state: HarnessState, formula_store) -> dict:
         return {}
 
 
-async def architectural_gate_node(state: HarnessState, gateway) -> dict:
-    tracer = trace.get_tracer(__name__)
+async def architectural_gate_node(state: HarnessState, gateway, tracer_provider=None) -> dict:
+    tracer = (tracer_provider or trace).get_tracer(__name__)
     with tracer.start_as_current_span("architectural_gate"):
         repo_path = state.get("repo_path", ".")
         target_language = state.get("target_language", "python")
@@ -249,8 +249,8 @@ async def architectural_gate_node(state: HarnessState, gateway) -> dict:
         return {"gate_signal": signal}
 
 
-async def error_handler_node(state: HarnessState) -> dict:
-    tracer = trace.get_tracer(__name__)
+async def error_handler_node(state: HarnessState, tracer_provider=None) -> dict:
+    tracer = (tracer_provider or trace).get_tracer(__name__)
     with tracer.start_as_current_span("error_handler"):
         error = state.get("error") or {"code": "unknown", "reason": "unspecified error"}
         logger.error("error_handler: %s", error)
