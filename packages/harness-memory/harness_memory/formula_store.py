@@ -162,7 +162,7 @@ class DoltFormulaStore:
                     UPDATE skills
                     SET status = %s
                     WHERE id = %s
-                      AND status NOT IN ('deprecated')
+                      AND status = 'active'
                     """,
                     (status, formula_id),
                 )
@@ -175,7 +175,7 @@ class DoltFormulaStore:
     def get_all_formula_ids(self) -> list[str]:
         with self._conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT DISTINCT id FROM skills WHERE status != 'deprecated'")
+                cur.execute("SELECT DISTINCT id FROM skills WHERE status = 'active'")
                 rows = cur.fetchall()
         return [r["id"] for r in rows]
 
