@@ -116,10 +116,10 @@ class DoltFormulaStore:
                     INNER JOIN (
                         SELECT id, MAX(version) AS max_ver
                         FROM skills
-                        WHERE agent_role = %s AND status NOT IN ('deprecated', 'draft')
+                        WHERE agent_role = %s AND status = 'active'
                         GROUP BY id
                     ) latest ON f.id = latest.id AND f.version = latest.max_ver
-                    WHERE f.status NOT IN ('deprecated')
+                    WHERE f.status = 'active'
                     """,
                     (agent_role,),
                 )
