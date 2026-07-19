@@ -193,7 +193,7 @@ pytest -m eval -v -s    # 11 eval tests (requires Ollama only)
 | `test_dolt_records_gate_failures` | architectural_gate_failures INSERT + Dolt commit |
 | `test_audit_architectural_gate_endpoint` | POST /audit/architectural-gate returns 202 |
 
-## Eval suite (11 tests)
+## Eval suite (14 tests)
 
 Run with `pytest -m eval -v -s`. Scores agents against labeled fixtures with known problems. Uses mock gateways — no Docker stack needed, only Ollama.
 
@@ -264,6 +264,60 @@ Run with `pytest -m eval -v -s`. Scores agents against labeled fixtures with kno
 | `test_git_diff_github_mode_passes_env_token` | `GITHUB_TOKEN` env var forwarded to API call |
 | `test_git_diff_github_mode_missing_repo_raises` | `pr_number` without `github_repo` raises `ValueError` |
 | `test_git_diff_diff_text_takes_precedence_over_github` | Pre-supplied `diff_text` short-circuits GitHub fetch |
+
+## Adversarial code critic (30 tests)
+
+`AdversarialCodeCritic` attacks a first-pass `CodeReviewerAgent` output; a confirmed/escalated CRITICAL finding requires a concrete `exploit_scenario`, not a bare severity label.
+
+**Schema** (`ADVERSARIAL_CODE_CRITIC_SCHEMA`, 10 tests) — no LLM required:
+
+| Test | What it proves |
+|---|---|
+| `test_confirmed_critical_with_exploit_scenario_is_valid` | Well-formed confirmed/CRITICAL finding validates |
+| `test_confirmed_critical_missing_exploit_scenario_is_invalid` | Confirmed/CRITICAL without `exploit_scenario` is rejected |
+| `test_escalated_critical_missing_exploit_scenario_is_invalid` | Same rule applies to `escalated` outcome |
+| `test_confirmed_critical_with_empty_exploit_scenario_is_invalid` | Empty string does not satisfy the forced-artifact requirement |
+| `test_refuted_critical_does_not_require_exploit_scenario` | `refuted` outcome has no exploit requirement |
+| `test_downgraded_warning_does_not_require_exploit_scenario` | `downgraded` outcome has no exploit requirement |
+| `test_confirmed_warning_does_not_require_exploit_scenario` | Forced-artifact rule only binds at CRITICAL severity |
+| `test_unresolved_outcome_is_valid` | Bounded-retry terminal state validates |
+| `test_invalid_outcome_enum_value_is_rejected` | Non-enum `outcome` value is rejected |
+| `test_missing_required_top_level_summary_is_invalid` | Missing `summary` is rejected |
+
+**Agent** (`AdversarialCodeCritic`, 7 tests) — mocked gateway/LLM:
+
+| Test | What it proves |
+|---|---|
+| `test_critic_returns_structured_output_matching_schema` | Output validates against `ADVERSARIAL_CODE_CRITIC_SCHEMA` |
+| `test_critic_confirms_finding_with_exploit_scenario` | Confirmed finding carries a non-empty `exploit_scenario` |
+| `test_critic_passes_first_pass_output_to_llm_prompt` | The first-pass output is embedded in the user message, not just the raw diff |
+| `test_critic_reuses_gathered_tool_results_not_raw_diff_only` | Critic calls `git_diff` and `run_linter` itself, same as the reviewer |
+| `test_critic_retries_on_invalid_output_then_succeeds` | Invalid JSON is retried and recovers |
+| `test_critic_gives_up_after_max_iterations_invalid_output` | `MAX_ITERATIONS` exhausted → `error.code == "invalid_output"` |
+| `test_critic_denies_gracefully_on_tool_access_denied` | `ToolAccessDenied` → `error.code == "tool_access_denied"` |
+
+**HTTP + MCP tool** (`POST /review-adversarial`, `adversarial_review`, 8 tests):
+
+| Test | What it proves |
+|---|---|
+| `test_http_adversarial_review_endpoint_exists` | `POST /review-adversarial` returns 200 for a valid request |
+| `test_http_adversarial_review_returns_findings_and_summary` | Response has `findings`/`summary`, confirmed finding carries `exploit_scenario` |
+| `test_http_adversarial_review_missing_diff_text_returns_422` | Missing `diff_text` → 422 |
+| `test_http_adversarial_review_missing_first_pass_output_returns_422` | Missing `first_pass_output` → 422 |
+| `test_http_adversarial_review_agent_error_returns_400` | Agent failure (max retries exceeded) → 400 |
+| `test_http_adversarial_review_wrong_key_returns_401` | Wrong bearer token → 401 |
+| `test_http_adversarial_review_no_key_set_allows_all` | `REVIEW_API_KEY` unset → all requests allowed (dev mode) |
+| `test_mcp_adversarial_review_tool_reachable_in_process` | `_run_adversarial_review` callable directly with mocks |
+
+**OPA policy** (`adversarial_code_critic` role, 5 tests, `@pytest.mark.integration`):
+
+| Test | What it proves |
+|---|---|
+| `test_opa_allows_adversarial_code_critic_git_diff` | Role may call `git_diff` |
+| `test_opa_allows_adversarial_code_critic_run_linter` | Role may call `run_linter` |
+| `test_opa_denies_adversarial_code_critic_shell_exec` | Role denied `shell_exec` |
+| `test_opa_denies_adversarial_code_critic_issue_create` | Role denied `issue_create` |
+| `test_opa_denies_adversarial_code_critic_codebase_search` | Role denied architect-only tools |
 
 ## review server HTTP endpoint (12 tests)
 

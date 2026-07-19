@@ -1,0 +1,16 @@
+diff --git a/app/orders.py b/app/orders.py
+index 333ccc..444ddd 100644
+--- a/app/orders.py
++++ b/app/orders.py
+@@ -10,7 +10,12 @@ ALLOWED_STATUSES = ("pending", "shipped", "cancelled")
+
+ def orders_by_status(conn, status: str):
+     cursor = conn.cursor()
+-    cursor.execute("SELECT * FROM orders WHERE status = ?", (status,))
++    if status not in ALLOWED_STATUSES:
++        raise ValueError(f"unknown status: {status!r}")
++    # status is validated against a fixed allowlist immediately above, so building
++    # the clause via concatenation here cannot carry attacker-controlled content
++    query = "SELECT * FROM orders WHERE status = '" + status + "'"
++    cursor.execute(query)
+     return cursor.fetchall()

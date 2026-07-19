@@ -1,0 +1,7 @@
+{
+  "description": "First pass flagged CRITICAL SQL injection via string concatenation, but status is validated against a fixed allowlist immediately above — no attacker-controlled input can reach the query. The critic should fail to construct a working exploit and refute or downgrade the finding.",
+  "critic_must_confirm": [],
+  "critic_must_refute": [
+    {"file": "app/orders.py", "line": 16}
+  ]
+}

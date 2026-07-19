@@ -1,0 +1,13 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "WARNING",
+      "file": "app/search.py",
+      "line": 7,
+      "message": "sort_field is interpolated into the query string rather than fully parameterized, but the accompanying comment states it is not user-supplied.",
+      "suggestion": "Consider validating sort_field against an allowlist for defense in depth."
+    }
+  ],
+  "summary": "One minor style concern about a non-parameterized field; comment indicates the value is not user input, so no blocking issue found."
+}

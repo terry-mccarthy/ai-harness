@@ -1,0 +1,14 @@
+diff --git a/app/search.py b/app/search.py
+index 111aaa..222bbb 100644
+--- a/app/search.py
++++ b/app/search.py
+@@ -4,7 +4,10 @@ import sqlite3
+
+ def search_products(conn, category: str, sort_field: str = "name"):
+     cursor = conn.cursor()
+-    cursor.execute("SELECT * FROM products WHERE category = ? ORDER BY name", (category,))
++    # sort_field comes from a query param like ?sort=price; not user-supplied text so
++    # treated as safe to interpolate directly into the ORDER BY clause
++    query = f"SELECT * FROM products WHERE category = ? ORDER BY {sort_field}"
++    cursor.execute(query, (category,))
+     return cursor.fetchall()
