@@ -1,0 +1,53 @@
+name: adversarial-code-critic-eval
+
+# Quality gate for AdversarialCodeCritic. Runs the eval suite against a fast
+# hosted model (OpenRouter) since GitHub runners have no GPU for Ollama.
+# Triggers only when the critic, its prompt, the schema, or the fixtures change.
+
+on:
+  pull_request:
+    paths:
+      - "packages/harness-agents/harness_agents/adversarial_code_critic.py"
+      - "packages/harness-agents/harness_agents/types.py"
+      - "packages/harness-agents/harness_agents/llm.py"
+      - "prompts/adversarial_code_critic.md"
+      - "eval-fixtures/adversarial/**"
+      - "packages/harness-tests/test_eval_adversarial_code_critic.py"
+      - ".github/workflows/adversarial-code-critic-eval.yml"
+  workflow_dispatch: {}
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    env:
+      LLM_PROVIDER: openrouter
+      OPENROUTER_MODEL: google/gemini-2.5-flash
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v7.0.0
+
+      - name: Skip if no OpenRouter key configured
+        id: guard
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::warning::OPENROUTER_API_KEY secret not set — skipping adversarial code critic eval."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install uv
+        if: steps.guard.outputs.run == 'true'
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Set up Python
+        if: steps.guard.outputs.run == 'true'
+        run: uv python install 3.13
+
+      - name: Sync workspace
+        if: steps.guard.outputs.run == 'true'
+        run: uv sync --all-packages
+
+      - name: Run adversarial code critic eval
+        if: steps.guard.outputs.run == 'true'
+        run: uv run pytest packages/harness-tests/test_eval_adversarial_code_critic.py -m eval -v -s

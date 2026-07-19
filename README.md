@@ -9,6 +9,7 @@ A governed, memory-augmented agent harness with production hardening. Every tool
 | Agent | What it does | Doc |
 |---|---|---|
 | **Code Reviewer** | Lint + LLM analysis of diffs; returns structured findings with severity and suggestions | [docs/code-reviewer.md](docs/code-reviewer.md) |
+| **Adversarial Code Critic** | Attacks the Code Reviewer's first-pass findings; a confirmed/escalated CRITICAL requires a concrete `exploit_scenario`, not a bare severity label. Opt-in, run separately via `adversarial_review` | [docs/code-reviewer.md](docs/code-reviewer.md) |
 | **Architect** | Four-phase codebase analysis for layering violations, coupling, and abstraction leaks | [docs/architect.md](docs/architect.md) |
 | **SRE** | Incident investigation with skill-guided remediation, semantic cache, and human-gated shell exec | [docs/sre.md](docs/sre.md) |
 
@@ -116,6 +117,7 @@ MCP_TOOL_TIMEOUT=300000 claude   # 5-minute timeout
 | Short name | MCPJungle name | Role | What it does |
 |---|---|---|---|
 | `review_diff` | `review_server__review_diff` | code_reviewer | Full code review — lints + analyses diff, returns structured findings |
+| `adversarial_review` | `review_server__adversarial_review` | adversarial_code_critic | Attacks a first-pass `review_diff` output; confirmed/escalated CRITICALs require a concrete `exploit_scenario` |
 | `git_diff` | `diff_proxy__git_diff` | code_reviewer | Get a diff: passthrough, GitHub PR, or local git refs |
 | `run_linter` | `linter_stub__run_linter` | code_reviewer | Semgrep lint on diff additions |
 | `coverage_report` | `linter_stub__coverage_report` | code_reviewer | Per-file coverage data (stub) |
@@ -137,12 +139,12 @@ MCP_TOOL_TIMEOUT=300000 claude   # 5-minute timeout
 
 ## Tests
 
-508 tests total — see [docs/tests.md](docs/tests.md) for full coverage tables.
+541 tests total — see [docs/tests.md](docs/tests.md) for full coverage tables.
 
 ```bash
-make test-integration   # 246 integration tests
-make test-unit          # 262 unit tests
-pytest -m eval -v -s    # 11 eval tests (Ollama only)
+make test-integration   # 251 integration tests
+make test-unit          # 287 unit tests
+pytest -m eval -v -s    # 14 eval tests (Ollama only)
 ```
 
 ## Project layout

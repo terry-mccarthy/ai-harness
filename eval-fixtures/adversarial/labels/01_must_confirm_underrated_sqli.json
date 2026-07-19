@@ -1,0 +1,7 @@
+{
+  "description": "First pass under-rated an ORDER BY clause injection as WARNING because a comment claims sort_field isn't user input. The critic must attack the actual query construction, not the comment, and confirm CRITICAL with a working exploit.",
+  "critic_must_confirm": [
+    {"pattern": "order by|sort_field|sort", "file": "app/search.py"}
+  ],
+  "critic_must_refute": []
+}

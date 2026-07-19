@@ -344,6 +344,7 @@ Violations are recorded in a dedicated Dolt table `architectural_gate_failures` 
 |------------------|---------------------------------------------------------------------------------------|
 | `architect`      | `codebase_search`, `adr_read`, `architecture_review`, `execute_architecture_check`, `issue_create` |
 | `code_reviewer`  | `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`, `architecture_review`, `execute_architecture_check` |
+| `adversarial_code_critic` | `git_diff`, `run_linter` (read-only — no write/execute tools)                |
 | `sre`            | `observability_query`, `runbook_read`, `log_search`, `shell_exec`                     |
 | `sre` + `code_reviewer` | `episode:label` scope, `candidate:propose` scope                           |
 | `human_operator` | `skill:promote` scope (promote + reject + revoke — no tool access)                    |
@@ -591,6 +592,37 @@ POST /skills/select  (any valid JWT)
 
 ---
 
+## AdversarialCodeCritic
+
+`packages/harness-agents/harness_agents/adversarial_code_critic.py`:
+
+- Opt-in second stage, not a phase inside `CodeReviewerAgent` — a separate agent, MCP tool (`adversarial_review`), and HTTP route (`POST /review-adversarial`), so it can be tested, versioned, and invoked independently
+- Takes the diff plus the first-pass `CodeReviewerAgent` output (`REVIEWER_OUTPUT_SCHEMA`-shaped) as input; re-gathers `git_diff`/`run_linter` itself rather than trusting the first pass's tool results
+- Attacks each first-pass finding: `confirmed`, `refuted`, `escalated` (a new finding the first pass missed), `downgraded`, or `unresolved` (bounded-retry terminal state)
+- **Forced artifact rule**: a `confirmed`/`escalated` CRITICAL finding requires a non-empty `exploit_scenario` — a concrete input or request that triggers it — enforced by `ADVERSARIAL_CODE_CRITIC_SCHEMA`, not left to prompt instruction alone
+- Same retry-on-invalid-output shape as `CodeReviewerAgent` (`MAX_ITERATIONS = 3`)
+- Runs under its own OAuth client (`adversarial-code-critic`) and OPA role (`adversarial_code_critic`) — read-only, same two tools as the reviewer's tool-gathering step
+
+```json
+{
+  "findings": [
+    {
+      "outcome": "confirmed | refuted | escalated | downgraded | unresolved",
+      "severity": "CRITICAL | WARNING | INFO",
+      "file": "string",
+      "line": 0,
+      "message": "string",
+      "exploit_scenario": "string (required when outcome is confirmed/escalated and severity is CRITICAL)"
+    }
+  ],
+  "summary": "string"
+}
+```
+
+Verified against real Ollama models during development: qwen2.5-coder:7b failed to catch an ORDER BY clause injection trap fixture disguised behind a misleading code comment (it trusted the comment and refuted the finding), while qwen2.5-coder:32b confirmed it with a working exploit — the fixture is intentionally calibrated to separate weak from capable models, mirroring the same class of trap used to validate adversarial review elsewhere.
+
+---
+
 ## git_diff Tool
 
 The `diff-proxy` container bakes in a sample repo at `/app/sample-repo` with two commits —
@@ -750,12 +782,22 @@ suggestions — violating them breaks the system's core guarantees.
 | Skill 08     | `test_skill_select.py`      | 7     | POST /skills/select — specificity/recency/success-rate tiebreaks, escalation, audit_log |
 | Skills CLI   | `test_skills_cli.py`        | 19    | GET /episodes, /candidates, /skills list endpoints; CLI subprocess — full pipeline |
 | 7            | `test_phase7_aac.py`       | 14    | Architectural gate node (unit), route_after_gate (unit), E2E graph flows, Dolt gate failures recording |
+| Adversarial  | `test_adversarial_code_critic_opa.py` | 5 | OPA `allow` rule for `adversarial_code_critic` role — git_diff/run_linter allowed, all else denied |
 
-### Eval suite (7 tests) — `pytest -m eval -v -s`
+### Unit suite additions — Adversarial code critic
+
+| File                                              | Tests | What they cover |
+|----------------------------------------------------|-------|-----------------|
+| `test_unit_adversarial_code_critic_schema.py`     | 10    | `ADVERSARIAL_CODE_CRITIC_SCHEMA` forced-artifact rule (no LLM) |
+| `test_unit_adversarial_code_critic.py`            | 7     | `AdversarialCodeCritic` agent — mocked gateway/LLM |
+| `test_adversarial_review_http.py`                 | 8     | `POST /review-adversarial` + `adversarial_review` MCP tool contract |
+
+### Eval suite (10 tests) — `pytest -m eval -v -s`
 
 | File                       | Tests | What they cover |
 |----------------------------|-------|-----------------|
 | `test_eval_reviewer.py`    | 7     | CodeReviewerAgent quality: 6 per-fixture tests (verdict + recall) + 1 aggregate score report |
+| `test_eval_adversarial_code_critic.py` | 3 | AdversarialCodeCritic quality against 2 trap fixtures (underrated CRITICAL + false-positive CRITICAL) + 1 aggregate confirm/refute-rate report |
 
 Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. They are slow (~2 min for 7b) and are not part of `make test-integration`.
 
@@ -816,3 +858,4 @@ Eval tests use a mock gateway (no Docker stack needed) and hit Ollama directly. 
 | 0042 | `bootstrap_architecture` exposed as `review_server__bootstrap_architecture` MCP tool — calls `ArchitectAgent` directly (no supervisor graph in Docker, avoids adding langgraph/harness-supervisor/harness-memory to the image); uses `architect` OAuth credentials; fixes latent bug where `ArchitectAgent` passed `gateway.gateway_url` (MCPJungle URL) as the GitHub `repo` param to `codebase_search`/`adr_read` — now takes `repo: str = ""` in the constructor and uses `self.repo` | Accepted |
 | 0043 | Semantic response cache on `DynamicSREAgent` uses `PostgresMemoryStore("cache" namespace)` with two-tier lookup: exact key via `read()` (Redis O(1) for identical tasks) + pgvector `search()` for near-identical tasks (threshold 0.92). `_embedding_text=task` passed to `write()` so the stored vector represents the task string, not the full report JSON — without this, noisy report content dilutes similarity and near-identical tasks miss the threshold. Cache writes only on successful completion; `force_refresh: bool` in `AgentState` bypasses both lookup and write per-request. | Accepted |
 | 0044 | `skills-registry-server` (`:9006`) is a separate FastMCP service from `review-server`: the registry is an operator/developer surface (list, create, revoke, execute skills); `review-server` is the agent execution surface. Mixing them would create awkward OPA scoping between agent roles and human-operator role. The server uses a single `human-operator` OAuth client for all governance REST calls; `execute_skill` is the only tool that uses per-role credentials (resolved from the skill's `agent_role`) so OPA enforces the correct tool-access policy on each execution step. OPA enforcement for incoming tool calls is delegated to the caller's GatewayClient (same pattern as all other MCP servers). | Accepted |
+| 0045 | `AdversarialCodeCritic` added as a standalone agent/MCP tool (`adversarial_review`, `POST /review-adversarial`), not a phase folded into `CodeReviewerAgent` — composable, independently testable/versionable, and opt-in without touching the existing reviewer's retry loop or schema. Takes the diff plus the first-pass reviewer output as input and attacks it: `confirmed`/`escalated` CRITICAL findings require a non-empty `exploit_scenario` enforced by `ADVERSARIAL_CODE_CRITIC_SCHEMA` — a forced structured field, not a prompt instruction to "be skeptical," on the finding that a required field changes model behavior more reliably than prose. Runs under its own OAuth client (`adversarial-code-critic`) and OPA role (`adversarial_code_critic`), read-only on `git_diff`/`run_linter`. Companion `ArchitectAgent` critic and `chain_adversarial` opt-in wiring on `/review`/`/review-architecture` tracked as separate follow-on issues. | Accepted |
