@@ -108,18 +108,18 @@ def _after_human_gate(state: HarnessState) -> str:
     return "error_handler"
 
 
-def _build_nodes(builder: StateGraph, classify_llm, synthesise_llm, fstore, gateway, architect, reviewer, sre):
-    builder.add_node("classify",        partial(classify_node,       llm_provider=classify_llm))
-    builder.add_node("formula_lookup",  partial(formula_lookup_node, formula_store=fstore))
-    builder.add_node("route",           route_span_node)
-    builder.add_node("architect",       partial(run_agent_node,      agent=architect))
-    builder.add_node("code_reviewer",   partial(run_agent_node,      agent=reviewer))
-    builder.add_node("sre",             partial(run_agent_node,      agent=sre))
-    builder.add_node("synthesise",      partial(synthesise_node,     formula_store=fstore, llm_provider=synthesise_llm))
-    builder.add_node("propose_formula", partial(propose_formula_node, formula_store=fstore))
-    builder.add_node("architectural_gate", partial(architectural_gate_node, gateway=gateway))
+def _build_nodes(builder: StateGraph, classify_llm, synthesise_llm, fstore, gateway, architect, reviewer, sre, tracer_provider=None):
+    builder.add_node("classify",        partial(classify_node,       llm_provider=classify_llm, tracer_provider=tracer_provider))
+    builder.add_node("formula_lookup",  partial(formula_lookup_node, formula_store=fstore, tracer_provider=tracer_provider))
+    builder.add_node("route",           partial(route_span_node,     tracer_provider=tracer_provider))
+    builder.add_node("architect",       partial(run_agent_node,      agent=architect, tracer_provider=tracer_provider))
+    builder.add_node("code_reviewer",   partial(run_agent_node,      agent=reviewer, tracer_provider=tracer_provider))
+    builder.add_node("sre",             partial(run_agent_node,      agent=sre, tracer_provider=tracer_provider))
+    builder.add_node("synthesise",      partial(synthesise_node,     formula_store=fstore, llm_provider=synthesise_llm, tracer_provider=tracer_provider))
+    builder.add_node("propose_formula", partial(propose_formula_node, formula_store=fstore, tracer_provider=tracer_provider))
+    builder.add_node("architectural_gate", partial(architectural_gate_node, gateway=gateway, tracer_provider=tracer_provider))
     builder.add_node("human_gate",         _human_gate_node)
-    builder.add_node("error_handler",      error_handler_node)
+    builder.add_node("error_handler",      partial(error_handler_node, tracer_provider=tracer_provider))
 
 
 def _build_edges(builder: StateGraph):
@@ -174,10 +174,6 @@ async def build_supervisor(
     checkpointer=None,
     config: dict | None = None,
 ):
-    if tracer_provider is not None:
-        from opentelemetry import trace as otel_trace
-        otel_trace.set_tracer_provider(tracer_provider)
-
     fstore = formula_store or DoltFormulaStore(**DOLT_CONN)
 
     if config:
@@ -194,7 +190,7 @@ async def build_supervisor(
     sre       = DynamicSREAgent(gateway=gateway, llm_provider=sre_llm, memory_store=memory_store)
 
     builder = StateGraph(HarnessState)
-    _build_nodes(builder, classify_llm, synthesise_llm, fstore, gateway, architect, reviewer, sre)
+    _build_nodes(builder, classify_llm, synthesise_llm, fstore, gateway, architect, reviewer, sre, tracer_provider=tracer_provider)
     _build_edges(builder)
 
     if checkpointer is None:

@@ -233,6 +233,89 @@ async def test_cost_otel_tag_present():
         assert attrs["thread_id"] == thread_id
 
 
+async def _run_review_task_and_get_spans(exporter):
+    """Build a supervisor bound to `exporter` via its own TracerProvider, run one
+    review task, and return the spans exporter captured."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    from harness_supervisor import graph as supervisor_graph
+    from harness_supervisor.state import HarnessState
+    from harness_agents.llm import LLMResponse
+    from langgraph.checkpoint.memory import MemorySaver
+
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    findings_json = json.dumps({"verdict": "pass", "findings": [], "summary": "LGTM"})
+
+    class MockLLMProvider:
+        async def chat(self, messages):
+            return LLMResponse(content=findings_json)
+
+    gateway = MagicMock()
+    gateway.call_tool = AsyncMock(return_value={"result": "ok"})
+
+    formula_store = MagicMock()
+    formula_store.lookup = MagicMock(return_value=None)
+    formula_store.propose = MagicMock()
+    formula_store._record_pours = MagicMock()
+
+    g = await supervisor_graph.build_supervisor(
+        llm_provider=MockLLMProvider(),
+        gateway=gateway,
+        formula_store=formula_store,
+        checkpointer=MemorySaver(),
+        tracer_provider=provider,
+    )
+
+    thread_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+    initial: HarnessState = {
+        "task": "review the diff",
+        "diff": "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a=1\n+a=2",
+        "task_type": None,
+        "formula_id": None,
+        "formula_instance_id": None,
+        "active_agent": None,
+        "agent_output": None,
+        "final_response": None,
+        "human_approval_token": None,
+        "requires_human_approval": False,
+        "error": None,
+        "thread_id": thread_id,
+        "memory_context": None,
+        "tokens_used": 0,
+        "token_budget": None,
+    }
+    await g.ainvoke(initial, config)
+    return exporter.get_finished_spans()
+
+
+@pytest.mark.asyncio
+async def test_otel_tracer_provider_does_not_leak_across_supervisor_builds():
+    """Two sequential build_supervisor(tracer_provider=...) calls (as happen when
+    multiple test modules each pass their own provider in one pytest process) must
+    not let the first call's global registration swallow the second's spans."""
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    first_exporter = InMemorySpanExporter()
+    second_exporter = InMemorySpanExporter()
+
+    await _run_review_task_and_get_spans(first_exporter)
+    second_spans = await _run_review_task_and_get_spans(second_exporter)
+
+    second_span_names = [s.name for s in second_spans]
+    agent_spans = [s for s in second_spans if s.name in ("code_reviewer", "architect", "sre")]
+    assert agent_spans, (
+        f"Second build_supervisor's spans did not reach its own exporter — "
+        f"got: {second_span_names}. The first call's TracerProvider is likely "
+        f"still globally active."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Slice 4 — Token budget: graph terminates gracefully when budget exceeded
 # ---------------------------------------------------------------------------
