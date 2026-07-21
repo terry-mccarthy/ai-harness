@@ -59,6 +59,10 @@ CLIENTS = {
         "secret": os.environ.get("ADVERSARIAL_CODE_CRITIC_SECRET", "adversarial-code-critic-secret"),
         "role": "adversarial_code_critic",
     },
+    "adversarial-architecture-critic": {
+        "secret": os.environ.get("ADVERSARIAL_ARCHITECTURE_CRITIC_SECRET", "adversarial-architecture-critic-secret"),
+        "role": "adversarial_architecture_critic",
+    },
     "sre": {
         "secret": os.environ.get("SRE_SECRET", "sre-secret"),
         "role": "sre",

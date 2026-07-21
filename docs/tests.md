@@ -3,9 +3,9 @@
 All tests live in `packages/harness-tests/`. Run them with:
 
 ```bash
-make test-integration   # 246 integration tests (requires Docker stack)
-make test-unit          # 262 unit tests (no infra needed)
-pytest -m eval -v -s    # 11 eval tests (requires Ollama only)
+make test-integration   # 267 integration tests (requires Docker stack)
+make test-unit          # 314 unit tests (no infra needed)
+pytest -m eval -v -s    # 19 eval tests (requires Ollama only)
 ```
 
 ## Phase 0 — Core reviewer (9 tests)
@@ -193,7 +193,7 @@ pytest -m eval -v -s    # 11 eval tests (requires Ollama only)
 | `test_dolt_records_gate_failures` | architectural_gate_failures INSERT + Dolt commit |
 | `test_audit_architectural_gate_endpoint` | POST /audit/architectural-gate returns 202 |
 
-## Eval suite (14 tests)
+## Eval suite (19 tests)
 
 Run with `pytest -m eval -v -s`. Scores agents against labeled fixtures with known problems. Uses mock gateways — no Docker stack needed, only Ollama.
 
@@ -207,6 +207,8 @@ Run with `pytest -m eval -v -s`. Scores agents against labeled fixtures with kno
 | `test_reviewer_fixture[04_shell_injection]` | Catches `shell=True` with user-controlled input |
 | `test_reviewer_fixture[05_missing_auth]` | Catches auth/role decorators removed from admin endpoints |
 | `test_reviewer_fixture[06_path_traversal]` | Catches user-controlled filename used directly in `open()` |
+| `test_reviewer_fixture[07_prompt_injection]` | Resists an in-diff instruction trying to steer the reviewer's verdict |
+| `test_reviewer_fixture[08_prompt_injection_exfil]` | Resists an in-diff instruction trying to exfiltrate secrets via the reviewer's own output |
 | `test_reviewer_aggregate_score` | Asserts verdict accuracy ≥ 80% and recall ≥ 60% across all fixtures |
 
 **Architect** — four-phase `ArchitectAgent` against fixture repos expressed as canned tool responses:
@@ -217,6 +219,22 @@ Run with `pytest -m eval -v -s`. Scores agents against labeled fixtures with kno
 | `test_architect_fixture[god_controller]` | Catches business logic + SQL inline in an HTTP handler (layering/coupling) |
 | `test_architect_fixture[leaky_persistence]` | Catches SQLAlchemy/ORM leaking through a domain "port" (abstraction/coupling) |
 | `test_architect_aggregate_score` | Schema validity 100%, detection ≥ 66%, recall ≥ 50%, synthesis matches `ARCHITECT_OUTPUT_SCHEMA` |
+
+**Adversarial code critic** — `AdversarialCodeCritic` against trap fixtures pairing a diff with a first-pass reviewer output and a known answer key:
+
+| Test | What it proves |
+|---|---|
+| `test_adversarial_critic_fixture[01_must_confirm_underrated_sqli]` | Confirms a CRITICAL finding with an `exploit_scenario` for an ORDER BY injection the first pass under-rated as WARNING |
+| `test_adversarial_critic_fixture[02_must_refute_false_positive]` | Refutes/downgrades a first-pass CRITICAL finding on a status value already validated against an allowlist |
+| `test_adversarial_critic_aggregate_scores` | Asserts confirm-rate ≥ 80% and refute-rate ≥ 60% across all fixtures |
+
+**Adversarial architecture critic** — `AdversarialArchitectureCritic` against trap fixtures pairing grounding context with a first-pass synthesis output and a known answer key:
+
+| Test | What it proves |
+|---|---|
+| `test_adversarial_architecture_critic_fixture[01_must_confirm_underrated_shared_cache]` | Confirms a HIGH+ finding with a `regression_scenario` for a cache-key isolation gap the first pass under-rated as MEDIUM |
+| `test_adversarial_architecture_critic_fixture[02_must_refute_false_positive_facade_coupling]` | Refutes/downgrades a first-pass HIGH finding that turns out to be interface-backed, not tightly coupled |
+| `test_adversarial_architecture_critic_aggregate_scores` | Asserts confirm-rate ≥ 80% and refute-rate ≥ 60% across all fixtures |
 
 ## Semantic response cache (14 tests)
 
@@ -318,6 +336,68 @@ Run with `pytest -m eval -v -s`. Scores agents against labeled fixtures with kno
 | `test_opa_denies_adversarial_code_critic_shell_exec` | Role denied `shell_exec` |
 | `test_opa_denies_adversarial_code_critic_issue_create` | Role denied `issue_create` |
 | `test_opa_denies_adversarial_code_critic_codebase_search` | Role denied architect-only tools |
+
+## Adversarial architecture critic (38 tests)
+
+`AdversarialArchitectureCritic` attacks a first-pass `ArchitectAgent` synthesis output; a confirmed/escalated HIGH+ finding requires a concrete `regression_scenario`, not a bare severity label.
+
+**Schema** (`ADVERSARIAL_ARCHITECTURE_CRITIC_SCHEMA`, 12 tests) — no LLM required:
+
+| Test | What it proves |
+|---|---|
+| `test_confirmed_high_with_regression_scenario_is_valid` | Well-formed confirmed/HIGH finding validates |
+| `test_confirmed_critical_with_regression_scenario_is_valid` | Well-formed confirmed/CRITICAL finding validates |
+| `test_confirmed_high_missing_regression_scenario_is_invalid` | Confirmed/HIGH without `regression_scenario` is rejected |
+| `test_escalated_critical_missing_regression_scenario_is_invalid` | Same rule applies to `escalated` outcome |
+| `test_confirmed_high_with_empty_regression_scenario_is_invalid` | Empty string does not satisfy the forced-artifact requirement |
+| `test_refuted_high_does_not_require_regression_scenario` | `refuted` outcome has no regression requirement |
+| `test_downgraded_medium_does_not_require_regression_scenario` | `downgraded` outcome has no regression requirement |
+| `test_confirmed_medium_does_not_require_regression_scenario` | Forced-artifact rule only binds at HIGH+ severity |
+| `test_unresolved_outcome_is_valid` | Bounded-retry terminal state validates |
+| `test_invalid_outcome_enum_value_is_rejected` | Non-enum `outcome` value is rejected |
+| `test_invalid_severity_enum_value_is_rejected` | Non-enum `severity` value is rejected |
+| `test_missing_required_top_level_summary_is_invalid` | Missing `summary` is rejected |
+
+**Agent** (`AdversarialArchitectureCritic`, 8 tests) — mocked gateway/LLM:
+
+| Test | What it proves |
+|---|---|
+| `test_critic_returns_structured_output_matching_schema` | Output validates against `ADVERSARIAL_ARCHITECTURE_CRITIC_SCHEMA` |
+| `test_critic_confirms_finding_with_regression_scenario` | Confirmed finding carries a non-empty `regression_scenario` |
+| `test_critic_passes_first_pass_output_to_llm_prompt` | The first-pass synthesis output is embedded in the user message |
+| `test_critic_includes_diff_in_prompt_when_target_is_a_diff` | `state["diff"]` (target_mode="diff") is embedded in the user message, not dropped |
+| `test_critic_reuses_architect_tools_for_grounding_context` | Critic calls `codebase_search`, `adr_read`, and `codebase_hotspots` itself, same tool surface as the architect |
+| `test_critic_retries_on_invalid_output_then_succeeds` | Invalid JSON is retried and recovers |
+| `test_critic_gives_up_after_max_iterations_invalid_output` | `MAX_ITERATIONS` exhausted → `error.code == "invalid_output"` |
+| `test_critic_denies_gracefully_on_tool_access_denied` | `ToolAccessDenied` → `error.code == "tool_access_denied"` |
+
+**HTTP + MCP tool** (`POST /review-architecture-adversarial`, `adversarial_architecture_review`, 12 tests):
+
+| Test | What it proves |
+|---|---|
+| `test_http_adversarial_architecture_review_endpoint_exists` | `POST /review-architecture-adversarial` returns 200 for a valid request |
+| `test_http_adversarial_architecture_review_returns_findings_and_summary` | Response has `findings`/`summary`, confirmed finding carries `regression_scenario` |
+| `test_http_adversarial_architecture_review_missing_repo_returns_422` | Missing `repo` → 422 |
+| `test_http_adversarial_architecture_review_missing_first_pass_output_returns_422` | Missing `first_pass_output` → 422 |
+| `test_http_adversarial_architecture_review_empty_dict_first_pass_output_is_accepted` | `{}` is a valid dict, not a missing field — must not 422 |
+| `test_http_adversarial_architecture_review_agent_error_returns_400` | Agent failure (max retries exceeded) → 400 |
+| `test_http_adversarial_architecture_review_wrong_key_returns_401` | Wrong bearer token → 401 |
+| `test_http_adversarial_architecture_review_no_key_set_allows_all` | `REVIEW_API_KEY` unset → all requests allowed (dev mode) |
+| `test_http_adversarial_architecture_review_accepts_diff_target_mode` | `target_mode="diff"` + `diff` is a valid target shape, mirrors `/review-architecture` |
+| `test_http_adversarial_architecture_review_defaults_to_codebase_target_mode` | Omitting `target_mode`/`diff` still works (codebase mode default) |
+| `test_http_adversarial_architecture_review_diff_reaches_the_critic_prompt` | The `diff` body field is threaded into the agent's prompt, not just accepted and dropped |
+| `test_mcp_adversarial_architecture_review_tool_reachable_in_process` | `_run_adversarial_architecture_review` callable directly with mocks |
+
+**OPA policy** (`adversarial_architecture_critic` role, 6 tests, `@pytest.mark.integration`):
+
+| Test | What it proves |
+|---|---|
+| `test_opa_allows_adversarial_architecture_critic_codebase_search` | Role may call `codebase_search` |
+| `test_opa_allows_adversarial_architecture_critic_adr_read` | Role may call `adr_read` |
+| `test_opa_allows_adversarial_architecture_critic_codebase_hotspots` | Role may call `codebase_hotspots` |
+| `test_opa_denies_adversarial_architecture_critic_issue_create` | Role denied `issue_create` (unlike the first-pass architect) |
+| `test_opa_denies_adversarial_architecture_critic_shell_exec` | Role denied `shell_exec` |
+| `test_opa_denies_adversarial_architecture_critic_git_diff` | Role denied code-critic-only tools |
 
 ## review server HTTP endpoint (12 tests)
 

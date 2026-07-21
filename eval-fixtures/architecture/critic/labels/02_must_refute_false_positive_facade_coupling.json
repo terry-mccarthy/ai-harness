@@ -1,0 +1,7 @@
+{
+  "description": "First pass flagged HIGH coupling to SendGrid in NotificationService, but service.py depends only on the NotificationGateway abstraction — SendGridAPIClient is confined to EmailNotifier, the one adapter class ADR-0003 exists to allow. There is no code path where swapping providers touches NotificationService. The critic should fail to construct a working regression trace and refute or downgrade the finding.",
+  "critic_must_confirm": [],
+  "critic_must_refute": [
+    {"location": "notify/service.py"}
+  ]
+}

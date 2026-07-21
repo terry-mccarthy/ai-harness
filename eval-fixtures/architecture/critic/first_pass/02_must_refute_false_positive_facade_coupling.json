@@ -1,0 +1,22 @@
+{
+  "title": "Architecture Review: notify-svc",
+  "status": "completed",
+  "summary": "Notification service shows signs of vendor lock-in.",
+  "current_state_assessment": "The service layer sends notifications through a gateway object, but SendGrid is used somewhere in the notification path.",
+  "findings": [
+    {
+      "severity": "HIGH",
+      "category": "coupling",
+      "title": "Tight coupling to SendGrid",
+      "message": "NotificationService's notification path ultimately calls SendGridAPIClient, breaking ADR-0003's requirement to abstract third-party notification providers. Swapping providers would require changes to NotificationService.",
+      "location": "notify/service.py",
+      "phase_origin": "flow_trace"
+    }
+  ],
+  "technical_debt_hotspots": [],
+  "nfr_risks": [],
+  "recommendations": [
+    {"priority": 1, "action": "introduce an abstraction over SendGrid", "rationale": "avoid vendor lock-in", "roi": "medium"}
+  ],
+  "alternatives_considered": []
+}

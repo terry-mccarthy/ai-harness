@@ -1,0 +1,44 @@
+{
+  "codebase_search": {
+    "repo": "https://github.com/example/notify-svc",
+    "query": "notification gateway abstraction third-party coupling",
+    "results": [
+      {
+        "path": "notify/gateway.py",
+        "repo": "example/notify-svc",
+        "matches": [
+          {"fragment": "from abc import ABC, abstractmethod\n\nclass NotificationGateway(ABC):\n    @abstractmethod\n    def send(self, recipient: str, body: str) -> None: ...\n# small port; no SendGrid or Twilio types appear here"}
+        ]
+      },
+      {
+        "path": "notify/email_notifier.py",
+        "repo": "example/notify-svc",
+        "matches": [
+          {"fragment": "from notify.gateway import NotificationGateway\nfrom sendgrid import SendGridAPIClient   # the ONLY file in the repo that imports sendgrid\n\nclass EmailNotifier(NotificationGateway):\n    def __init__(self, client: SendGridAPIClient):\n        self._client = client\n    def send(self, recipient, body):\n        self._client.send(to=recipient, body=body)"}
+        ]
+      },
+      {
+        "path": "notify/service.py",
+        "repo": "example/notify-svc",
+        "matches": [
+          {"fragment": "class NotificationService:\n    def __init__(self, gateway: NotificationGateway):   # depends on the port only\n        self._gateway = gateway\n    def notify(self, recipient: str, body: str) -> None:\n        self._gateway.send(recipient, body)\n# service.py never imports sendgrid or any vendor SDK"}
+        ]
+      }
+    ]
+  },
+  "adr_read": {
+    "repo": "example/notify-svc",
+    "adrs": [
+      {
+        "id": "0003",
+        "title": "Abstract third-party notification providers",
+        "status": "accepted",
+        "content": "# 0003 — Abstract third-party notification providers\n\nStatus: accepted\n\n## Decision\nBusiness logic must depend on a NotificationGateway abstraction, never directly on a vendor SDK (SendGrid, Twilio, etc). Vendor SDKs are confined to adapter classes that implement the gateway interface."
+      }
+    ]
+  },
+  "codebase_hotspots": [
+    {"path": "notify/service.py", "complexity": 4, "lines": 30, "rank": 2},
+    {"path": "notify/email_notifier.py", "complexity": 5, "lines": 40, "rank": 1}
+  ]
+}

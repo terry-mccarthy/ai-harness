@@ -24,6 +24,13 @@ allow if {
     input.tool_name in {"git_diff", "run_linter"}
 }
 
+# Adversarial architecture critic — read-only, same reconnaissance tool surface
+# as the architect (minus issue_create — the critic never files issues itself).
+allow if {
+    input.agent_role == "adversarial_architecture_critic"
+    input.tool_name in {"codebase_search", "adr_read", "codebase_hotspots"}
+}
+
 # Skills registry — read-only tools available to all agent roles
 # (governance /check strips the server prefix, so short names are used here)
 allow if {

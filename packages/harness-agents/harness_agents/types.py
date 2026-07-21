@@ -140,6 +140,46 @@ ADVERSARIAL_CODE_CRITIC_SCHEMA = {
     "additionalProperties": False,
 }
 
+# Adversarial architecture critic: attacks the first-pass ArchitectAgent synthesis
+# findings. A confirmed/escalated HIGH+ finding requires a concrete
+# regression_scenario — the "forced artifact" that stands in for a bare severity
+# label. Every other outcome/severity combination leaves regression_scenario optional.
+ADVERSARIAL_ARCHITECTURE_CRITIC_SCHEMA = {
+    "type": "object",
+    "required": ["findings", "summary"],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["outcome", "severity", "location", "message"],
+                "properties": {
+                    "outcome":  _CRITIC_OUTCOME,
+                    "severity": _SEVERITY,
+                    "location": {"type": "string"},
+                    "message":  {"type": "string"},
+                    "regression_scenario": {"type": "string"},
+                },
+                "if": {
+                    "properties": {
+                        "outcome":  {"enum": ["confirmed", "escalated"]},
+                        "severity": {"enum": ["CRITICAL", "HIGH"]},
+                    },
+                    "required": ["outcome", "severity"],
+                },
+                "then": {
+                    "required": ["regression_scenario"],
+                    "properties": {
+                        "regression_scenario": {"type": "string", "minLength": 1},
+                    },
+                },
+            },
+        },
+        "summary": {"type": "string"},
+    },
+    "additionalProperties": False,
+}
+
 REVIEWER_OUTPUT_SCHEMA = {
     "type": "object",
     "required": ["verdict", "findings", "summary"],
