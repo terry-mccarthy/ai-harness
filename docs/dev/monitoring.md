@@ -13,12 +13,13 @@ make monitoring-down   # docker compose -f docker-compose.monitoring.yml down
 # Grafana: admin/admin — dashboards are pre-provisioned (see services/grafana/dashboards/)
 ```
 
-**Shared network:** Prometheus scrapes the app services by their compose DNS names
-(`governance:8090`, `review-server:9003`, `sre-stub:9005`, …). Those containers run
-in the main `friday` stack, so the monitoring stack attaches to that stack's network
-as an external network (`friday_default`). Bring the main stack up first — there is
-nothing to scrape otherwise, and until then Prometheus reports the app targets as
-down. Config: `docker-compose.monitoring.yml` (`networks: friday_default: external: true`).
+**Decoupled from the app stack:** the monitoring stack has no shared network with
+`friday` and no startup-order dependency — it can be brought up/down independently
+in either order. Prometheus scrapes the app services (`governance`, `review-server`,
+`sre-stub`, …) via `host.docker.internal` and their host-published ports, since the
+main `friday` compose already exposes all of them to the host (`extra_hosts:
+host.docker.internal:host-gateway` on the `prometheus` service). If `friday` isn't
+running, those targets just show as down in Prometheus.
 
 Governance exposes `GET /metrics`. Metrics: `harness_tool_calls_total`, `harness_tool_call_latency_ms`. (`harness_rate_limit_rejections_total` was removed — rate limiting delegated to CF.)
 
@@ -44,7 +45,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 claude
 **Config files:**
 - `services/otel-collector/otel-collector.yml` — collector config
 - `services/grafana/dashboards/claude-code-telemetry.json` — overview (sessions, cost, tokens)
-- `services/grafana/dashboards/claude-code-by-project.json` — per-project/branch breakdown
+- `services/grafana/dashboards/claude-code-by-project.json` — per-project/branch breakdown. `$branch` was originally filter-only (narrowed every query but never grouped by it); panels 50/51/52 (bargauge + 2 piecharts) now group `by (project_name, project_branch)` so branch usage is actually visible as its own chart, not just a dropdown. Legend uses `{{project_name}}/{{project_branch}}` since branch names like `main` collide across projects.
 
 **Delta → cumulative gotcha:** Claude Code emits delta temporality; Prometheus requires cumulative. The `deltatocumulative` processor in `otel-collector.yml` converts automatically — no env var needed on the Claude side. Alternatively, `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative` bypasses the processor.
 
@@ -65,3 +66,5 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 claude
 **`prometheus_client`'s ProcessCollector is Linux-only.** It reads `/proc`, so `process_cpu_seconds_total` / `process_resident_memory_bytes` are silently absent when a service's `/metrics` route is exercised in a unit test running on a macOS host (e.g. via httpx's ASGI transport) — the endpoint still returns 200 with valid Prometheus text, just without those series. They appear correctly once scraped from the actual (Linux) Docker container. Don't assert on process-level metrics in host-run unit tests; assert on something platform-agnostic instead (e.g. `python_info`), and verify the process metrics with `curl` against the running container if needed.
 
 **Prometheus (and Postgres) data lived in anonymous volumes and was wiped on every restart — fixed 2026-07-13.** Neither service declared a named `volumes:` entry; each only got the image's implicit `VOLUME` (e.g. `/prometheus`, `/var/lib/postgresql/data`), which is tied to the specific container instance. `docker compose down` removes that container, and the next `up` creates a fresh container with a brand-new empty anonymous volume — the old one is orphaned on disk (visible via `docker volume ls -f dangling=true`) but never reattached. Since the documented restart workflow is `docker compose down && docker compose up -d`, this meant Prometheus's TSDB (and Postgres's data dir) were silently reset on essentially every stack bounce. Fix: both `docker-compose.yml` (`postgres` → `postgres-data:/var/lib/postgresql/data`) and `docker-compose.monitoring.yml` (`prometheus` → `prometheus-data:/prometheus`) now mount named volumes, so `down`/`up` cycles preserve data. Orphaned anonymous volumes from before the fix are harmless leftovers — `docker volume prune` to reclaim the disk space once you're sure you don't need them. Grafana's own state (`/var/lib/grafana`) is still on an anonymous volume; low priority since dashboards/datasources are provisioned from files in git, not stored there.
+
+**`project_branch` is frozen at Claude Code process startup — it does not track branch switches mid-session.** `.envrc` sets `OTEL_RESOURCE_ATTRIBUTES` with `project.branch=$(git branch --show-current)`, a shell substitution direnv evaluates once when the env loads. Per Claude Code's own docs (Monitoring usage), OTEL resource attributes are read at startup only and never re-read during a running session — there is no built-in mechanism to refresh the branch (or any resource attribute) without restarting the `claude` process. This compounds with a direnv issue: direnv only re-runs `.envrc` when the file's own mtime changes, so it has no reason to notice a `git checkout` in the same shell. Fix applied: `watch_file .git/HEAD` was added to `.envrc` so direnv reloads `OTEL_RESOURCE_ATTRIBUTES` whenever HEAD changes — this fixes the direnv-side staleness, but the Claude Code-side limit is a hard ceiling. Net effect: to get accurate per-branch attribution in the "By Project" dashboard, start a new Claude Code session after switching branches; a session that lives across a branch switch will keep attributing all subsequent usage to the branch it started on.

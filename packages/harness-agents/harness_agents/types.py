@@ -16,6 +16,7 @@ class AgentState(TypedDict, total=False):
     formula: object | None      # pre-loaded Formula injected by run_agent_node
     force_refresh: bool         # skip cache lookup and write for this request
     cache_hit: bool             # True when result was served from the semantic cache
+    first_pass_output: dict | None  # first-pass agent output an adversarial critic attacks
 
 
 # Matches the Phase-4 synthesis output produced by prompts/architect.md.
@@ -89,6 +90,92 @@ SRE_OUTPUT_SCHEMA = {
         },
         "runbook_ref":           {"type": ["string", "null"]},
         "requires_human_approval": {"type": "boolean"},
+    },
+    "additionalProperties": False,
+}
+
+_CRITIC_OUTCOME = {
+    "type": "string",
+    "enum": ["confirmed", "refuted", "escalated", "downgraded", "unresolved"],
+}
+
+# Adversarial code critic: attacks the first-pass CodeReviewerAgent findings.
+# A confirmed/escalated CRITICAL finding requires a concrete exploit_scenario —
+# the "forced artifact" that stands in for a bare severity label. Every other
+# outcome/severity combination leaves exploit_scenario optional.
+ADVERSARIAL_CODE_CRITIC_SCHEMA = {
+    "type": "object",
+    "required": ["findings", "summary"],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["outcome", "severity", "file", "line", "message"],
+                "properties": {
+                    "outcome":  _CRITIC_OUTCOME,
+                    "severity": {"type": "string", "enum": ["INFO", "WARNING", "CRITICAL"]},
+                    "file":     {"type": "string"},
+                    "line":     {"type": "integer"},
+                    "message":  {"type": "string"},
+                    "exploit_scenario": {"type": "string"},
+                },
+                "if": {
+                    "properties": {
+                        "outcome":  {"enum": ["confirmed", "escalated"]},
+                        "severity": {"const": "CRITICAL"},
+                    },
+                    "required": ["outcome", "severity"],
+                },
+                "then": {
+                    "required": ["exploit_scenario"],
+                    "properties": {
+                        "exploit_scenario": {"type": "string", "minLength": 1},
+                    },
+                },
+            },
+        },
+        "summary": {"type": "string"},
+    },
+    "additionalProperties": False,
+}
+
+# Adversarial architecture critic: attacks the first-pass ArchitectAgent synthesis
+# findings. A confirmed/escalated HIGH+ finding requires a concrete
+# regression_scenario — the "forced artifact" that stands in for a bare severity
+# label. Every other outcome/severity combination leaves regression_scenario optional.
+ADVERSARIAL_ARCHITECTURE_CRITIC_SCHEMA = {
+    "type": "object",
+    "required": ["findings", "summary"],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["outcome", "severity", "location", "message"],
+                "properties": {
+                    "outcome":  _CRITIC_OUTCOME,
+                    "severity": _SEVERITY,
+                    "location": {"type": "string"},
+                    "message":  {"type": "string"},
+                    "regression_scenario": {"type": "string"},
+                },
+                "if": {
+                    "properties": {
+                        "outcome":  {"enum": ["confirmed", "escalated"]},
+                        "severity": {"enum": ["CRITICAL", "HIGH"]},
+                    },
+                    "required": ["outcome", "severity"],
+                },
+                "then": {
+                    "required": ["regression_scenario"],
+                    "properties": {
+                        "regression_scenario": {"type": "string", "minLength": 1},
+                    },
+                },
+            },
+        },
+        "summary": {"type": "string"},
     },
     "additionalProperties": False,
 }

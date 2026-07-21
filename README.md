@@ -9,7 +9,9 @@ A governed, memory-augmented agent harness with production hardening. Every tool
 | Agent | What it does | Doc |
 |---|---|---|
 | **Code Reviewer** | Lint + LLM analysis of diffs; returns structured findings with severity and suggestions | [docs/code-reviewer.md](docs/code-reviewer.md) |
+| **Adversarial Code Critic** | Attacks the Code Reviewer's first-pass findings; a confirmed/escalated CRITICAL requires a concrete `exploit_scenario`, not a bare severity label. Opt-in, run separately via `adversarial_review` | [docs/code-reviewer.md](docs/code-reviewer.md) |
 | **Architect** | Four-phase codebase analysis for layering violations, coupling, and abstraction leaks | [docs/architect.md](docs/architect.md) |
+| **Adversarial Architecture Critic** | Attacks the Architect's first-pass synthesis findings; a confirmed/escalated HIGH+ finding requires a concrete `regression_scenario`, not a bare severity label. Opt-in, run separately via `adversarial_architecture_review` | [docs/architect.md](docs/architect.md) |
 | **SRE** | Incident investigation with skill-guided remediation, semantic cache, and human-gated shell exec | [docs/sre.md](docs/sre.md) |
 
 Skills learned from agent runs are surfaced as Claude Code slash commands. See [docs/skills.md](docs/skills.md).
@@ -116,6 +118,7 @@ MCP_TOOL_TIMEOUT=300000 claude   # 5-minute timeout
 | Short name | MCPJungle name | Role | What it does |
 |---|---|---|---|
 | `review_diff` | `review_server__review_diff` | code_reviewer | Full code review — lints + analyses diff, returns structured findings |
+| `adversarial_review` | `review_server__adversarial_review` | adversarial_code_critic | Attacks a first-pass `review_diff` output; confirmed/escalated CRITICALs require a concrete `exploit_scenario` |
 | `git_diff` | `diff_proxy__git_diff` | code_reviewer | Get a diff: passthrough, GitHub PR, or local git refs |
 | `run_linter` | `linter_stub__run_linter` | code_reviewer | Semgrep lint on diff additions |
 | `coverage_report` | `linter_stub__coverage_report` | code_reviewer | Per-file coverage data (stub) |
@@ -124,6 +127,7 @@ MCP_TOOL_TIMEOUT=300000 claude   # 5-minute timeout
 | `adr_read` | `architect_stub__adr_read` | architect | Read ADRs from `docs/adr/` in a GitHub repo |
 | `architecture_review` | `review_server__architecture_review` | architect | Four-phase architectural analysis |
 | `bootstrap_architecture` | `review_server__bootstrap_architecture` | architect | Generate `ARCHITECTURE.md`; needs `MCP_TOOL_TIMEOUT=300000` |
+| `adversarial_architecture_review` | `review_server__adversarial_architecture_review` | adversarial_architecture_critic | Attacks a first-pass `ArchitectAgent` synthesis output; confirmed/escalated HIGH+ findings require a concrete `regression_scenario` |
 | `execute_architecture_check` | `review_server__execute_architecture_check` | architect | Run architecture invariant checks (stub) |
 | `code_health_score` | `review_server__code_health_score` | architect | Cyclomatic complexity per file, 0–10 scores |
 | `codebase_hotspots` | `review_server__codebase_hotspots` | architect | Rank files by hotspot risk |
@@ -137,12 +141,12 @@ MCP_TOOL_TIMEOUT=300000 claude   # 5-minute timeout
 
 ## Tests
 
-508 tests total — see [docs/tests.md](docs/tests.md) for full coverage tables.
+602 tests total — see [docs/tests.md](docs/tests.md) for full coverage tables.
 
 ```bash
-make test-integration   # 246 integration tests
-make test-unit          # 262 unit tests
-pytest -m eval -v -s    # 11 eval tests (Ollama only)
+make test-integration   # 267 integration tests
+make test-unit          # 314 unit tests
+pytest -m eval -v -s    # 19 eval tests (Ollama only)
 ```
 
 ## Project layout

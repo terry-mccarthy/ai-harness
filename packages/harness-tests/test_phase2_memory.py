@@ -449,6 +449,53 @@ async def test_formula_deprecate(formula_store):
     assert result is None
 
 
+async def test_formula_revoked_excluded_from_list_active(formula_store):
+    """A revoked skill is not returned by list_active() or lookup() — same contract as deprecated."""
+    formula_store.propose(_triage_formula())
+    formula_store.update_quality("test:triage-incident", 0.0, "revoked")
+
+    active = formula_store.list_active("test_sre")
+    ids = [f.id for f in active]
+    assert "test:triage-incident" not in ids
+
+    result = formula_store.lookup("test_sre", "DB latency alert fired")
+    assert result is None
+
+
+async def test_formula_expired_excluded_from_list_active(formula_store):
+    """An expired skill is not returned by list_active() or lookup() — same contract as deprecated."""
+    formula_store.propose(_triage_formula())
+    formula_store.update_quality("test:triage-incident", 0.0, "expired")
+
+    active = formula_store.list_active("test_sre")
+    ids = [f.id for f in active]
+    assert "test:triage-incident" not in ids
+
+    result = formula_store.lookup("test_sre", "DB latency alert fired")
+    assert result is None
+
+
+async def test_update_quality_does_not_reactivate_revoked_skill(formula_store):
+    """update_quality() must not flip a revoked skill back to active — same
+    terminal-status contract as list_active()."""
+    formula_store.propose(_triage_formula())
+    formula_store.update_quality("test:triage-incident", 0.0, "revoked")
+
+    formula_store.update_quality("test:triage-incident", 1.0, "active")
+
+    row = formula_store.get("test:triage-incident")
+    assert row.status == "revoked"
+
+
+async def test_get_all_formula_ids_excludes_revoked_and_expired(formula_store):
+    """get_all_formula_ids() must not return revoked/expired ids as current."""
+    formula_store.propose(_triage_formula())
+    formula_store.update_quality("test:triage-incident", 0.0, "revoked")
+
+    ids = formula_store.get_all_formula_ids()
+    assert "test:triage-incident" not in ids
+
+
 async def test_formula_interface_compliance():
     """DoltFormulaStore satisfies FormulaStore Protocol (structural check)."""
     from harness_memory.protocols import FormulaStore

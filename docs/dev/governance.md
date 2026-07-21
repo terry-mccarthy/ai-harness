@@ -2,7 +2,7 @@
 
 FastAPI app at `services/governance/server.py`. Three responsibilities:
 
-1. **OAuth 2.1 client credentials** — `POST /oauth/token` (form body). Three clients: `architect`, `code-reviewer`, `sre`. Issues **RS256 JWTs** with 15-min TTL, signed with a private RSA key loaded from `JWT_PRIVATE_KEY_FILE`.
+1. **OAuth 2.1 client credentials** — `POST /oauth/token` (form body). Clients: `architect`, `code-reviewer`, `adversarial-code-critic`, `adversarial-architecture-critic`, `sre`. Issues **RS256 JWTs** with 15-min TTL, signed with a private RSA key loaded from `JWT_PRIVATE_KEY_FILE`.
 2. **OPA policy check** — `POST /check` validates a token and calls OPA. Returns 200 `{"allowed": true, ...}` or 403.
 3. **Dolt audit** — `POST /audit` accepts an audit record and writes to Dolt asynchronously (202 response). `CALL DOLT_COMMIT` per write.
 4. **JWKS** — `GET /jwks` returns the RSA public key as a JWK set; downstream verifiers fetch from here.
@@ -27,10 +27,16 @@ allow {             # broken — rego_parse_error on modern OPA
 }
 ```
 
-Current policy (`policies/harness.rego`) maps three roles to tool sets:
+**Policy changes need an OPA restart.** `policies/harness.rego` is bind-mounted read-only into the `opa` container (`docker-compose.yml`), but OPA's `run --server` loads the policy file once at startup — it does not watch for changes. Editing `harness.rego` and re-running a test against `localhost:8181` will silently keep serving the old policy until you `docker compose restart opa`.
+
+Current policy (`policies/harness.rego`) maps roles to tool sets:
 - `architect` → `codebase_search`, `adr_read`, `architecture_review`, `execute_architecture_check`
 - `code_reviewer` → `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`
+- `adversarial_code_critic` → `git_diff`, `run_linter` (read-only — same tool-gathering surface as `code_reviewer`, no write/execute tools)
+- `adversarial_architecture_critic` → `codebase_search`, `adr_read`, `codebase_hotspots` (read-only — same reconnaissance surface as `architect`, minus `issue_create`)
 - `sre` → `observability_query`, `runbook_read`, `log_search`, `shell_exec`, `skill_search`
+
+**Client ID vs agent role naming:** `CLIENTS` in `services/governance/core/config.py` keys by the hyphenated OAuth `client_id` (e.g. `adversarial-code-critic`) but each entry's `role` value — the string OPA actually checks in `harness.rego` via `input.agent_role` — is the underscored form (e.g. `adversarial_code_critic`). `GatewayClient(client_id=...)` and `MonitoredLLMProvider(agent_role=...)` are two different strings for the same agent; get either wrong and the OPA rule silently never matches.
 
 ## Rate limiting (Phase 6+)
 

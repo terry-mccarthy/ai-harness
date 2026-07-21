@@ -1,0 +1,13 @@
+{
+  "verdict": "fail",
+  "findings": [
+    {
+      "severity": "CRITICAL",
+      "file": "app/orders.py",
+      "line": 16,
+      "message": "SQL query built via string concatenation — classic SQL injection pattern.",
+      "suggestion": "Use a parameterized query instead of string concatenation."
+    }
+  ],
+  "summary": "Found a SQL injection via string concatenation in orders_by_status."
+}

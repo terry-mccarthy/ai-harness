@@ -17,6 +17,8 @@ logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
 from harness_gateway.client import GatewayClient
 from harness_agents.reviewer import CodeReviewerAgent
+from harness_agents.adversarial_code_critic import AdversarialCodeCritic
+from harness_agents.adversarial_architecture_critic import AdversarialArchitectureCritic
 from harness_agents.types import AgentState
 from metrics import MonitoredLLMProvider
 
@@ -132,6 +134,20 @@ _DEFAULT_TASK = (
     "(3) architectural concerns — hardcoded values, tight coupling, shared mutable state, missing abstractions. "
     "Report every finding with file, line, severity (CRITICAL/WARNING/INFO), and a specific fix suggestion. "
     "Verdict is 'fail' if any CRITICAL finding exists."
+)
+
+_DEFAULT_ADVERSARIAL_TASK = (
+    "Attack the first-pass reviewer's findings. Confirm, refute, escalate, downgrade, "
+    "or leave unresolved each one. A confirmed or escalated CRITICAL finding requires "
+    "a concrete exploit_scenario — an actual input or request that triggers it, not a "
+    "restatement of the severity."
+)
+
+_DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK = (
+    "Attack the first-pass architect's synthesis findings. Confirm, refute, escalate, "
+    "downgrade, or leave unresolved each one. A confirmed or escalated HIGH/CRITICAL "
+    "finding requires a concrete regression_scenario — a specific failure trace grounded "
+    "in the codebase, not a restatement of the severity."
 )
 
 # ---------------------------------------------------------------------------
@@ -471,6 +487,153 @@ async def http_review(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# MCP tool: adversarial_review — attacks the first-pass review_diff output
+# ---------------------------------------------------------------------------
+
+
+async def _run_adversarial_review(
+    diff_text: str,
+    first_pass_output: dict,
+    task: str,
+    provider: str | None = None,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    num_ctx: int | None = None,
+    num_predict: int | None = None,
+    host: str | None = None,
+) -> dict:
+    """Run the AdversarialCodeCritic and return structured findings.
+
+    Raises ValueError if the agent returns an error.
+    """
+    gateway = GatewayClient(
+        gateway_url=os.environ["MCPJUNGLE_URL"],
+        governance_url=os.environ.get("GOVERNANCE_URL"),
+        client_id="adversarial-code-critic",
+        client_secret=os.environ.get("ADVERSARIAL_CODE_CRITIC_SECRET", ""),
+    )
+    resolved_provider = (
+        provider
+        or _CONFIG.get("llm_provider")
+        or os.environ.get("LLM_PROVIDER", "ollama")
+    ).lower()
+    llm_provider = _build_llm_provider(
+        resolved_provider,
+        host=host,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        num_ctx=num_ctx,
+        num_predict=num_predict,
+    )
+    llm_provider = MonitoredLLMProvider(llm_provider, agent_role="adversarial_code_critic")
+    agent = AdversarialCodeCritic(gateway=gateway, llm_provider=llm_provider)
+    state = AgentState(
+        task=task,
+        diff=diff_text,
+        first_pass_output=first_pass_output,
+        thread_id="mcp-call",
+        agent_output=None,
+        requires_human_approval=False,
+        error=None,
+    )
+    result = await agent.run(state)
+    if result.get("error"):
+        raise ValueError(result["error"]["reason"])
+    return result["agent_output"]
+
+
+@mcp.tool()
+async def adversarial_review(
+    diff_text: str,
+    first_pass_output: dict,
+    provider: str | None = None,
+    task: str = _DEFAULT_ADVERSARIAL_TASK,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    num_ctx: int | None = None,
+    num_predict: int | None = None,
+    host: str | None = None,
+) -> dict:
+    """Attack a first-pass review_diff output and return confirm/refute/escalate findings.
+
+    Args:
+        diff_text: The unified diff string that was reviewed.
+        first_pass_output: The structured output of a prior review_diff call.
+        provider: Optional LLM provider override (``"ollama"``, ``"gemini"``, or ``"openrouter"``).
+        task: High-level instruction passed to the critic.
+        model: Override the model name for the resolved provider.
+        temperature: Override the temperature setting.
+        max_tokens: Override the max tokens / max output tokens / num_predict setting.
+        num_ctx: Override the context window (Ollama only).
+        num_predict: Override num_predict (Ollama only).
+        host: Override the Ollama host URL.
+    """
+    try:
+        return await _run_adversarial_review(
+            diff_text, first_pass_output, task, provider,
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            num_ctx=num_ctx, num_predict=num_predict, host=host,
+        )
+    except Exception as e:
+        logging.exception("adversarial_review failed")
+        raise RuntimeError(str(e)) from e
+
+
+@mcp.custom_route("/review-adversarial", methods=["POST"])
+async def http_adversarial_review(request: Request) -> JSONResponse:
+    """Plain HTTP endpoint for the adversarial code critic.
+
+    Body (JSON):
+        diff_text         (str, required): unified diff that was reviewed
+        first_pass_output (dict, required): structured output of a prior review_diff call
+        task               (str, optional): critique instruction
+        provider, model, temperature, max_tokens, num_ctx, num_predict, host: same as POST /review
+
+    Auth: set REVIEW_API_KEY in env (same as POST /review).
+
+    Returns the AdversarialCodeCritic's structured findings.
+    """
+    if not _check_api_key(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=422)
+
+    diff_text = body.get("diff_text")
+    if not diff_text:
+        return JSONResponse({"error": "diff_text is required"}, status_code=422)
+
+    first_pass_output = body.get("first_pass_output")
+    if first_pass_output is None:
+        return JSONResponse({"error": "first_pass_output is required"}, status_code=422)
+
+    task = body.get("task", _DEFAULT_ADVERSARIAL_TASK)
+    provider = body.get("provider")
+
+    try:
+        findings = await _run_adversarial_review(
+            diff_text, first_pass_output, task, provider,
+            model=body.get("model"),
+            temperature=body.get("temperature"),
+            max_tokens=body.get("max_tokens"),
+            num_ctx=body.get("num_ctx"),
+            num_predict=body.get("num_predict"),
+            host=body.get("host"),
+        )
+        return JSONResponse(findings)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception:
+        logging.exception("adversarial review failed")
+        return JSONResponse({"error": "adversarial review failed — see server logs"}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
 # Config API — read / write runtime overrides
 # ---------------------------------------------------------------------------
 
@@ -768,6 +931,172 @@ async def http_architecture_review(request: Request) -> JSONResponse:
     except Exception:
         logging.exception("architecture_review failed")
         return JSONResponse({"error": "architecture review failed — see server logs"}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# MCP tool: adversarial_architecture_review — attacks the first-pass
+# ArchitectAgent synthesis output
+# ---------------------------------------------------------------------------
+
+
+async def _run_adversarial_architecture_review(
+    repo: str,
+    first_pass_output: dict,
+    task: str,
+    provider: str | None = None,
+    diff: str | None = None,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    num_ctx: int | None = None,
+    num_predict: int | None = None,
+    host: str | None = None,
+) -> dict:
+    """Run the AdversarialArchitectureCritic and return structured findings.
+
+    Raises ValueError if the agent returns an error.
+    """
+    gateway = GatewayClient(
+        gateway_url=os.environ["MCPJUNGLE_URL"],
+        governance_url=os.environ.get("GOVERNANCE_URL"),
+        client_id="adversarial-architecture-critic",
+        client_secret=os.environ.get("ADVERSARIAL_ARCHITECTURE_CRITIC_SECRET", ""),
+    )
+    resolved_provider = (
+        provider
+        or _CONFIG.get("llm_provider")
+        or os.environ.get("LLM_PROVIDER", "ollama")
+    ).lower()
+    llm_provider = _build_llm_provider(
+        resolved_provider,
+        host=host,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        num_ctx=num_ctx,
+        num_predict=num_predict,
+    )
+    llm_provider = MonitoredLLMProvider(llm_provider, agent_role="adversarial_architecture_critic")
+    agent = AdversarialArchitectureCritic(gateway=gateway, llm_provider=llm_provider, repo=repo)
+    state = AgentState(
+        task=task,
+        diff=diff or "",
+        first_pass_output=first_pass_output,
+        thread_id="mcp-call",
+        agent_output=None,
+        requires_human_approval=False,
+        error=None,
+    )
+    result = await agent.run(state)
+    if result.get("error"):
+        raise ValueError(result["error"]["reason"])
+    return result["agent_output"]
+
+
+@mcp.tool()
+async def adversarial_architecture_review(
+    repo: str,
+    first_pass_output: dict,
+    target_mode: str = "codebase",
+    diff: str | None = None,
+    provider: str | None = None,
+    task: str = _DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    num_ctx: int | None = None,
+    num_predict: int | None = None,
+    host: str | None = None,
+) -> dict:
+    """Attack a first-pass architecture_review/ArchitectAgent synthesis output and
+    return confirm/refute/escalate findings.
+
+    Args:
+        repo: GitHub URL (e.g. ``"https://github.com/owner/repo"``).
+        first_pass_output: The structured synthesis output of a prior architecture review.
+        target_mode: ``"codebase"`` (default) or ``"diff"`` — mirrors ``architecture_review``'s
+            target shape; informational when combined with ``diff``.
+        diff: Unified diff text under review, when the first pass reviewed a diff rather than
+            the whole codebase. Included in the critic's grounding context when present.
+        provider: Optional LLM provider override (``"ollama"``, ``"gemini"``, or ``"openrouter"``).
+        task: High-level instruction passed to the critic.
+        model: Override the model name for the resolved provider.
+        temperature: Override the temperature setting.
+        max_tokens: Override the max tokens / max output tokens / num_predict setting.
+        num_ctx: Override the context window (Ollama only).
+        num_predict: Override num_predict (Ollama only).
+        host: Override the Ollama host URL.
+    """
+    try:
+        return await _run_adversarial_architecture_review(
+            repo, first_pass_output, task, provider, diff=diff,
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            num_ctx=num_ctx, num_predict=num_predict, host=host,
+        )
+    except Exception as e:
+        logging.exception("adversarial_architecture_review failed")
+        raise RuntimeError(str(e)) from e
+
+
+async def _parse_adversarial_architecture_review_body(request: Request) -> tuple[dict, JSONResponse | None]:
+    """Parse and validate the POST /review-architecture-adversarial body.
+
+    Returns (body, None) on success or ({}, error_response) on the first failure.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {}, JSONResponse({"error": "invalid JSON body"}, status_code=422)
+    if not body.get("repo"):
+        return {}, JSONResponse({"error": "repo is required"}, status_code=422)
+    if body.get("first_pass_output") is None:
+        return {}, JSONResponse({"error": "first_pass_output is required"}, status_code=422)
+    return body, None
+
+
+@mcp.custom_route("/review-architecture-adversarial", methods=["POST"])
+async def http_adversarial_architecture_review(request: Request) -> JSONResponse:
+    """Plain HTTP endpoint for the adversarial architecture critic.
+
+    Body (JSON):
+        repo               (str, required): GitHub URL that was reviewed
+        first_pass_output  (dict, required): structured synthesis output of a prior architecture review
+        target_mode         (str, optional): ``"codebase"`` (default) or ``"diff"`` — mirrors /review-architecture's target shape
+        diff                (str, optional): unified diff text, when target_mode="diff"
+        task                (str, optional): critique instruction
+        provider, model, temperature, max_tokens, num_ctx, num_predict, host: same as POST /review-architecture
+
+    Auth: set REVIEW_API_KEY in env (same as POST /review).
+
+    Returns the AdversarialArchitectureCritic's structured findings.
+    """
+    if not _check_api_key(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    body, error = await _parse_adversarial_architecture_review_body(request)
+    if error:
+        return error
+
+    task = body.get("task", _DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK)
+    provider = body.get("provider")
+
+    try:
+        findings = await _run_adversarial_architecture_review(
+            body["repo"], body["first_pass_output"], task, provider,
+            diff=body.get("diff"),
+            model=body.get("model"),
+            temperature=body.get("temperature"),
+            max_tokens=body.get("max_tokens"),
+            num_ctx=body.get("num_ctx"),
+            num_predict=body.get("num_predict"),
+            host=body.get("host"),
+        )
+        return JSONResponse(findings)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception:
+        logging.exception("adversarial architecture review failed")
+        return JSONResponse({"error": "adversarial architecture review failed — see server logs"}, status_code=500)
 
 
 # ---------------------------------------------------------------------------

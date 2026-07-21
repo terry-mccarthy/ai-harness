@@ -1,27 +1,22 @@
 # Standalone monitoring stack (otel-collector, Prometheus, Grafana).
 #
-# Runs as its own compose project so it can be brought up/down independently of
-# the main app stack:
+# Fully decoupled from the main app stack — no shared network, no dependency
+# on `friday` being up first. It can be started/stopped independently in any
+# order:
 #
 #   docker compose -f docker-compose.monitoring.yml up -d
 #   docker compose -f docker-compose.monitoring.yml down
 #
-# Prometheus scrapes the app services by their compose DNS names
-# (governance, review-server, sre-stub, ...). Those containers live in the main
-# `friday` stack, so this stack attaches to that stack's network as an external
-# network. Bring the main stack up first (there is nothing to scrape otherwise);
-# until then Prometheus simply reports those targets as down.
+# Prometheus scrapes the app services (governance, review-server, sre-stub,
+# ...) via their host-published ports on host.docker.internal, since the main
+# `friday` compose already exposes all of them to the host. If the main stack
+# isn't running, those targets just show as down in Prometheus.
 name: friday-monitoring
-
-networks:
-  friday_default:
-    external: true
 
 services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     command: ["--config=/etc/otel-collector.yml"]
-    networks: [friday_default]
     volumes:
       - ./services/otel-collector/otel-collector.yml:/etc/otel-collector.yml:ro
     ports:
@@ -29,7 +24,6 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
-    networks: [friday_default]
     ports: ["9090:9090"]
     volumes:
       - ./services/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -37,13 +31,14 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       otel-collector:
         condition: service_started
 
   grafana:
     image: grafana/grafana:latest
-    networks: [friday_default]
     ports: ["3000:3000"]
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin

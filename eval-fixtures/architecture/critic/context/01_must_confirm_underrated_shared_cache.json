@@ -1,0 +1,37 @@
+{
+  "codebase_search": {
+    "repo": "https://github.com/example/billing-svc",
+    "query": "shared cache pricing tenant isolation",
+    "results": [
+      {
+        "path": "billing/pricing.py",
+        "repo": "example/billing-svc",
+        "matches": [
+          {"fragment": "# process-wide cache: pricing lookups are expensive (a downstream rate-card\n# API call) so we memoize by product id for the lifetime of the worker\n_PRICING_CACHE: dict[str, float] = {}\n\ndef get_price(product_id: str) -> float:\n    if product_id in _PRICING_CACHE:\n        return _PRICING_CACHE[product_id]\n    price = _fetch_negotiated_price(product_id)\n    _PRICING_CACHE[product_id] = price\n    return price"}
+        ]
+      },
+      {
+        "path": "billing/handlers.py",
+        "repo": "example/billing-svc",
+        "matches": [
+          {"fragment": "def quote_handler(request):\n    tenant_id = request.headers['X-Tenant-Id']\n    product_id = request.json['product_id']\n    # get_price is not passed tenant_id — negotiated/custom pricing is per tenant\n    price = get_price(product_id)\n    return {'price': price}"}
+        ]
+      }
+    ]
+  },
+  "adr_read": {
+    "repo": "example/billing-svc",
+    "adrs": [
+      {
+        "id": "0002",
+        "title": "Strict multi-tenant isolation",
+        "status": "accepted",
+        "content": "# 0002 — Strict multi-tenant isolation\n\nStatus: accepted\n\n## Decision\nNo tenant's data — including negotiated pricing, quotas, or usage — may ever be readable by another tenant, whether via the database, cache, or in-process memory. Any shared cache or memoization layer MUST be keyed by tenant_id."
+      }
+    ]
+  },
+  "codebase_hotspots": [
+    {"path": "billing/pricing.py", "complexity": 14, "lines": 90, "rank": 1},
+    {"path": "billing/handlers.py", "complexity": 11, "lines": 140, "rank": 2}
+  ]
+}

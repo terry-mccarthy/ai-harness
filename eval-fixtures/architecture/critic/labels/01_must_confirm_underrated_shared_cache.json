@@ -1,0 +1,7 @@
+{
+  "description": "First pass rated the shared pricing cache as MEDIUM/scalability (staleness only). It missed that the cache key omits tenant_id, so one tenant's negotiated price leaks to another tenant sharing the same worker process — a direct violation of ADR-0002 (strict multi-tenant isolation). The critic must attack the actual cache-key structure, not the staleness framing, and confirm HIGH+ with a concrete regression trace.",
+  "critic_must_confirm": [
+    {"pattern": "tenant|cache.?key|cross.?tenant|leak|isolation", "location": "billing/pricing.py"}
+  ],
+  "critic_must_refute": []
+}

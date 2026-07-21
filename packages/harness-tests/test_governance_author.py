@@ -80,6 +80,9 @@ def _root_conn():
     )
 
 
+_authored_skill_ids: list[str] = []
+
+
 def _author_skill(payload: dict | None = None) -> tuple[str, httpx.Response]:
     body = payload if payload is not None else _AUTHOR_PAYLOAD
     token = _operator_token()
@@ -90,6 +93,8 @@ def _author_skill(payload: dict | None = None) -> tuple[str, httpx.Response]:
         timeout=10.0,
     )
     skill_id = resp.json().get("skill_id") if resp.status_code == 201 else None
+    if skill_id:
+        _authored_skill_ids.append(skill_id)
     return skill_id, resp
 
 
@@ -101,6 +106,21 @@ def _revoke_skill(skill_id: str) -> None:
         headers={"Authorization": f"Bearer {token}"},
         timeout=10.0,
     )
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_authored_skills():
+    """Revoke every skill authored via _author_skill() during the test.
+
+    Without this, each test run permanently leaves an active skill in the
+    shared Dolt store — over many runs these accumulate and can outrank the
+    real seed formulas in DoltFormulaStore.lookup()'s TF-IDF matching.
+    Revoking (not deleting) is idempotent and safe even if the test already
+    revoked the skill itself (e.g. test_get_prompt_410_for_revoked).
+    """
+    yield
+    while _authored_skill_ids:
+        _revoke_skill(_authored_skill_ids.pop())
 
 
 # ---------------------------------------------------------------------------

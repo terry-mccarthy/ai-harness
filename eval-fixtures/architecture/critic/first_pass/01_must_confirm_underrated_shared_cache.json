@@ -1,0 +1,26 @@
+{
+  "title": "Architecture Review: billing-svc",
+  "status": "completed",
+  "summary": "Billing service is mostly sound; one in-process cache could use a TTL.",
+  "current_state_assessment": "Handlers call into a small pricing module. One module-level cache exists for negotiated pricing lookups.",
+  "findings": [
+    {
+      "severity": "MEDIUM",
+      "category": "scalability",
+      "title": "Unbounded process-local pricing cache",
+      "message": "_PRICING_CACHE in billing/pricing.py grows without eviction and could go stale if negotiated prices change mid-process-lifetime.",
+      "location": "billing/pricing.py",
+      "phase_origin": "flow_trace"
+    }
+  ],
+  "technical_debt_hotspots": [
+    {"rank": 1, "area": "billing/pricing.py", "description": "unbounded in-process cache", "impact": "medium"}
+  ],
+  "nfr_risks": [
+    {"concern": "state_management", "risk": "cache staleness after a price change", "severity": "MEDIUM"}
+  ],
+  "recommendations": [
+    {"priority": 1, "action": "add a TTL to the pricing cache", "rationale": "avoid serving stale negotiated prices", "roi": "medium"}
+  ],
+  "alternatives_considered": []
+}
