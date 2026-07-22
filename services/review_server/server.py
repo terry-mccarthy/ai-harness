@@ -487,6 +487,22 @@ async def http_review(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Shared verdict synthesis for chain_adversarial=True (issues #03, #04)
+# ---------------------------------------------------------------------------
+
+
+def _chain_adversarial_verdict(critic_findings: list[dict], fail_severities: set[str]) -> str:
+    """'fail' if any critic finding is at a fail-tier severity with outcome
+    confirmed/escalated; 'pass' otherwise. A refuted/downgraded/unresolved
+    finding never fails the build on its own.
+    """
+    for finding in critic_findings:
+        if finding["severity"] in fail_severities and finding["outcome"] in ("confirmed", "escalated"):
+            return "fail"
+    return "pass"
+
+
+# ---------------------------------------------------------------------------
 # MCP tool: adversarial_review — attacks the first-pass review_diff output
 # ---------------------------------------------------------------------------
 
