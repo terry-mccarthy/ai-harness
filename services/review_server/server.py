@@ -734,6 +734,53 @@ async def run_skill(
 # MCP tool: architecture_review
 # ---------------------------------------------------------------------------
 
+_ARCHITECTURE_CHAIN_FAIL_SEVERITIES = {"CRITICAL", "HIGH"}
+
+
+async def _run_architecture_review_chain(
+    *,
+    repo: str,
+    target_mode: str,
+    diff: str | None,
+    llm_provider,
+    chain_adversarial: bool,
+    provider: str | None,
+    model: str | None,
+    temperature: float | None,
+    max_tokens: int | None,
+    num_ctx: int | None,
+    num_predict: int | None,
+    host: str | None,
+) -> dict:
+    """Run the first-pass architecture synthesis and, when requested, chain the
+    adversarial architecture critic on top of it.
+
+    Returns the first-pass output unchanged when ``chain_adversarial`` is False.
+    Otherwise returns ``{"first_pass", "critic", "verdict"}`` where verdict is
+    computed per the confirmed/escalated-only-fails rule (HIGH+ threshold).
+    """
+    from architecture_review import architecture_review as _architecture_review
+
+    first_pass_output = await _architecture_review(
+        repo=repo,
+        target_mode=target_mode,
+        diff=diff,
+        llm_provider=llm_provider,
+    )
+    if not chain_adversarial:
+        return first_pass_output
+
+    critic_output = await _run_adversarial_architecture_review(
+        repo, first_pass_output, _DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK, provider,
+        diff=diff, model=model, temperature=temperature, max_tokens=max_tokens,
+        num_ctx=num_ctx, num_predict=num_predict, host=host,
+    )
+    verdict = _chain_adversarial_verdict(
+        critic_output.get("findings", []), _ARCHITECTURE_CHAIN_FAIL_SEVERITIES
+    )
+    return {"first_pass": first_pass_output, "critic": critic_output, "verdict": verdict}
+
+
 @mcp.tool()
 async def architecture_review(
     target_mode: str,
@@ -746,6 +793,7 @@ async def architecture_review(
     num_ctx: int | None = None,
     num_predict: int | None = None,
     host: str | None = None,
+    chain_adversarial: bool = False,
 ) -> dict:
     """Score a codebase or diff against the repo's stated architectural invariants.
 
@@ -764,9 +812,11 @@ async def architecture_review(
         num_ctx: Override the context window (Ollama only).
         num_predict: Override num_predict (Ollama only).
         host: Override the Ollama host URL.
+        chain_adversarial: When ``True``, additionally run the
+            ``AdversarialArchitectureCritic`` against the first-pass synthesis and
+            return ``{"first_pass", "critic", "verdict"}`` instead of the first-pass
+            output alone. Defaults to ``False`` (today's unchanged behavior).
     """
-    from architecture_review import architecture_review as _architecture_review
-
     resolved_provider = (
         provider
         or _CONFIG.get("llm_provider")
@@ -783,11 +833,11 @@ async def architecture_review(
     )
     llm_provider = MonitoredLLMProvider(llm_provider, agent_role="architect")
     try:
-        return await _architecture_review(
-            repo=repo,
-            target_mode=target_mode,
-            diff=diff,
-            llm_provider=llm_provider,
+        return await _run_architecture_review_chain(
+            repo=repo, target_mode=target_mode, diff=diff, llm_provider=llm_provider,
+            chain_adversarial=chain_adversarial, provider=provider, model=model,
+            temperature=temperature, max_tokens=max_tokens, num_ctx=num_ctx,
+            num_predict=num_predict, host=host,
         )
     except Exception as e:
         logging.exception("architecture_review failed")
@@ -899,6 +949,10 @@ async def http_architecture_review(request: Request) -> JSONResponse:
         num_ctx     (int, optional): context window override (Ollama)
         num_predict (int, optional): num_predict override (Ollama)
         host        (str, optional): Ollama host override
+        chain_adversarial (bool, optional): when true, additionally run the
+            AdversarialArchitectureCritic against the first-pass synthesis and
+            return {"first_pass", "critic", "verdict"} instead of the first-pass
+            output alone. Defaults to false (today's unchanged behavior).
 
     Auth: set REVIEW_API_KEY in env (same as POST /review).
     """
@@ -917,8 +971,6 @@ async def http_architecture_review(request: Request) -> JSONResponse:
     if not repo:
         return JSONResponse({"error": "repo is required"}, status_code=422)
 
-    from architecture_review import architecture_review as _architecture_review
-
     resolved_provider = (
         body.get("provider")
         or _CONFIG.get("llm_provider")
@@ -935,11 +987,12 @@ async def http_architecture_review(request: Request) -> JSONResponse:
             num_predict=body.get("num_predict"),
         )
         llm_provider = MonitoredLLMProvider(llm_provider, agent_role="architect")
-        result = await _architecture_review(
-            repo=repo,
-            target_mode=target_mode,
-            diff=body.get("diff"),
-            llm_provider=llm_provider,
+        result = await _run_architecture_review_chain(
+            repo=repo, target_mode=target_mode, diff=body.get("diff"), llm_provider=llm_provider,
+            chain_adversarial=bool(body.get("chain_adversarial")), provider=body.get("provider"),
+            model=body.get("model"), temperature=body.get("temperature"),
+            max_tokens=body.get("max_tokens"), num_ctx=body.get("num_ctx"),
+            num_predict=body.get("num_predict"), host=body.get("host"),
         )
         return JSONResponse(result)
     except ValueError as e:

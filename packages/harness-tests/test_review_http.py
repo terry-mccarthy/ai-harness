@@ -365,6 +365,106 @@ async def test_http_architecture_review_wrong_key_returns_401():
     assert resp.status_code == 401
 
 
+# ---------------------------------------------------------------------------
+# Slice — POST /review-architecture chain_adversarial (issue #04)
+# ---------------------------------------------------------------------------
+
+_CRITIC_OUTPUT_CONFIRMED_HIGH = {
+    "findings": [
+        {
+            "outcome": "confirmed",
+            "severity": "HIGH",
+            "location": "shopflow/routes.py",
+            "message": "business logic inline in the route handler",
+            "regression_scenario": "adding a second payment provider requires editing every route handler",
+        }
+    ],
+    "summary": "Confirmed with a concrete regression trace.",
+}
+
+_CRITIC_OUTPUT_REFUTED_HIGH = {
+    "findings": [
+        {
+            "outcome": "refuted",
+            "severity": "HIGH",
+            "location": "shopflow/routes.py",
+            "message": "not actually a regression — this path is covered by an existing abstraction",
+        }
+    ],
+    "summary": "Refuted — no regression.",
+}
+
+
+async def test_http_architecture_review_chain_adversarial_defaults_false_unchanged():
+    """Omitting chain_adversarial entirely leaves the response byte-for-byte identical
+    to today's behavior (regression/contract test)."""
+    with patch("architecture_review.architecture_review", AsyncMock(return_value=_ARCH_RESULT)):
+        async with _review_client() as client:
+            resp = await client.post(
+                "/review-architecture",
+                json={"target_mode": "codebase", "repo": "https://github.com/o/r"},
+            )
+    assert resp.status_code == 200
+    assert resp.json() == _ARCH_RESULT
+
+
+async def test_http_architecture_review_chain_adversarial_explicit_false_unchanged():
+    """Explicit chain_adversarial=False is identical to the default (no chaining)."""
+    with patch("architecture_review.architecture_review", AsyncMock(return_value=_ARCH_RESULT)):
+        async with _review_client() as client:
+            resp = await client.post(
+                "/review-architecture",
+                json={"target_mode": "codebase", "repo": "https://github.com/o/r", "chain_adversarial": False},
+            )
+    assert resp.status_code == 200
+    assert resp.json() == _ARCH_RESULT
+
+
+async def test_http_architecture_review_chain_adversarial_true_returns_combined_result():
+    """chain_adversarial=True returns first_pass, critic, and a synthesized verdict."""
+    review_server = _load_review_server()
+    with (
+        patch("architecture_review.architecture_review", AsyncMock(return_value=_ARCH_RESULT)),
+        patch.object(
+            review_server,
+            "_run_adversarial_architecture_review",
+            AsyncMock(return_value=_CRITIC_OUTPUT_CONFIRMED_HIGH),
+        ),
+    ):
+        async with _review_client() as client:
+            resp = await client.post(
+                "/review-architecture",
+                json={"target_mode": "codebase", "repo": "https://github.com/o/r", "chain_adversarial": True},
+            )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["first_pass"] == _ARCH_RESULT
+    assert body["critic"] == _CRITIC_OUTPUT_CONFIRMED_HIGH
+    assert body["verdict"] == "fail"
+
+
+async def test_http_architecture_review_chain_adversarial_refuted_high_does_not_fail():
+    """A first-pass HIGH+ finding the critic refutes does not, by itself, fail the
+    combined assessment."""
+    review_server = _load_review_server()
+    with (
+        patch("architecture_review.architecture_review", AsyncMock(return_value=_ARCH_RESULT)),
+        patch.object(
+            review_server,
+            "_run_adversarial_architecture_review",
+            AsyncMock(return_value=_CRITIC_OUTPUT_REFUTED_HIGH),
+        ),
+    ):
+        async with _review_client() as client:
+            resp = await client.post(
+                "/review-architecture",
+                json={"target_mode": "codebase", "repo": "https://github.com/o/r", "chain_adversarial": True},
+            )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["verdict"] == "pass"
+
+
 async def test_config_put_updates_llm_provider():
     """PUT can change the active llm_provider."""
     review_server = _load_review_server()
