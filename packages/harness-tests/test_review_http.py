@@ -406,3 +406,216 @@ async def test_config_put_respects_auth():
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.put("/config", json={"ollama": {"model": "x"}})
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Slice — chain_adversarial: chains the adversarial code critic into
+# review_diff / POST /review as an opt-in second stage (issue #03)
+# ---------------------------------------------------------------------------
+
+_CRITICAL_FIRST_PASS = json.dumps({
+    "verdict": "fail",
+    "findings": [
+        {
+            "severity": "CRITICAL",
+            "file": "x.py",
+            "line": 1,
+            "message": "sql injection",
+            "suggestion": "use parameterized queries",
+        }
+    ],
+    "summary": "One CRITICAL finding.",
+})
+
+_CRITIC_CONFIRMS = json.dumps({
+    "findings": [
+        {
+            "outcome": "confirmed",
+            "severity": "CRITICAL",
+            "file": "x.py",
+            "line": 1,
+            "message": "sql injection",
+            "exploit_scenario": "username=\"' OR '1'='1\" returns all rows",
+        }
+    ],
+    "summary": "Confirmed with a working exploit.",
+})
+
+_CRITIC_REFUTES = json.dumps({
+    "findings": [
+        {
+            "outcome": "refuted",
+            "severity": "CRITICAL",
+            "file": "x.py",
+            "line": 1,
+            "message": "sql injection",
+        }
+    ],
+    "summary": "Not exploitable — input is sanitized upstream.",
+})
+
+_CRITIC_DOWNGRADES = json.dumps({
+    "findings": [
+        {
+            "outcome": "downgraded",
+            "severity": "WARNING",
+            "file": "x.py",
+            "line": 1,
+            "message": "sql injection",
+        }
+    ],
+    "summary": "Downgraded — mitigated by an ORM layer.",
+})
+
+
+class _SequencedMockLLM:
+    """Returns responses[0] on the first chat() call, responses[1] on every
+    call after — lets a test give the first-pass reviewer and the adversarial
+    critic distinct, independently-controlled outputs even though both share
+    the same mocked LLM provider instance.
+    """
+    provider_name = "ollama"
+    model_name = "test-model"
+
+    def __init__(self, responses: list[str]):
+        self._responses = responses
+        self.calls = 0
+
+    async def chat(self, messages):
+        from harness_agents.llm import LLMResponse
+        idx = min(self.calls, len(self._responses) - 1)
+        self.calls += 1
+        return LLMResponse(content=self._responses[idx])
+
+
+@asynccontextmanager
+async def _chained_review_client(first_pass_response: str, critic_response: str, api_key: str | None = None):
+    """Like _review_client, but the mock LLM returns a distinct response for the
+    first-pass reviewer call vs. the adversarial critic call."""
+    review_server = _load_review_server()
+
+    mock_gateway = MagicMock()
+    mock_gateway.call_tool = AsyncMock(return_value={"result": "ok"})
+
+    app = review_server.mcp.streamable_http_app()
+
+    env = {"MCPJUNGLE_URL": "http://mock-jungle:8080"}
+    if api_key is not None:
+        env["REVIEW_API_KEY"] = api_key
+
+    with (
+        patch.object(
+            review_server, "_build_llm_provider",
+            return_value=_SequencedMockLLM([first_pass_response, critic_response]),
+        ),
+        patch.object(review_server, "GatewayClient", return_value=mock_gateway),
+        patch.dict("os.environ", env, clear=False),
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            yield client
+
+
+async def test_http_review_chain_adversarial_defaults_to_false():
+    """Omitting chain_adversarial produces today's plain response shape."""
+    async with _review_client() as client:
+        resp = await client.post("/review", json={"diff_text": _SAMPLE_DIFF})
+    assert resp.status_code == 200
+    assert set(resp.json().keys()) == {"verdict", "findings", "summary"}
+
+
+async def test_http_review_chain_adversarial_false_matches_unchained_response():
+    """Explicit chain_adversarial=False must be byte-for-byte identical to
+    omitting the field — a hard regression requirement, not a nice-to-have."""
+    async with _review_client() as client:
+        resp_default = await client.post("/review", json={"diff_text": _SAMPLE_DIFF})
+        resp_explicit_false = await client.post(
+            "/review", json={"diff_text": _SAMPLE_DIFF, "chain_adversarial": False},
+        )
+    assert resp_default.status_code == resp_explicit_false.status_code == 200
+    assert resp_default.json() == resp_explicit_false.json()
+
+
+async def test_http_review_chain_adversarial_true_returns_combined_shape():
+    async with _chained_review_client(_CRITICAL_FIRST_PASS, _CRITIC_CONFIRMS) as client:
+        resp = await client.post(
+            "/review", json={"diff_text": _SAMPLE_DIFF, "chain_adversarial": True},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body.keys()) == {"first_pass", "critic", "verdict"}
+    assert body["first_pass"]["verdict"] == "fail"
+    assert body["critic"]["findings"][0]["outcome"] == "confirmed"
+
+
+async def test_http_review_chain_adversarial_confirmed_critical_fails():
+    async with _chained_review_client(_CRITICAL_FIRST_PASS, _CRITIC_CONFIRMS) as client:
+        resp = await client.post(
+            "/review", json={"diff_text": _SAMPLE_DIFF, "chain_adversarial": True},
+        )
+    assert resp.json()["verdict"] == "fail"
+
+
+async def test_http_review_chain_adversarial_refuted_critical_does_not_fail():
+    """A first-pass CRITICAL the critic refutes must not, by itself, produce
+    an overall 'fail' verdict."""
+    async with _chained_review_client(_CRITICAL_FIRST_PASS, _CRITIC_REFUTES) as client:
+        resp = await client.post(
+            "/review", json={"diff_text": _SAMPLE_DIFF, "chain_adversarial": True},
+        )
+    body = resp.json()
+    assert body["first_pass"]["verdict"] == "fail"  # first pass still reports its own verdict
+    assert body["verdict"] == "pass"
+
+
+async def test_http_review_chain_adversarial_downgraded_critical_does_not_fail():
+    """A first-pass CRITICAL the critic downgrades must not, by itself, produce
+    an overall 'fail' verdict."""
+    async with _chained_review_client(_CRITICAL_FIRST_PASS, _CRITIC_DOWNGRADES) as client:
+        resp = await client.post(
+            "/review", json={"diff_text": _SAMPLE_DIFF, "chain_adversarial": True},
+        )
+    assert resp.json()["verdict"] == "pass"
+
+
+async def test_mcp_review_diff_accepts_chain_adversarial():
+    """review_diff MCP tool accepts chain_adversarial and returns the combined shape."""
+    review_server = _load_review_server()
+    mock_gateway = MagicMock()
+    mock_gateway.call_tool = AsyncMock(return_value={"result": "ok"})
+
+    with (
+        patch.object(
+            review_server, "_build_llm_provider",
+            return_value=_SequencedMockLLM([_CRITICAL_FIRST_PASS, _CRITIC_CONFIRMS]),
+        ),
+        patch.object(review_server, "GatewayClient", return_value=mock_gateway),
+        patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}),
+    ):
+        result = await review_server.review_diff(_SAMPLE_DIFF, chain_adversarial=True)
+    assert set(result.keys()) == {"first_pass", "critic", "verdict"}
+    assert result["verdict"] == "fail"
+
+
+async def test_mcp_review_diff_chain_adversarial_false_matches_plain_run_review():
+    """review_diff(chain_adversarial=False) returns exactly what it always has —
+    same call, same output, whether the flag is passed or omitted."""
+    review_server = _load_review_server()
+    mock_gateway = MagicMock()
+    mock_gateway.call_tool = AsyncMock(return_value={"result": "ok"})
+
+    class _MockLLM:
+        provider_name = "ollama"
+        model_name = "test-model"
+
+        async def chat(self, messages):
+            from harness_agents.llm import LLMResponse
+            return LLMResponse(content=_VALID_REVIEW)
+
+    with (
+        patch.object(review_server, "_build_llm_provider", return_value=_MockLLM()),
+        patch.object(review_server, "GatewayClient", return_value=mock_gateway),
+        patch.dict("os.environ", {"MCPJUNGLE_URL": "http://mock-jungle:8080"}),
+    ):
+        result_default = await review_server.review_diff(_SAMPLE_DIFF)
+        result_explicit_false = await review_server.review_diff(_SAMPLE_DIFF, chain_adversarial=False)
+    assert result_default == result_explicit_false == json.loads(_VALID_REVIEW)

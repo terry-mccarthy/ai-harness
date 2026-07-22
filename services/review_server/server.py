@@ -377,6 +377,40 @@ async def _run_review(
 # MCP tool: review_diff
 # ---------------------------------------------------------------------------
 
+
+async def _run_review_maybe_chained(
+    diff_text: str,
+    task: str,
+    provider: str | None,
+    chain_adversarial: bool,
+    *,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    num_ctx: int | None = None,
+    num_predict: int | None = None,
+    host: str | None = None,
+) -> dict:
+    """Shared branch point for review_diff / POST /review.
+
+    chain_adversarial=False (the default) returns exactly what _run_review
+    returns — byte-for-byte identical to today's response. chain_adversarial=True
+    returns the combined {"first_pass", "critic", "verdict"} shape from
+    _run_chained_review.
+    """
+    if chain_adversarial:
+        return await _run_chained_review(
+            diff_text, task, provider,
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            num_ctx=num_ctx, num_predict=num_predict, host=host,
+        )
+    return await _run_review(
+        diff_text, task, provider,
+        model=model, temperature=temperature, max_tokens=max_tokens,
+        num_ctx=num_ctx, num_predict=num_predict, host=host,
+    )
+
+
 @mcp.tool()
 async def review_diff(
     diff_text: str,
@@ -388,6 +422,7 @@ async def review_diff(
     num_ctx: int | None = None,
     num_predict: int | None = None,
     host: str | None = None,
+    chain_adversarial: bool = False,
 ) -> dict:
     """Run the governed code-reviewer agent and return structured findings.
 
@@ -402,10 +437,14 @@ async def review_diff(
         num_ctx: Override the context window (Ollama only).
         num_predict: Override num_predict (Ollama only).
         host: Override the Ollama host URL.
+        chain_adversarial: When ``True``, feed the first-pass output into the
+            adversarial code critic and return ``{"first_pass", "critic", "verdict"}``
+            instead of the plain first-pass findings. Defaults to ``False``, which
+            is byte-for-byte identical to today's response.
     """
     try:
-        return await _run_review(
-            diff_text, task, provider,
+        return await _run_review_maybe_chained(
+            diff_text, task, provider, chain_adversarial,
             model=model, temperature=temperature, max_tokens=max_tokens,
             num_ctx=num_ctx, num_predict=num_predict, host=host,
         )
@@ -447,6 +486,10 @@ async def http_review(request: Request) -> JSONResponse:
         num_ctx     (int, optional): context window override (Ollama)
         num_predict (int, optional): num_predict override (Ollama)
         host        (str, optional): Ollama host override
+        chain_adversarial (bool, optional): when true, feed the first-pass output into
+            the adversarial code critic and return ``{"first_pass", "critic", "verdict"}``
+            instead of the plain first-pass findings. Defaults to false, which is
+            byte-for-byte identical to today's response.
 
     Auth: set REVIEW_API_KEY in env to require 'Authorization: Bearer <key>'.
     When REVIEW_API_KEY is unset the endpoint is open (dev/local mode).
@@ -467,10 +510,11 @@ async def http_review(request: Request) -> JSONResponse:
 
     task = body.get("task", _DEFAULT_TASK)
     provider = body.get("provider")
+    chain_adversarial = body.get("chain_adversarial", False)
 
     try:
-        findings = await _run_review(
-            diff_text, task, provider,
+        result = await _run_review_maybe_chained(
+            diff_text, task, provider, chain_adversarial,
             model=body.get("model"),
             temperature=body.get("temperature"),
             max_tokens=body.get("max_tokens"),
@@ -478,7 +522,7 @@ async def http_review(request: Request) -> JSONResponse:
             num_predict=body.get("num_predict"),
             host=body.get("host"),
         )
-        return JSONResponse(findings)
+        return JSONResponse(result)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception:
@@ -558,6 +602,43 @@ async def _run_adversarial_review(
     if result.get("error"):
         raise ValueError(result["error"]["reason"])
     return result["agent_output"]
+
+
+# ---------------------------------------------------------------------------
+# chain_adversarial=True support for review_diff / POST /review (issue #03):
+# runs the first-pass reviewer, then attacks its own output with the
+# adversarial code critic, and synthesizes a combined verdict.
+# ---------------------------------------------------------------------------
+
+
+async def _run_chained_review(
+    diff_text: str,
+    task: str,
+    provider: str | None = None,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    num_ctx: int | None = None,
+    num_predict: int | None = None,
+    host: str | None = None,
+) -> dict:
+    """Run the first-pass reviewer, then attack its output with the adversarial
+    code critic, and return the combined result.
+
+    Raises ValueError if either stage's agent returns an error.
+    """
+    first_pass_output = await _run_review(
+        diff_text, task, provider,
+        model=model, temperature=temperature, max_tokens=max_tokens,
+        num_ctx=num_ctx, num_predict=num_predict, host=host,
+    )
+    critic_output = await _run_adversarial_review(
+        diff_text, first_pass_output, _DEFAULT_ADVERSARIAL_TASK, provider,
+        model=model, temperature=temperature, max_tokens=max_tokens,
+        num_ctx=num_ctx, num_predict=num_predict, host=host,
+    )
+    verdict = _chain_adversarial_verdict(critic_output["findings"], {"CRITICAL"})
+    return {"first_pass": first_pass_output, "critic": critic_output, "verdict": verdict}
 
 
 @mcp.tool()
