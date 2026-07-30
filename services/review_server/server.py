@@ -1,3 +1,41 @@
+"""review_server FastMCP app: tool/route registration + DI-seam-blocked handlers.
+
+Issue #10 status (final slice of the server.py decomposition started in
+issues #06-#09): every FastMCP tool/HTTP route that has no
+GatewayClient/LLM-provider dependency-injection seam has been extracted into
+routers/ (routers/config.py, issue #09; routers/review.py, issue #10) or
+services/ (services/code_analysis.py, issue #07;
+services/architecture_gate.py, issue #08).
+
+What deliberately stays in THIS file: review_diff/http_review,
+adversarial_review/http_adversarial_review, architecture_review,
+bootstrap_architecture, http_architecture_review,
+adversarial_architecture_review/http_adversarial_architecture_review, and
+their local _run_*/_run_chained_* thin-wrapper glue.
+
+Why: packages/harness-tests/ loads this file via
+importlib.util.spec_from_file_location under a locally-scoped module alias
+(e.g. "review_server" or "_srv"), then does
+unittest.mock.patch.object(review_server, "GatewayClient", ...) /
+patch.object(review_server, "_build_llm_provider", ...) and, for some tests,
+calls review_server._run_adversarial_review(...) /
+review_server._run_adversarial_architecture_review(...) /
+_srv.bootstrap_architecture(...) directly. patch.object(module, name, ...)
+only overrides a bare global as resolved, at call time, by a function body
+physically defined in that module's own namespace (Python's late-binding
+global lookup) — it does not reach a closure that captured the old value at
+import time, and it does not reach a same-path-but-different sys.modules-key
+import of "the same" module. Moving these functions' definitions into
+routers/review.py would make them resolve GatewayClient/_build_llm_provider
+against routers.review's own globals instead, silently breaking every one of
+those patches with no fix that doesn't also modify the test files (forbidden)
+or reintroduce this exact late-binding structure elsewhere. This is a
+documented, deliberate divergence from the issue's literal "no inline
+endpoint logic" instruction — see ways-of-working.md rule #3 — not a
+silently-dropped scope item. As a result, server.py does not reach "well
+under 200 lines"; see PROGRESS.md / the issue #10 close-out notes for the
+actual line count.
+"""
 from contextlib import asynccontextmanager
 import logging
 import os
@@ -5,9 +43,8 @@ import os
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
@@ -24,6 +61,7 @@ from core.config import (
     _pg_pool_connected,
 )
 from routers.config import register_config_routes
+from routers.review import register_review_routes
 from services.code_analysis import (
     _DEFAULT_ADVERSARIAL_TASK,
     _build_llm_provider,
@@ -37,7 +75,6 @@ from services.architecture_gate import (
     _run_adversarial_architecture_review as _ag_run_adversarial_architecture_review,
     _run_architecture_review_chain as _ag_run_architecture_review_chain,
     _run_bootstrap_architecture as _ag_run_bootstrap_architecture,
-    _run_execute_architecture_check as _ag_run_execute_architecture_check,
 )
 
 
@@ -358,33 +395,19 @@ async def http_adversarial_review(request: Request) -> JSONResponse:
 
 register_config_routes(mcp)
 
-
 # ---------------------------------------------------------------------------
-# MCP tool: run_skill (unchanged)
+# run_skill / execute_architecture_check / code_health_score /
+# codebase_hotspots / logical_coupling / GET /metrics (issue #10)
+#
+# These have no GatewayClient/LLM-provider DI seam that any test patches via
+# unittest.mock.patch.object(review_server, ...), and nothing calls them
+# directly as review_server.<name>(...)/_srv.<name>(...) — verified by grep
+# across packages/harness-tests/ before moving them. They now live in
+# services/review_server/routers/review.py as register_review_routes(mcp),
+# mirroring register_config_routes(mcp) above (issue #09).
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def run_skill(
-    skill_id: str,
-    inputs: dict | None = None,
-) -> dict:
-    """Execute a promoted governed skill by ID, running each step through OPA.
-
-    Args:
-        skill_id: The skill identifier (e.g. ``"sre:triage-incident"``).
-        inputs: Optional input parameters passed to each step.
-    """
-    gateway = GatewayClient(
-        gateway_url=os.environ["MCPJUNGLE_URL"],
-        governance_url=os.environ.get("GOVERNANCE_URL"),
-        client_id=os.environ.get("SKILL_CLIENT_ID", "sre"),
-        client_secret=os.environ.get("SKILL_CLIENT_SECRET", os.environ.get("SRE_SECRET", "")),
-    )
-    try:
-        return await gateway.execute_skill(skill_id, inputs)
-    except Exception as e:
-        logging.exception("run_skill failed for %s", skill_id)
-        raise RuntimeError(str(e)) from e
+register_review_routes(mcp)
 
 
 # ---------------------------------------------------------------------------
@@ -758,120 +781,6 @@ async def http_adversarial_architecture_review(request: Request) -> JSONResponse
     except Exception:
         logging.exception("adversarial architecture review failed")
         return JSONResponse({"error": "adversarial architecture review failed — see server logs"}, status_code=500)
-
-
-# ---------------------------------------------------------------------------
-# Prometheus metrics
-# ---------------------------------------------------------------------------
-
-
-@mcp.custom_route("/metrics", methods=["GET"])
-async def metrics_route(request: Request) -> Response:
-    """Prometheus metrics endpoint, scraped by the monitoring stack."""
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
-
-
-# ---------------------------------------------------------------------------
-# MCP tool: execute_architecture_check
-#
-# The run_gate invocation now lives in services/architecture_gate.py (issue
-# #08) as _run_execute_architecture_check. No DI seam is needed here — no
-# test patches review_server.run_gate or the architecture_gate.runner module.
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def execute_architecture_check(
-    target_language: str,
-    repo_path: str,
-) -> dict:
-    """Execute static analysis checks on the target codebase and return a GateSignalContract.
-
-    Args:
-        target_language: The programming language of the codebase (e.g., ``'python'``, ``'php'``, ``'typescript'``).
-        repo_path: The directory path or GitHub URL of the codebase to analyze.
-    """
-    return await _ag_run_execute_architecture_check(target_language, repo_path)
-
-
-# ---------------------------------------------------------------------------
-# MCP tools: code-forensics style analysis
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def code_health_score(
-    file_paths: list[str],
-    repo: str,
-) -> list[dict]:
-    """Analyze code health (complexity, function length) for specific files in a GitHub repo.
-
-    Fetches each file from the GitHub API and runs radon cyclomatic
-    complexity analysis. Returns scores 0-10 (higher = healthier),
-    sorted worst-first.
-
-    Args:
-        file_paths: List of file paths relative to the repo root (e.g. ``["src/main.py", "lib/utils.ts"]``).
-        repo: GitHub URL (e.g. ``"https://github.com/owner/repo"``).
-    """
-    from code_analysis import get_code_health as _get_code_health
-
-    try:
-        return await _get_code_health(file_paths, repo)
-    except Exception as e:
-        logging.exception("code_health_score failed")
-        return [{"error": str(e)}]
-
-
-@mcp.tool()
-async def codebase_hotspots(
-    repo: str,
-    top_n: int = 10,
-    language: str | None = None,
-) -> list[dict]:
-    """Rank files in a GitHub repo by complexity-based hotspot risk.
-
-    Fetches the file tree from the GitHub API, downloads source files,
-    and ranks them by cyclomatic complexity. High-complexity files
-    are hotspots most likely to contain bugs.
-
-    Args:
-        repo: GitHub URL (e.g. ``"https://github.com/owner/repo"``).
-        top_n: Number of top hotspots to return (default 10).
-        language: Optional language filter (e.g. ``"python"``, ``"typescript"``).
-    """
-    from code_analysis import get_hotspots as _get_hotspots
-
-    try:
-        return await _get_hotspots(repo, top_n=top_n, language=language)
-    except Exception as e:
-        logging.exception("codebase_hotspots failed")
-        return [{"error": str(e)}]
-
-
-@mcp.tool()
-async def logical_coupling(
-    repo: str,
-    file_path: str,
-    max_commits: int = 50,
-) -> list[dict]:
-    """Find files that historically change together with a given file.
-
-    Uses the GitHub commits API to find recent commits touching
-    ``file_path``, then extracts all other files changed in those
-    commits. Returns the co-changing files ranked by frequency.
-
-    Args:
-        repo: GitHub URL (e.g. ``"https://github.com/owner/repo"``).
-        file_path: Path to the file to analyse (e.g. ``"src/main.py"``).
-        max_commits: Maximum recent commits to inspect (default 50).
-    """
-    from code_analysis import get_logical_coupling as _get_logical_coupling
-
-    try:
-        return await _get_logical_coupling(repo, file_path, max_commits=max_commits)
-    except Exception as e:
-        logging.exception("logical_coupling failed")
-        return [{"error": str(e)}]
 
 
 if __name__ == "__main__":
