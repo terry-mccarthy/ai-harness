@@ -423,6 +423,42 @@ async def test_formula_lookup_uses_agent_role():
 
 
 # ---------------------------------------------------------------------------
+# Behavior 14b — gateway.thread_id/human_approval_token are synced from state
+# (issue #01: governance needs a real thread_id to scope-validate shell_exec
+# approval tokens; nothing previously propagated it from AgentState onto the
+# shared GatewayClient instance).
+# ---------------------------------------------------------------------------
+
+async def test_run_syncs_thread_id_and_approval_token_onto_gateway():
+    from harness_agents.dynamic_sre import DynamicSREAgent
+
+    llm = _Turns(_respond(_VALID_REPORT))
+    gw = _Gateway()
+    state = _state(thread_id="thread-xyz", human_approval_token="approved-token")
+
+    await DynamicSREAgent(gateway=gw, llm_provider=llm).run(state)
+
+    assert gw.thread_id == "thread-xyz"
+    assert gw.human_approval_token == "approved-token"
+
+
+async def test_run_clears_stale_approval_token_when_state_has_none():
+    """A gateway reused across turns must not leak a previous thread's token."""
+    from harness_agents.dynamic_sre import DynamicSREAgent
+
+    llm = _Turns(_respond(_VALID_REPORT))
+    gw = _Gateway()
+    gw.thread_id = "stale-thread"
+    gw.human_approval_token = "stale-token"
+
+    state = _state(thread_id="fresh-thread", human_approval_token=None)
+    await DynamicSREAgent(gateway=gw, llm_provider=llm).run(state)
+
+    assert gw.thread_id == "fresh-thread"
+    assert gw.human_approval_token is None
+
+
+# ---------------------------------------------------------------------------
 # Behavior 15 — supervisor routes incident tasks to DynamicSREAgent (integration)
 # ---------------------------------------------------------------------------
 

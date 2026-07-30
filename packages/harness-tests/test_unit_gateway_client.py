@@ -1,5 +1,7 @@
 """Unit tests for GatewayClient.call_tool response unwrapping and error handling."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
 import pytest
 from harness_gateway.client import GatewayClient, ToolAccessDenied
@@ -141,3 +143,64 @@ async def test_401_raises_tool_access_denied(monkeypatch):
     client = GatewayClient(gateway_url="http://test", client_id="test", client_secret="")
     with pytest.raises(ToolAccessDenied, match="401"):
         await client.call_tool("git_diff", {})
+
+
+# ---------------------------------------------------------------------------
+# GatewayClient._governance_check — thread_id plumbing (issue #01)
+#
+# Governance's /check now cryptographically validates the shell_exec approval
+# token against (thread_id, tool_name). thread_id has to reach that request
+# body somehow — this is the "somehow": a mutable instance field mirroring the
+# existing human_approval_token convention.
+# ---------------------------------------------------------------------------
+
+
+async def _run_governance_check(gw: GatewayClient, tool_name: str) -> dict | None:
+    """Invoke _governance_check and return the JSON body it posted to /check."""
+    posted: list[dict] = []
+
+    async def _fake_post(url, json=None, headers=None, timeout=None):
+        posted.append({"url": url, "body": json})
+        resp = MagicMock()
+        resp.status_code = 200
+        return resp
+
+    with patch("httpx.AsyncClient") as mock_client:
+        mock_client.return_value.__aenter__ = AsyncMock(
+            return_value=MagicMock(post=AsyncMock(side_effect=_fake_post))
+        )
+        mock_client.return_value.__aexit__ = AsyncMock(return_value=False)
+        await gw._governance_check("tok123", tool_name)
+
+    assert posted[0]["url"] == f"{gw.governance_url}/check"
+    return posted[0]["body"]
+
+
+@pytest.mark.asyncio
+async def test_governance_check_includes_thread_id_when_set():
+    gw = GatewayClient(
+        gateway_url="http://mcpjungle:8080",
+        governance_url="http://governance:8090",
+        client_id="sre",
+        client_secret="secret",
+    )
+    gw.thread_id = "thread-abc"
+
+    body = await _run_governance_check(gw, "sre_stub__shell_exec")
+
+    assert body == {"tool_name": "sre_stub__shell_exec", "thread_id": "thread-abc"}
+
+
+@pytest.mark.asyncio
+async def test_governance_check_omits_thread_id_when_unset():
+    gw = GatewayClient(
+        gateway_url="http://mcpjungle:8080",
+        governance_url="http://governance:8090",
+        client_id="sre",
+        client_secret="secret",
+    )
+
+    body = await _run_governance_check(gw, "sre_stub__shell_exec")
+
+    assert body == {"tool_name": "sre_stub__shell_exec"}
+    assert "thread_id" not in body
