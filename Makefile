@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e test-load review consolidate alembic-upgrade monitoring-up monitoring-down seed-runbooks seed-logs demo-sre demo-model-selector
+.PHONY: stack-up stack-down venv requirements test test-unit test-integration test-e2e test-load review consolidate alembic-upgrade monitoring-up monitoring-down seed-runbooks seed-logs demo-sre demo-model-selector antigravity-exporter
 
 stack-up:
 	docker compose up -d --wait --remove-orphans
@@ -71,6 +71,9 @@ demo-sre:
 
 demo-model-selector:
 	set -a && source .env && set +a && .venv/bin/python scripts/demo_model_selector.py
+
+antigravity-exporter:
+	.venv/bin/python scripts/antigravity_otel_exporter.py
 
 alembic-upgrade:
 	set -a && source .env && set +a && \

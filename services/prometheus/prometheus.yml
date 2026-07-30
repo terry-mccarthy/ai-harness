@@ -42,3 +42,8 @@ scrape_configs:
     static_configs:
       - targets: ['host.docker.internal:9006']
     metrics_path: /metrics
+
+  - job_name: antigravity-exporter
+    static_configs:
+      - targets: ['host.docker.internal:9011']
+    metrics_path: /metrics

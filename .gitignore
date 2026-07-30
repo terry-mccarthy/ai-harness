@@ -8,6 +8,7 @@ __pycache__/
 .DS_Store
 .scratch/
 .claude/.state/
+.agents/
 AGENT-ORCHESTRATION-SPEC.md
 docs/agents/issue-tracker.md
 selector_config*.json

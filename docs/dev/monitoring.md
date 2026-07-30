@@ -53,6 +53,25 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 claude
 
 **Key metrics:** `claude_code_session_count_total`, `claude_code_cost_usage_USD_total`, `claude_code_token_usage_tokens_total`.
 
+## Antigravity CLI exporter
+
+`scripts/antigravity_otel_exporter.py` tails Antigravity CLI transcript logs
+(`~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl`)
+and serves Prometheus metrics on `:9011` (estimated token counts, step counts,
+tool calls, active conversations — token counts are a `len(text) // 4`
+estimate, not exact). Run it with:
+
+```bash
+make antigravity-exporter
+```
+
+Prometheus already scrapes it (`antigravity-exporter` job in
+`services/prometheus/prometheus.yml`, targeting
+`host.docker.internal:9011`) and Grafana has a pre-provisioned dashboard,
+`services/grafana/dashboards/antigravity-telemetry.json`. Like the Claude Code
+pipeline, this only reports data while the exporter process is running on the
+host — it isn't started by `docker compose`.
+
 ## Gotchas
 
 **otel-collector restart inflates `increase()` for ~24h.** The `deltatocumulative` processor holds cumulative counter state in memory. When the monitoring stack restarts (`make monitoring-up` or `docker compose down/up`), the processor resets to 0 while Prometheus still has the old (large) counter values. Prometheus sees a counter reset and `increase()` over any window that spans the restart will be inflated by the pre-restart total. Values return to normal ~24h after the last restart. Workaround: clear the Prometheus volume (`docker volume rm friday-monitoring_prometheus-data`) to start fresh if the inflation is a problem.
