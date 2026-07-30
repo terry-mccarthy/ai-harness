@@ -13,8 +13,6 @@ from starlette.responses import JSONResponse, Response
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
 from harness_gateway.client import GatewayClient
-from harness_agents.adversarial_architecture_critic import AdversarialArchitectureCritic
-from harness_agents.types import AgentState
 from metrics import MonitoredLLMProvider
 from core.config import (
     _CONFIG,
@@ -35,6 +33,14 @@ from services.code_analysis import (
     _chain_adversarial_verdict,
     _run_adversarial_review as _ca_run_adversarial_review,
     _run_review_maybe_chained as _ca_run_review_maybe_chained,
+)
+from services.architecture_gate import (
+    _DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK,
+    _parse_adversarial_architecture_review_body as _ag_parse_adversarial_architecture_review_body,
+    _run_adversarial_architecture_review as _ag_run_adversarial_architecture_review,
+    _run_architecture_review_chain as _ag_run_architecture_review_chain,
+    _run_bootstrap_architecture as _ag_run_bootstrap_architecture,
+    _run_execute_architecture_check as _ag_run_execute_architecture_check,
 )
 
 
@@ -64,13 +70,6 @@ _DEFAULT_TASK = (
     "(3) architectural concerns — hardcoded values, tight coupling, shared mutable state, missing abstractions. "
     "Report every finding with file, line, severity (CRITICAL/WARNING/INFO), and a specific fix suggestion. "
     "Verdict is 'fail' if any CRITICAL finding exists."
-)
-
-_DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK = (
-    "Attack the first-pass architect's synthesis findings. Confirm, refute, escalate, "
-    "downgrade, or leave unresolved each one. A confirmed or escalated HIGH/CRITICAL "
-    "finding requires a concrete regression_scenario — a specific failure trace grounded "
-    "in the codebase, not a restatement of the severity."
 )
 
 # ---------------------------------------------------------------------------
@@ -431,9 +430,18 @@ async def run_skill(
 
 # ---------------------------------------------------------------------------
 # MCP tool: architecture_review
+#
+# The chain constant/glue (_ARCHITECTURE_CHAIN_FAIL_SEVERITIES,
+# _run_architecture_review_chain) now lives in services/architecture_gate.py
+# (issue #08). This thin wrapper exists so that unittest.mock.patch.object(
+# review_server, "_run_adversarial_architecture_review", ...) (used in
+# packages/harness-tests/test_review_mcp.py and test_review_http.py) keeps
+# affecting the chain_adversarial=True path: that name is resolved as a bare
+# global *inside this module* at call time, so this wrapper reads its own
+# (possibly patched) current value and threads it into
+# services.architecture_gate explicitly, rather than letting the moved chain
+# function silently fall back to its own module's unpatched original.
 # ---------------------------------------------------------------------------
-
-_ARCHITECTURE_CHAIN_FAIL_SEVERITIES = {"CRITICAL", "HIGH"}
 
 
 async def _run_architecture_review_chain(
@@ -451,33 +459,13 @@ async def _run_architecture_review_chain(
     num_predict: int | None,
     host: str | None,
 ) -> dict:
-    """Run the first-pass architecture synthesis and, when requested, chain the
-    adversarial architecture critic on top of it.
-
-    Returns the first-pass output unchanged when ``chain_adversarial`` is False.
-    Otherwise returns ``{"first_pass", "critic", "verdict"}`` where verdict is
-    computed per the confirmed/escalated-only-fails rule (HIGH+ threshold).
-    """
-    from architecture_review import architecture_review as _architecture_review
-
-    first_pass_output = await _architecture_review(
-        repo=repo,
-        target_mode=target_mode,
-        diff=diff,
-        llm_provider=llm_provider,
+    return await _ag_run_architecture_review_chain(
+        repo=repo, target_mode=target_mode, diff=diff, llm_provider=llm_provider,
+        chain_adversarial=chain_adversarial, provider=provider, model=model,
+        temperature=temperature, max_tokens=max_tokens, num_ctx=num_ctx,
+        num_predict=num_predict, host=host,
+        run_adversarial_architecture_review=_run_adversarial_architecture_review,
     )
-    if not chain_adversarial:
-        return first_pass_output
-
-    critic_output = await _run_adversarial_architecture_review(
-        repo, first_pass_output, _DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK, provider,
-        diff=diff, model=model, temperature=temperature, max_tokens=max_tokens,
-        num_ctx=num_ctx, num_predict=num_predict, host=host,
-    )
-    verdict = _chain_adversarial_verdict(
-        critic_output.get("findings", []), _ARCHITECTURE_CHAIN_FAIL_SEVERITIES
-    )
-    return {"first_pass": first_pass_output, "critic": critic_output, "verdict": verdict}
 
 
 @mcp.tool()
@@ -545,6 +533,15 @@ async def architecture_review(
 
 # ---------------------------------------------------------------------------
 # MCP tool: bootstrap_architecture
+#
+# The ArchitectAgent invocation/state-building/result-shaping now lives in
+# services/architecture_gate.py (issue #08) as _run_bootstrap_architecture.
+# The LLM-provider build + MonitoredLLMProvider wrap stay here (mirroring
+# architecture_review's wrapper) so that unittest.mock.patch.object(
+# review_server, "_build_llm_provider" / "MonitoredLLMProvider" / "GatewayClient",
+# ...) (used in packages/harness-tests/test_unit_bootstrap_mcp_tool.py) keeps
+# affecting this tool: those names are resolved as bare globals *inside this
+# module* at call time.
 # ---------------------------------------------------------------------------
 
 
@@ -577,10 +574,6 @@ async def bootstrap_architecture(
         num_predict: Override num_predict (Ollama only).
         host: Override Ollama host URL.
     """
-    import uuid
-    from harness_agents.architect import ArchitectAgent
-    from harness_agents.types import AgentState
-
     resolved_provider = (
         provider
         or _CONFIG.get("llm_provider")
@@ -598,34 +591,7 @@ async def bootstrap_architecture(
         ),
         agent_role="architect",
     )
-    gateway = GatewayClient(
-        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://mcpjungle:8080"),
-        governance_url=os.environ.get("GOVERNANCE_URL"),
-        client_id="architect",
-        client_secret=os.environ.get("ARCHITECT_SECRET", ""),
-    )
-    agent = ArchitectAgent(gateway=gateway, llm_provider=llm, repo=repo)
-    state: AgentState = {
-        "task": task or f"Bootstrap ARCHITECTURE.md for {repo}",
-        "task_type": "bootstrap",
-        "diff": "",
-        "thread_id": str(uuid.uuid4()),
-        "agent_output": None,
-        "requires_human_approval": False,
-        "error": None,
-        "human_approval_token": None,
-        "memory_context": None,
-    }
-    result = await agent.run(state)
-    if result.get("error"):
-        raise RuntimeError(result["error"].get("reason", "bootstrap failed"))
-    output = result.get("agent_output") or {}
-    return {
-        "architecture_md": output.get("architecture_md", ""),
-        "summary": output.get("summary", ""),
-        "findings": output.get("findings", []),
-        "recommendations": output.get("recommendations", []),
-    }
+    return await _ag_run_bootstrap_architecture(repo, task, llm, gateway_client_cls=GatewayClient)
 
 
 # ---------------------------------------------------------------------------
@@ -704,6 +670,17 @@ async def http_architecture_review(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 # MCP tool: adversarial_architecture_review — attacks the first-pass
 # ArchitectAgent synthesis output
+#
+# _run_adversarial_architecture_review's real implementation (GatewayClient +
+# LLM-provider construction, AdversarialArchitectureCritic invocation) now
+# lives in services/architecture_gate.py (issue #08). This thin wrapper exists
+# so that (a) tests patching review_server.GatewayClient /
+# review_server._build_llm_provider still take effect (see the
+# _run_architecture_review_chain wrapper above for why), and (b)
+# packages/harness-tests/test_adversarial_architecture_review_http.py, which
+# calls review_server._run_adversarial_architecture_review(...) directly
+# (bypassing the adversarial_architecture_review tool entirely), keeps working
+# unchanged.
 # ---------------------------------------------------------------------------
 
 
@@ -720,45 +697,12 @@ async def _run_adversarial_architecture_review(
     num_predict: int | None = None,
     host: str | None = None,
 ) -> dict:
-    """Run the AdversarialArchitectureCritic and return structured findings.
-
-    Raises ValueError if the agent returns an error.
-    """
-    gateway = GatewayClient(
-        gateway_url=os.environ["MCPJUNGLE_URL"],
-        governance_url=os.environ.get("GOVERNANCE_URL"),
-        client_id="adversarial-architecture-critic",
-        client_secret=os.environ.get("ADVERSARIAL_ARCHITECTURE_CRITIC_SECRET", ""),
+    return await _ag_run_adversarial_architecture_review(
+        repo, first_pass_output, task, provider, diff=diff,
+        model=model, temperature=temperature, max_tokens=max_tokens,
+        num_ctx=num_ctx, num_predict=num_predict, host=host,
+        gateway_client_cls=GatewayClient, build_llm_provider=_build_llm_provider,
     )
-    resolved_provider = (
-        provider
-        or _CONFIG.get("llm_provider")
-        or os.environ.get("LLM_PROVIDER", "ollama")
-    ).lower()
-    llm_provider = _build_llm_provider(
-        resolved_provider,
-        host=host,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        num_ctx=num_ctx,
-        num_predict=num_predict,
-    )
-    llm_provider = MonitoredLLMProvider(llm_provider, agent_role="adversarial_architecture_critic")
-    agent = AdversarialArchitectureCritic(gateway=gateway, llm_provider=llm_provider, repo=repo)
-    state = AgentState(
-        task=task,
-        diff=diff or "",
-        first_pass_output=first_pass_output,
-        thread_id="mcp-call",
-        agent_output=None,
-        requires_human_approval=False,
-        error=None,
-    )
-    result = await agent.run(state)
-    if result.get("error"):
-        raise ValueError(result["error"]["reason"])
-    return result["agent_output"]
 
 
 @mcp.tool()
@@ -806,20 +750,10 @@ async def adversarial_architecture_review(
         raise RuntimeError(str(e)) from e
 
 
-async def _parse_adversarial_architecture_review_body(request: Request) -> tuple[dict, JSONResponse | None]:
-    """Parse and validate the POST /review-architecture-adversarial body.
-
-    Returns (body, None) on success or ({}, error_response) on the first failure.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return {}, JSONResponse({"error": "invalid JSON body"}, status_code=422)
-    if not body.get("repo"):
-        return {}, JSONResponse({"error": "repo is required"}, status_code=422)
-    if body.get("first_pass_output") is None:
-        return {}, JSONResponse({"error": "first_pass_output is required"}, status_code=422)
-    return body, None
+# _parse_adversarial_architecture_review_body's implementation now lives in
+# services/architecture_gate.py (issue #08) — it's a pure request-body
+# validation helper with no GatewayClient/LLM dependency, so no DI seam is
+# needed; it's imported directly as _ag_parse_adversarial_architecture_review_body.
 
 
 @mcp.custom_route("/review-architecture-adversarial", methods=["POST"])
@@ -841,7 +775,7 @@ async def http_adversarial_architecture_review(request: Request) -> JSONResponse
     if not _check_api_key(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
-    body, error = await _parse_adversarial_architecture_review_body(request)
+    body, error = await _ag_parse_adversarial_architecture_review_body(request)
     if error:
         return error
 
@@ -879,7 +813,11 @@ async def metrics_route(request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
-# MCP tool: execute_architecture_check (unchanged)
+# MCP tool: execute_architecture_check
+#
+# The run_gate invocation now lives in services/architecture_gate.py (issue
+# #08) as _run_execute_architecture_check. No DI seam is needed here — no
+# test patches review_server.run_gate or the architecture_gate.runner module.
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
@@ -893,15 +831,7 @@ async def execute_architecture_check(
         target_language: The programming language of the codebase (e.g., ``'python'``, ``'php'``, ``'typescript'``).
         repo_path: The directory path or GitHub URL of the codebase to analyze.
     """
-    from architecture_gate.runner import run_gate
-
-    logging.info(
-        "execute_architecture_check called for lang=%s repo=%s",
-        target_language,
-        repo_path,
-    )
-    signal = await run_gate(repo_path, target_language)
-    return signal.to_dict()
+    return await _ag_run_execute_architecture_check(target_language, repo_path)
 
 
 # ---------------------------------------------------------------------------
