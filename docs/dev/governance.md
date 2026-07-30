@@ -4,7 +4,7 @@ FastAPI app at `services/governance/server.py`. Three responsibilities:
 
 1. **OAuth 2.1 client credentials** — `POST /oauth/token` (form body). Clients: `architect`, `code-reviewer`, `adversarial-code-critic`, `adversarial-architecture-critic`, `sre`. Issues **RS256 JWTs** with 15-min TTL, signed with a private RSA key loaded from `JWT_PRIVATE_KEY_FILE`.
 2. **OPA policy check** — `POST /check` validates a token and calls OPA. Returns 200 `{"allowed": true, ...}` or 403.
-3. **Dolt audit** — `POST /audit` accepts an audit record and writes to Dolt asynchronously (202 response). `CALL DOLT_COMMIT` per write.
+3. **Dolt audit** — `POST /audit` accepts an audit record and writes to Dolt asynchronously (202 response). `CALL DOLT_COMMIT` per write. `write_audit` (`core/dolt.py`) is best-effort: a Dolt outage is caught, logged, and increments the `harness_audit_write_failures_total` counter (`core/metrics.py`) rather than being re-raised — re-raising would turn the deny-path callers in `policy.py`/`agents.py` (which `await write_audit(...)` directly before raising an `HTTPException`) into spurious 500s during an outage. Scrape/alert on `harness_audit_write_failures_total` to catch silent audit gaps (issue #04).
 4. **JWKS** — `GET /jwks` returns the RSA public key as a JWK set; downstream verifiers fetch from here.
 
 Rate limiting is delegated to the gateway (ContextForge natively). Governance does not rate-limit.

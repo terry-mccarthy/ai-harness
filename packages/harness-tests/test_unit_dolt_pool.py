@@ -127,6 +127,25 @@ async def test_write_audit_swallows_exceptions(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_write_audit_failure_increments_metric(monkeypatch):
+    """Issue #04: write_audit's swallow-and-log except block must also
+    increment a durable, observable failure counter — a Dolt outage should
+    not vanish into nothing but a log line. See core/metrics.py's
+    audit_write_failures_total and ARCHITECTURE.md's updated [HARD] line."""
+    from core.metrics import audit_write_failures_total
+
+    before = audit_write_failures_total._value.get()
+
+    fake_pool = _FakePool(cursor=_FakeCursor(raise_on_execute=True))
+    monkeypatch.setattr(dolt.aiomysql, "create_pool", AsyncMock(return_value=fake_pool))
+
+    await dolt.write_audit("agent-1", "tool", "srv", "req", "resp", "allow", "rule", 5, "corr-1")
+
+    after = audit_write_failures_total._value.get()
+    assert after == before + 1, "a failed audit write must increment harness_audit_write_failures_total"
+
+
+@pytest.mark.asyncio
 async def test_write_audit_issues_insert_then_dolt_commit(monkeypatch):
     fake_pool = _FakePool()
     monkeypatch.setattr(dolt.aiomysql, "create_pool", AsyncMock(return_value=fake_pool))
