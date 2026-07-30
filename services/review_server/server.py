@@ -1,7 +1,6 @@
 from contextlib import asynccontextmanager
 import logging
 import os
-from typing import Any
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
@@ -19,14 +18,12 @@ from core.config import (
     _check_api_key,
     _close_pg_pool,
     _ensure_config_table,
-    _env_cfg,
     _get_cfg,
     _init_pg_pool,
     _load_config_from_pg,
     _pg_pool_connected,
-    _sanitize_cfg,
-    _save_config_to_pg,
 )
+from routers.config import register_config_routes
 from services.code_analysis import (
     _DEFAULT_ADVERSARIAL_TASK,
     _build_llm_provider,
@@ -349,55 +346,17 @@ async def http_adversarial_review(request: Request) -> JSONResponse:
 
 # ---------------------------------------------------------------------------
 # Config API — read / write runtime overrides
+#
+# The GET/PUT /config route handlers now live in routers/config.py (issue
+# #09), built on the config infra core.config.py already extracted (issue
+# #06). There's no GatewayClient/LLM-provider construction behind these
+# routes, so no DI seam/thin-wrapper is needed here — register_config_routes
+# just needs the live `mcp` instance to decorate its routes onto, since
+# `mcp.custom_route` (unlike FastAPI's APIRouter) has no standalone
+# router object to build and mount separately.
 # ---------------------------------------------------------------------------
 
-@mcp.custom_route("/config", methods=["GET"])
-async def get_config(request: Request) -> JSONResponse:
-    """Return effective runtime config (env vars + overrides, secrets masked)."""
-    if not _check_api_key(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return JSONResponse(_sanitize_cfg(_env_cfg()))
-
-
-async def _parse_json_body(request: Request) -> dict | None:
-    try:
-        body = await request.json()
-    except Exception:
-        return None
-    if not isinstance(body, dict):
-        return None
-    return body
-
-
-def _update_provider_config(prov: str, overrides: Any) -> None:
-    if not isinstance(overrides, dict):
-        return
-    _CONFIG.setdefault(prov, {})
-    for k, v in overrides.items():
-        if v is None:
-            _CONFIG[prov].pop(k, None)
-        else:
-            _CONFIG[prov][k] = v
-
-
-@mcp.custom_route("/config", methods=["PUT"])
-async def put_config(request: Request) -> JSONResponse:
-    if not _check_api_key(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-
-    body = await _parse_json_body(request)
-    if body is None:
-        return JSONResponse({"error": "invalid JSON body"}, status_code=422)
-
-    if "llm_provider" in body:
-        _CONFIG["llm_provider"] = body["llm_provider"]
-
-    for prov in ("ollama", "gemini", "openrouter"):
-        _update_provider_config(prov, body.get(prov))
-
-    await _save_config_to_pg()
-
-    return JSONResponse({"status": "ok", "config": _sanitize_cfg(_CONFIG)})
+register_config_routes(mcp)
 
 
 # ---------------------------------------------------------------------------
