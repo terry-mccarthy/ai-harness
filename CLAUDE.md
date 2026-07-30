@@ -21,6 +21,10 @@ docker compose ps   # all should show (healthy) or Exited (0)
 make test-integration
 ```
 
+**Gotcha — git worktrees don't inherit `.env`:** `.env` is gitignored, so a fresh worktree has none. Integration tests then get spurious `401 Unauthorized` against the shared dev stack (client secrets resolve empty/wrong) rather than a clear "missing config" error. Copy the repo root's `.env` into the worktree before running `make test-integration`.
+
+**Gotcha — cross-service `core` package name collision breaks full-suite collection:** `services/governance/core/` and `services/review_server/core/` are both bare `core` packages (no unique top-level name) added to `sys.path` ad hoc by individual test files. Because neither has an `__init__.py`, Python treats `core` as an implicit namespace package — whichever service's `core.config` (or similar submodule) is imported *first* in a pytest session gets cached in `sys.modules` and is reused by every later `from .config import ...` in the *other* service's modules, raising `ImportError: cannot import name 'X' from 'core.config'`. This is order-dependent (only reproduces when both services' tests are collected in the same session, e.g. plain `pytest packages/harness-tests/ -m integration`) and pre-dates issue #04 — confirmed via `git stash` that it reproduces on unmodified `main`. Workaround for now: run the affected test file(s) directly or with `--continue-on-collection-errors` rather than fixing the namespace collision, which is a larger structural change outside any single issue's scope.
+
 ## Python environment
 
 Python 3.14 is in use. The project uses **uv** for dependency management with a workspace layout.

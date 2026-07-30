@@ -36,8 +36,14 @@ No agent code may invoke an MCPJungle (`:8080`) or ContextForge (`:4444`) tool w
 first receiving a 200 OK from governance's `/check` endpoint. Governance handles auth,
 policy, and audit as a sidecar (not a forwarding proxy — see ADR 0023).
 
-**[HARD]** Every tool call — allowed or denied — MUST produce an audit row in Dolt and trigger
-a `DOLT_COMMIT`. The audit log must be complete; partial audit is not acceptable.
+**[HARD]** Every tool call — allowed or denied — MUST attempt to produce an audit row in Dolt
+and trigger a `DOLT_COMMIT`. This is best-effort, not a hard delivery guarantee: `write_audit`
+(`services/governance/core/dolt.py`) swallows Dolt write failures so an outage never turns an
+already-sent response — or a deny-path `HTTPException` — into a 500. A failed write is never
+silent, though: it increments the `harness_audit_write_failures_total` Prometheus counter
+(`core/metrics.py`), a durable, observable failure signal exposed via `/metrics` for alerting.
+Losing the counter's increment requires losing the metric itself (e.g. governance process crash),
+not just a transient Dolt outage.
 
 **[HARD]** `harness-gateway` must not import from `harness-agents`, `harness-memory`, or `harness-tests`.
 

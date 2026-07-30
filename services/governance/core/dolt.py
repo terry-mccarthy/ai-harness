@@ -9,6 +9,7 @@ import aiomysql
 import pymysql
 
 from .config import DOLT_DB, DOLT_HOST, DOLT_PASSWORD, DOLT_PORT, DOLT_USER
+from .metrics import audit_write_failures_total
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,13 @@ async def write_audit(
                     (f"audit: {tool_name} by {agent_id} [{decision}]",),
                 )
     except Exception as e:
+        # Issue #04: this write is fire-and-forget from every caller (see
+        # ARCHITECTURE.md's audit-completeness invariant) — the exception is
+        # intentionally swallowed so a Dolt outage never turns an already-sent
+        # response (or a deny-path HTTPException) into a 500. A bare log line
+        # would make the lost audit row silent, so also increment a counter
+        # that is durable/observable via /metrics -> Prometheus -> alerting.
+        audit_write_failures_total.inc()
         logger.error("Dolt audit write failed: %s", e)
 
 

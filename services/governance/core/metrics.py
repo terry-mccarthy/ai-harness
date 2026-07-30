@@ -27,6 +27,17 @@ llm_tokens_total = Counter(
     ["agent_role", "provider", "model", "token_type"],
 )
 
+# Issue #04: write_audit swallows Dolt failures (see core/dolt.py) so a tool
+# call's response is never blocked by an audit outage. This counter is the
+# durable, observable failure signal that replaces "just a log line" —
+# scrape via /metrics and alert on rate() > 0. It does not recover the lost
+# audit row; it makes the loss visible instead of silent.
+audit_write_failures_total = Counter(
+    "harness_audit_write_failures_total",
+    "Total failed Dolt audit_log writes (write_audit exceptions)",
+    [],
+)
+
 
 def record_llm_usage(agent_role: str, body: dict) -> None:
     """Increment LLM counters if the audit body contains llm_tokens."""
