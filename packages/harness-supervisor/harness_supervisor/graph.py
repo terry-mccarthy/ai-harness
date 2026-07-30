@@ -1,4 +1,5 @@
 """Build the LangGraph supervisor graph."""
+import hashlib
 import os
 import logging
 from functools import partial
@@ -29,6 +30,19 @@ from .approval import validate_approval_token
 logger = logging.getLogger(__name__)
 
 _JWT_SECRET = os.environ.get("JWT_SECRET", "dev-jwt-secret-change-in-prod-xyz")
+
+# Tripwire: refuse to start with the well-known dev-default HS256 secret used to
+# sign/verify short-lived human-approval tokens, unless ENV=test. Mirrors the
+# RS256 agent-auth key tripwire in services/governance/core/config.py (ADR 0024).
+_DEV_DEFAULT_SECRET_FINGERPRINT = "sha256:7597ba39c34a364f6d4c338b79ab1aaede55ec6a1d63f27340fe30b0ebd925ac"
+
+_jwt_secret_fingerprint = "sha256:" + hashlib.sha256(_JWT_SECRET.encode()).hexdigest()
+if _jwt_secret_fingerprint == _DEV_DEFAULT_SECRET_FINGERPRINT and os.environ.get("ENV") != "test":
+    raise RuntimeError(
+        "harness-supervisor is configured with the well-known dev-default JWT_SECRET "
+        "used to sign human-approval tokens. Set ENV=test or supply a production "
+        "secret via JWT_SECRET."
+    )
 
 DOLT_CONN = dict(
     host=os.environ.get("DOLT_HOST", "localhost"),
