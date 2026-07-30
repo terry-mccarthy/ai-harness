@@ -13,8 +13,6 @@ from starlette.responses import JSONResponse, Response
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
 from harness_gateway.client import GatewayClient
-from harness_agents.reviewer import CodeReviewerAgent
-from harness_agents.adversarial_code_critic import AdversarialCodeCritic
 from harness_agents.adversarial_architecture_critic import AdversarialArchitectureCritic
 from harness_agents.types import AgentState
 from metrics import MonitoredLLMProvider
@@ -30,6 +28,13 @@ from core.config import (
     _pg_pool_connected,
     _sanitize_cfg,
     _save_config_to_pg,
+)
+from services.code_analysis import (
+    _DEFAULT_ADVERSARIAL_TASK,
+    _build_llm_provider,
+    _chain_adversarial_verdict,
+    _run_adversarial_review as _ca_run_adversarial_review,
+    _run_review_maybe_chained as _ca_run_review_maybe_chained,
 )
 
 
@@ -61,13 +66,6 @@ _DEFAULT_TASK = (
     "Verdict is 'fail' if any CRITICAL finding exists."
 )
 
-_DEFAULT_ADVERSARIAL_TASK = (
-    "Attack the first-pass reviewer's findings. Confirm, refute, escalate, downgrade, "
-    "or leave unresolved each one. A confirmed or escalated CRITICAL finding requires "
-    "a concrete exploit_scenario — an actual input or request that triggers it, not a "
-    "restatement of the severity."
-)
-
 _DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK = (
     "Attack the first-pass architect's synthesis findings. Confirm, refute, escalate, "
     "downgrade, or leave unresolved each one. A confirmed or escalated HIGH/CRITICAL "
@@ -75,153 +73,18 @@ _DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK = (
     "in the codebase, not a restatement of the severity."
 )
 
-def _resolve(override, provider: str, key: str, env_var: str, default, *, cast=None):
-    if override is not None:
-        return override
-    cfg = _get_cfg(provider, key)
-    if cfg is not None:
-        return cfg
-    raw = os.environ.get(env_var)
-    if raw is not None:
-        if cast:
-            try:
-                return cast(raw)
-            except (ValueError, TypeError):
-                logging.warning("Invalid value for %s: %r, using default %r", env_var, raw, default)
-        else:
-            return raw
-    return default
-
-
-def _env_float(key: str, default: float) -> float:
-    try:
-        return float(os.environ.get(key, default))
-    except ValueError:
-        logging.warning("Invalid value for %s, using default %s", key, default)
-        return default
-
-
-def _env_int(key: str, default: int) -> int:
-    try:
-        return int(os.environ.get(key, default))
-    except ValueError:
-        logging.warning("Invalid value for %s, using default %s", key, default)
-        return default
-
-
-def _build_gemini_provider(**kwargs):
-    from harness_agents.llm import GeminiProvider
-    api_key = _resolve(None, "gemini", "api_key", "GEMINI_API_KEY", "")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY is required for the gemini provider")
-    return GeminiProvider(
-        model=_resolve(kwargs.get("model"), "gemini", "model", "GEMINI_MODEL", "gemini-2.5-flash"),
-        api_key=api_key,
-        temperature=_resolve(kwargs.get("temperature"), "gemini", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
-        max_output_tokens=_resolve(kwargs.get("max_tokens"), "gemini", "max_output_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
-    )
-
-
-def _build_openrouter_provider(**kwargs):
-    from harness_agents.llm import OpenRouterProvider
-    api_key = _resolve(None, "openrouter", "api_key", "OPENROUTER_API_KEY", "")
-    if not api_key:
-        raise ValueError("OPENROUTER_API_KEY is required for the openrouter provider")
-    return OpenRouterProvider(
-        api_key=api_key,
-        model=_resolve(kwargs.get("model"), "openrouter", "model", "OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
-        temperature=_resolve(kwargs.get("temperature"), "openrouter", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
-        max_tokens=_resolve(kwargs.get("max_tokens"), "openrouter", "max_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
-    )
-
-
-def _build_ollama_provider(host=None, model=None, temperature=None, max_tokens=None, num_ctx=None, num_predict=None):
-    from harness_agents.llm import OllamaProvider
-    return OllamaProvider(
-        host=_resolve(host, "ollama", "host", "OLLAMA_HOST", "http://localhost:11434"),
-        model=_resolve(model, "ollama", "model", "OLLAMA_MODEL", "qwen2.5-coder:7b"),
-        num_ctx=_resolve(num_ctx, "ollama", "num_ctx", "OLLAMA_NUM_CTX", 8192, cast=int),
-        temperature=_resolve(
-            temperature, "ollama", "temperature", "LLM_TEMPERATURE",
-            _env_float("OLLAMA_TEMPERATURE", 0.1),
-            cast=float,
-        ),
-        num_predict=_resolve(
-            num_predict, "ollama", "num_predict", "LLM_MAX_TOKENS",
-            _env_int("OLLAMA_NUM_PREDICT", 1024),
-            cast=int,
-        ),
-    )
-
-
-_BUILDERS = {
-    "gemini": _build_gemini_provider,
-    "openrouter": _build_openrouter_provider,
-    "ollama": _build_ollama_provider,
-}
-
-
-def _build_llm_provider(provider_name: str, **kwargs):
-    """Factory: return a concrete LLMProvider. Resolution: kwarg > config > env > default."""
-    builder = _BUILDERS.get(provider_name)
-    if not builder:
-        raise ValueError(f"Unknown LLM provider: {provider_name!r}. Supported: ollama, gemini, openrouter")
-    return builder(**kwargs)
-
-
-async def _run_review(
-    diff_text: str,
-    task: str,
-    provider: str | None = None,
-    model: str | None = None,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    num_ctx: int | None = None,
-    num_predict: int | None = None,
-    host: str | None = None,
-) -> dict:
-    """Run the CodeReviewerAgent and return structured findings.
-
-    Raises ValueError if the agent returns an error.
-    """
-    gateway = GatewayClient(
-        gateway_url=os.environ["MCPJUNGLE_URL"],
-        governance_url=os.environ.get("GOVERNANCE_URL"),
-        client_id="code-reviewer",
-        client_secret=os.environ.get("CODE_REVIEWER_SECRET", ""),
-    )
-    resolved_provider = (
-        provider
-        or _CONFIG.get("llm_provider")
-        or os.environ.get("LLM_PROVIDER", "ollama")
-    ).lower()
-    llm_provider = _build_llm_provider(
-        resolved_provider,
-        host=host,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        num_ctx=num_ctx,
-        num_predict=num_predict,
-    )
-    llm_provider = MonitoredLLMProvider(llm_provider, agent_role="code_reviewer")
-    agent = CodeReviewerAgent(gateway=gateway, llm_provider=llm_provider)
-    state = AgentState(
-        task=task,
-        diff=diff_text,
-        thread_id="mcp-call",
-        agent_output=None,
-        requires_human_approval=False,
-        error=None,
-    )
-    result = await agent.run(state)
-    if result.get("error"):
-        raise ValueError(result["error"]["reason"])
-    return result["agent_output"]
-
-
 # ---------------------------------------------------------------------------
 # MCP tool: review_diff
+#
+# The LLM-provider factory and the _run_review*/_run_chained_review
+# orchestration now live in services/code_analysis.py (issue #07). The thin
+# wrapper below exists only so that unittest.mock.patch.object(review_server,
+# "GatewayClient" / "_build_llm_provider", ...) (used throughout
+# packages/harness-tests/) keeps working: those names are resolved as bare
+# globals *inside this module* at call time, so this wrapper reads its own
+# (possibly patched) current values and threads them into
+# services.code_analysis explicitly, rather than letting the moved functions
+# silently fall back to their own module's unpatched originals.
 # ---------------------------------------------------------------------------
 
 
@@ -245,16 +108,11 @@ async def _run_review_maybe_chained(
     returns the combined {"first_pass", "critic", "verdict"} shape from
     _run_chained_review.
     """
-    if chain_adversarial:
-        return await _run_chained_review(
-            diff_text, task, provider,
-            model=model, temperature=temperature, max_tokens=max_tokens,
-            num_ctx=num_ctx, num_predict=num_predict, host=host,
-        )
-    return await _run_review(
-        diff_text, task, provider,
+    return await _ca_run_review_maybe_chained(
+        diff_text, task, provider, chain_adversarial,
         model=model, temperature=temperature, max_tokens=max_tokens,
         num_ctx=num_ctx, num_predict=num_predict, host=host,
+        gateway_client_cls=GatewayClient, build_llm_provider=_build_llm_provider,
     )
 
 
@@ -364,23 +222,16 @@ async def http_review(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Shared verdict synthesis for chain_adversarial=True (issues #03, #04)
-# ---------------------------------------------------------------------------
-
-
-def _chain_adversarial_verdict(critic_findings: list[dict], fail_severities: set[str]) -> str:
-    """'fail' if any critic finding is at a fail-tier severity with outcome
-    confirmed/escalated; 'pass' otherwise. A refuted/downgraded/unresolved
-    finding never fails the build on its own.
-    """
-    for finding in critic_findings:
-        if finding["severity"] in fail_severities and finding["outcome"] in ("confirmed", "escalated"):
-            return "fail"
-    return "pass"
-
-
-# ---------------------------------------------------------------------------
 # MCP tool: adversarial_review — attacks the first-pass review_diff output
+#
+# _run_adversarial_review's real implementation (GatewayClient + LLM-provider
+# construction, AdversarialCodeCritic invocation) now lives in
+# services/code_analysis.py (issue #07). This thin wrapper exists so that (a)
+# tests patching review_server.GatewayClient / review_server._build_llm_provider
+# still take effect (see the _run_review_maybe_chained wrapper above for why),
+# and (b) packages/harness-tests/test_adversarial_review_http.py, which calls
+# review_server._run_adversarial_review(...) directly (bypassing the
+# adversarial_review tool entirely), keeps working unchanged.
 # ---------------------------------------------------------------------------
 
 
@@ -400,78 +251,12 @@ async def _run_adversarial_review(
 
     Raises ValueError if the agent returns an error.
     """
-    gateway = GatewayClient(
-        gateway_url=os.environ["MCPJUNGLE_URL"],
-        governance_url=os.environ.get("GOVERNANCE_URL"),
-        client_id="adversarial-code-critic",
-        client_secret=os.environ.get("ADVERSARIAL_CODE_CRITIC_SECRET", ""),
-    )
-    resolved_provider = (
-        provider
-        or _CONFIG.get("llm_provider")
-        or os.environ.get("LLM_PROVIDER", "ollama")
-    ).lower()
-    llm_provider = _build_llm_provider(
-        resolved_provider,
-        host=host,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        num_ctx=num_ctx,
-        num_predict=num_predict,
-    )
-    llm_provider = MonitoredLLMProvider(llm_provider, agent_role="adversarial_code_critic")
-    agent = AdversarialCodeCritic(gateway=gateway, llm_provider=llm_provider)
-    state = AgentState(
-        task=task,
-        diff=diff_text,
-        first_pass_output=first_pass_output,
-        thread_id="mcp-call",
-        agent_output=None,
-        requires_human_approval=False,
-        error=None,
-    )
-    result = await agent.run(state)
-    if result.get("error"):
-        raise ValueError(result["error"]["reason"])
-    return result["agent_output"]
-
-
-# ---------------------------------------------------------------------------
-# chain_adversarial=True support for review_diff / POST /review (issue #03):
-# runs the first-pass reviewer, then attacks its own output with the
-# adversarial code critic, and synthesizes a combined verdict.
-# ---------------------------------------------------------------------------
-
-
-async def _run_chained_review(
-    diff_text: str,
-    task: str,
-    provider: str | None = None,
-    model: str | None = None,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    num_ctx: int | None = None,
-    num_predict: int | None = None,
-    host: str | None = None,
-) -> dict:
-    """Run the first-pass reviewer, then attack its output with the adversarial
-    code critic, and return the combined result.
-
-    Raises ValueError if either stage's agent returns an error.
-    """
-    first_pass_output = await _run_review(
-        diff_text, task, provider,
+    return await _ca_run_adversarial_review(
+        diff_text, first_pass_output, task, provider,
         model=model, temperature=temperature, max_tokens=max_tokens,
         num_ctx=num_ctx, num_predict=num_predict, host=host,
+        gateway_client_cls=GatewayClient, build_llm_provider=_build_llm_provider,
     )
-    critic_output = await _run_adversarial_review(
-        diff_text, first_pass_output, _DEFAULT_ADVERSARIAL_TASK, provider,
-        model=model, temperature=temperature, max_tokens=max_tokens,
-        num_ctx=num_ctx, num_predict=num_predict, host=host,
-    )
-    verdict = _chain_adversarial_verdict(critic_output["findings"], {"CRITICAL"})
-    return {"first_pass": first_pass_output, "critic": critic_output, "verdict": verdict}
 
 
 @mcp.tool()
