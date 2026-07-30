@@ -73,3 +73,19 @@ Detailed gotchas and internals live in `docs/dev/`. Read the relevant file befor
 | Memory layer, SRE signals, DynamicSREAgent, cache, orchestration, architectural gate | `docs/dev/memory-agents.md` |
 | FastMCP config, adding tools/servers, review_server HTTP endpoint, linter, prompts, evals | `docs/dev/mcp-servers.md` |
 | Monitoring stack, Prometheus, Grafana, Claude Code OTEL pipeline | `docs/dev/monitoring.md` |
+
+---
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, `done`) recorded as `Status:` lines in issue files. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context repo: one `CONTEXT.md` (not yet created — use `/grill-with-docs` to generate it) + `docs/adr/` at root. See `docs/agents/domain.md`.
