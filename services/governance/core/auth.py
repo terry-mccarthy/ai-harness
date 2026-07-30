@@ -15,3 +15,23 @@ def decode_jwt(authorization: str | None) -> dict:
         raise HTTPException(401, "token_expired")
     except jwt.InvalidTokenError:
         raise HTTPException(401, "invalid_token")
+
+
+def validate_approval_token(token: str, thread_id: str, tool_name: str, secret: str) -> bool:
+    """Returns True if the human-approval token is valid, unexpired, and scoped
+    to this thread+tool.
+
+    Deliberately duplicated (not imported) from
+    packages/harness-supervisor/harness_supervisor/approval.py: importing that
+    package here would pull langgraph/psycopg/etc. into governance's slim
+    container as transitive dependencies. This function is small, self-contained,
+    and governance already depends on pyjwt — see ADR-0012 (short-lived JWTs
+    scoped to thread_id + tool_name) and issue #01.
+    """
+    try:
+        claims = jwt.decode(token, secret, algorithms=["HS256"])
+        return claims.get("thread_id") == thread_id and claims.get("tool_name") == tool_name
+    except jwt.ExpiredSignatureError:
+        return False
+    except jwt.InvalidTokenError:
+        return False
