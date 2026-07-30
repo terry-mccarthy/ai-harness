@@ -3,6 +3,7 @@
 All 27 integration tests. Run against the live Docker stack.
 """
 import os
+import json
 import uuid
 import asyncio
 from datetime import datetime, timezone, timedelta
@@ -252,6 +253,62 @@ async def test_memory_delete(memory_store):
     await memory_store.delete("architect", "del-key")
     result = await memory_store.read("architect", "del-key")
     assert result is None
+
+
+async def test_memory_dimension_change_creates_new_table_and_preserves_old():
+    """Reinitializing PostgresMemoryStore with a different embedding dimension must
+    create a new dimension-versioned table (memory_items_{dim}) instead of dropping
+    the existing one — records written under the old dimension must survive.
+    """
+    import numpy as np
+    from harness_memory.memory_store import PostgresMemoryStore
+
+    # Distinct fake model names so the class-level embed-dim cache doesn't collide
+    # with EMBED_MODEL (or other tests) and so we fully control the dimension
+    # without depending on a second real embedding model being installed in Ollama.
+    model_a = f"test-dim-a-{uuid.uuid4().hex[:8]}"
+    model_b = f"test-dim-b-{uuid.uuid4().hex[:8]}"
+    dim_a, dim_b = 8, 16
+
+    async def fake_embed_a(text: str):
+        return np.zeros(dim_a, dtype=np.float32)
+
+    async def fake_embed_b(text: str):
+        return np.zeros(dim_b, dtype=np.float32)
+
+    store_a = PostgresMemoryStore(PG_DSN, REDIS_URL, model_a, OLLAMA_HOST)
+    store_a._embed = fake_embed_a
+    await store_a.setup()
+    try:
+        await store_a.write("architect", "dim-a-key", {"fact": "dimension A data"})
+        assert await store_a.read("architect", "dim-a-key") == {"fact": "dimension A data"}
+    finally:
+        await store_a.close()
+
+    store_b = PostgresMemoryStore(PG_DSN, REDIS_URL, model_b, OLLAMA_HOST)
+    store_b._embed = fake_embed_b
+    await store_b.setup()
+    try:
+        # store_b resolved a new dimension, so it must not see dimension-A's row
+        # through the normal read()/search() API against its own table.
+        assert await store_b.read("architect", "dim-a-key") is None
+        results = await store_b.search("architect", "dimension A data", top_k=5)
+        assert all(r["key"] != "dim-a-key" for r in results)
+
+        # ...but dimension-A's table must still exist, intact, and be directly
+        # queryable — it was never dropped.
+        async with store_b._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT value FROM memory_items_{dim_a} WHERE namespace = $1 AND key = $2",
+                "architect", "dim-a-key",
+            )
+        assert row is not None, "memory_items_8 (dimension A) must survive a dimension change"
+        assert json.loads(row["value"]) == {"fact": "dimension A data"}
+    finally:
+        async with store_b._pool.acquire() as conn:
+            await conn.execute(f"DROP TABLE IF EXISTS memory_items_{dim_a}")
+            await conn.execute(f"DROP TABLE IF EXISTS memory_items_{dim_b}")
+        await store_b.close()
 
 
 async def test_memory_interface_compliance():
