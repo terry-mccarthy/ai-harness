@@ -80,7 +80,7 @@ async def check_policy(
 
     if short_tool == "shell_exec" and not x_human_approval_token:
         tool_calls_total.labels(agent_role=claims["role"], decision="deny").inc()
-        write_audit(
+        await write_audit(
             claims["sub"], full_tool, short_tool, "", "", "deny",
             "shell_exec_requires_human_approval", 0, x_correlation_id,
         )
@@ -88,7 +88,7 @@ async def check_policy(
 
     if not await check_opa("harness/allow", {"agent_role": claims["role"], "tool_name": short_tool}):
         tool_calls_total.labels(agent_role=claims["role"], decision="deny").inc()
-        write_audit(
+        await write_audit(
             claims["sub"], full_tool, short_tool, "", "", "deny",
             rule, 0, x_correlation_id,
         )
