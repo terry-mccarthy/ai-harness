@@ -7,6 +7,12 @@ from dotenv import load_dotenv
 # Load .env from repo root so tests work without `source .env` in the shell
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
+# Test suite runs with the committed dev-default secrets (JWT_SECRET, governance's
+# test RSA key, etc.) — declare that explicitly so the import-time tripwires in
+# harness_supervisor.graph and services/governance/core/config.py don't fire.
+# setdefault: an explicit ENV from the shell or .env still wins.
+os.environ.setdefault("ENV", "test")
+
 from harness_gateway.client import GatewayClient
 from harness_agents.reviewer import CodeReviewerAgent
 
