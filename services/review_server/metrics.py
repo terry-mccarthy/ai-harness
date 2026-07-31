@@ -1,20 +1,26 @@
 """Prometheus metric definitions for the review server."""
 import time
-from prometheus_client import Counter, Histogram
+from prometheus_client import CollectorRegistry, Counter, Histogram
 
 from harness_agents.llm import LLMProvider, LLMResponse
 
+# Own explicit registry instead of prometheus_client's implicit global
+# default — see services/governance/governance_core/metrics.py for the full
+# rationale (issue #03).
+REGISTRY = CollectorRegistry()
 
 llm_calls_total = Counter(
     "harness_llm_calls_total",
     "Total LLM invocations by provider, model, and agent role",
     ["provider", "model", "agent_role"],
+    registry=REGISTRY,
 )
 
 llm_tokens_total = Counter(
     "harness_llm_tokens_total",
     "Total LLM tokens consumed by provider, model, and token type",
     ["provider", "model", "token_type"],
+    registry=REGISTRY,
 )
 
 llm_latency_seconds = Histogram(
@@ -22,6 +28,7 @@ llm_latency_seconds = Histogram(
     "LLM call latency in seconds",
     ["provider", "model"],
     buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0],
+    registry=REGISTRY,
 )
 
 

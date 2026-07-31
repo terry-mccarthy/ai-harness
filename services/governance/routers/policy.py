@@ -16,7 +16,7 @@ from governance_core.config import (
     b64url,
 )
 from governance_core.dolt import write_audit, write_episode, write_gate_failure
-from governance_core.metrics import record_llm_usage, tool_call_latency, tool_calls_total
+from governance_core.metrics import REGISTRY, record_llm_usage, tool_call_latency, tool_calls_total
 from governance_core.opa import check_opa
 
 logger = logging.getLogger(__name__)
@@ -218,4 +218,4 @@ async def jwks():
 
 @router.get("/metrics")
 async def metrics():
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
