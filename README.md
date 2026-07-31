@@ -58,7 +58,12 @@ make test-integration
 
 ## Configuration
 
-All options are in `.env` (copy from `.env.example`):
+All options are in `.env` (copy from `.env.example`). New git worktrees (e.g.
+per-issue AFK worktrees) don't get `.env` copied automatically since it's
+gitignored — copy or symlink it in from the repo root before running tests.
+If it's missing, `packages/harness-tests/conftest.py` falls back to
+`.env.example`'s documented dev defaults so `make test-unit` doesn't hard
+fail — it just runs against non-production secrets.
 
 | Variable | Default | Description |
 |---|---|---|
