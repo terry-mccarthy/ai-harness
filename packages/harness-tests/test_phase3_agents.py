@@ -501,16 +501,25 @@ async def test_sre_shell_exec_blocked_without_approval():
 
 @pytest.mark.integration
 async def test_sre_shell_exec_allowed_with_approval():
-    """SRE with a valid human_approval_token in headers can call shell_exec."""
+    """SRE with a valid, thread+tool-scoped human_approval_token (ADR-0012)
+    can call shell_exec."""
     import os
     from harness_gateway.client import GatewayClient
+    from harness_supervisor.approval import issue_approval_token
+
+    thread_id = str(uuid.uuid4())
+    jwt_secret = os.environ.get("JWT_SECRET", "dev-jwt-secret-change-in-prod-xyz")
+    approval_token = issue_approval_token(
+        thread_id=thread_id, tool_name="shell_exec", secret=jwt_secret,
+    )
 
     gw = GatewayClient(
         gateway_url=os.environ.get("MCPJUNGLE_URL", "http://localhost:8080"),
         governance_url=os.environ.get("GOVERNANCE_URL", "http://localhost:8090"),
         client_id="sre",
         client_secret=os.environ.get("SRE_SECRET", "sre-secret"),
-        human_approval_token="approved-test-token",
+        human_approval_token=approval_token,
+        thread_id=thread_id,
     )
     result = await gw.call_tool("shell_exec", {"command": "echo ok"})
     assert result is not None

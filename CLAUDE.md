@@ -21,6 +21,10 @@ docker compose ps   # all should show (healthy) or Exited (0)
 make test-integration
 ```
 
+**Gotcha — git worktrees don't inherit `.env`:** `.env` is gitignored, so a fresh worktree has none. Integration tests then get spurious `401 Unauthorized` against the shared dev stack (client secrets resolve empty/wrong) rather than a clear "missing config" error. Copy the repo root's `.env` into the worktree before running `make test-integration`.
+
+**Resolved gotcha — cross-service `core` package name collision:** `services/governance/core/` and `services/review_server/core/` used to both be bare `core` packages, which could shadow each other (`sys.modules["core"]`) if both were ever put on `sys.path` in the same pytest session. Fixed by renaming each to a unique top-level package: `services/governance/governance_core/` and `services/review_server/review_server_core/`. See `packages/harness-tests/test_no_core_namespace_collision.py` for the regression test.
+
 ## Python environment
 
 Python 3.14 is in use. The project uses **uv** for dependency management with a workspace layout.

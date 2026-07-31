@@ -27,6 +27,24 @@ PRIVATE_KEY = load_pem_private_key(_jwt_private_key_pem, password=None)
 PUBLIC_KEY = PRIVATE_KEY.public_key()
 
 
+# Tripwire: refuse to start with the well-known dev-default HS256 secret used to
+# verify short-lived human-approval tokens (X-Human-Approval-Token), unless
+# ENV=test. Mirrors the RS256 agent-auth key tripwire above and the identical
+# tripwire in harness_supervisor.graph (ADR 0024) — governance now validates
+# the same secret cryptographically (issue #01), so leaving it unguarded here
+# would partially undermine that fix.
+JWT_SECRET = os.environ.get("JWT_SECRET", "dev-jwt-secret-change-in-prod-xyz")
+
+_DEV_DEFAULT_JWT_SECRET_FINGERPRINT = "sha256:7597ba39c34a364f6d4c338b79ab1aaede55ec6a1d63f27340fe30b0ebd925ac"
+_jwt_secret_fingerprint = "sha256:" + hashlib.sha256(JWT_SECRET.encode()).hexdigest()
+if _jwt_secret_fingerprint == _DEV_DEFAULT_JWT_SECRET_FINGERPRINT and os.environ.get("ENV") != "test":
+    raise RuntimeError(
+        "Governance is configured with the well-known dev-default JWT_SECRET used "
+        "to validate human-approval tokens. Set ENV=test or supply a production "
+        "secret via JWT_SECRET."
+    )
+
+
 def b64url(n: int) -> str:
     byte_len = (n.bit_length() + 7) // 8
     return base64.urlsafe_b64encode(n.to_bytes(byte_len, "big")).rstrip(b"=").decode()

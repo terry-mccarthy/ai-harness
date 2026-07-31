@@ -29,6 +29,12 @@ def load_env_with_fallback(repo_root: Path) -> None:
 # (e.g. in a fresh worktree) -- see README.md.
 load_env_with_fallback(Path(__file__).resolve().parents[2])
 
+# Test suite runs with the committed dev-default secrets (JWT_SECRET, governance's
+# test RSA key, etc.) — declare that explicitly so the import-time tripwires in
+# harness_supervisor.graph and services/governance/core/config.py don't fire.
+# setdefault: an explicit ENV from the shell or .env still wins.
+os.environ.setdefault("ENV", "test")
+
 from harness_gateway.client import GatewayClient
 from harness_agents.reviewer import CodeReviewerAgent
 

@@ -10,7 +10,7 @@ import numpy as np
 import redis.asyncio as aioredis
 
 BASE_CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS memory_items (
+CREATE TABLE IF NOT EXISTS {table} (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     namespace    TEXT NOT NULL,
     key          TEXT NOT NULL,
@@ -25,6 +25,16 @@ CREATE TABLE IF NOT EXISTS memory_items (
     UNIQUE (namespace, key)
 );
 """
+
+
+def _table_name_for_dim(dim: int) -> str:
+    """Dimension-versioned table name, e.g. memory_items_1536.
+
+    Switching embedding models (or dimension) never drops or mutates a
+    previously-created table — it just resolves reads/writes to a different
+    one. Old dimension tables are left intact and still queryable directly.
+    """
+    return f"memory_items_{int(dim)}"
 
 
 class PostgresMemoryStore:
@@ -44,6 +54,7 @@ class PostgresMemoryStore:
         self._pool: asyncpg.Pool | None = None
         self._redis: aioredis.Redis | None = None
         self.cache_hits: int = 0
+        self._table: str | None = None
 
     async def _ensure_connections(self) -> None:
         if self._pool is None:
@@ -57,25 +68,22 @@ class PostgresMemoryStore:
             PostgresMemoryStore._embed_dim_cache[self._embed_model] = len(sample)
         return PostgresMemoryStore._embed_dim_cache[self._embed_model]
 
-    async def _ensure_table(self, dim: int) -> None:
+    async def _ensure_table(self, dim: int) -> str:
+        """Create the dimension-versioned table for `dim` if it doesn't exist yet.
+
+        Never drops or truncates an existing table — a dimension change simply
+        resolves to a different table name, so data written under a previous
+        embedding dimension is left fully intact and queryable.
+        """
+        table = _table_name_for_dim(dim)
         async with self._pool.acquire() as conn:
-            existing_dim = await conn.fetchval(
-                """
-                SELECT atttypmod FROM pg_attribute pa
-                JOIN pg_class pc ON pa.attrelid = pc.oid
-                JOIN pg_namespace pn ON pc.relnamespace = pn.oid
-                WHERE pc.relname = 'memory_items' AND pa.attname = 'embedding'
-                  AND pn.nspname = 'public'
-                """
-            )
-            if existing_dim is not None and existing_dim != dim:
-                await conn.execute("DROP TABLE IF EXISTS memory_items")
-            await conn.execute(BASE_CREATE_TABLE_SQL.format(dim=dim))
+            await conn.execute(BASE_CREATE_TABLE_SQL.format(table=table, dim=dim))
+        return table
 
     async def setup(self) -> None:
         await self._ensure_connections()
         dim = await self._resolve_embedding_dim()
-        await self._ensure_table(dim)
+        self._table = await self._ensure_table(dim)
 
     async def close(self) -> None:
         if self._pool:
@@ -111,8 +119,8 @@ class PostgresMemoryStore:
 
         async with self._pool.acquire() as conn:
             await conn.execute(
-                """
-                INSERT INTO memory_items
+                f"""
+                INSERT INTO {self._table}
                     (namespace, key, memory_type, value, embedding, expires_at, consolidated)
                 VALUES ($1, $2, $3, $4::jsonb, $5::vector, $6, FALSE)
                 ON CONFLICT (namespace, key)
@@ -157,7 +165,7 @@ class PostgresMemoryStore:
                 f"""
                 SELECT key, value,
                        1 - (embedding <=> $1::vector) AS score
-                FROM memory_items
+                FROM {self._table}
                 WHERE namespace = $2
                   AND (expires_at IS NULL OR expires_at > now())
                   AND embedding IS NOT NULL
@@ -171,7 +179,7 @@ class PostgresMemoryStore:
     async def delete(self, namespace: str, key: str) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(
-                "DELETE FROM memory_items WHERE namespace = $1 AND key = $2",
+                f"DELETE FROM {self._table} WHERE namespace = $1 AND key = $2",
                 namespace, key,
             )
         await self._redis.delete(self._redis_key(namespace, key))
@@ -182,13 +190,13 @@ class PostgresMemoryStore:
 
     async def _truncate(self) -> None:
         async with self._pool.acquire() as conn:
-            await conn.execute("DELETE FROM memory_items")
+            await conn.execute(f"DELETE FROM {self._table}")
 
     async def _pg_read(self, namespace: str, key: str) -> dict | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                """
-                SELECT value FROM memory_items
+                f"""
+                SELECT value FROM {self._table}
                 WHERE namespace = $1 AND key = $2
                   AND (expires_at IS NULL OR expires_at > now())
                 """,
@@ -200,9 +208,9 @@ class PostgresMemoryStore:
         """Return raw row dict including memory_type and consolidated flag."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                """
+                f"""
                 SELECT namespace, key, memory_type, value, consolidated, expires_at
-                FROM memory_items
+                FROM {self._table}
                 WHERE namespace = $1 AND key = $2
                 """,
                 namespace, key,
@@ -221,9 +229,9 @@ class PostgresMemoryStore:
     async def _list_by_type(self, namespace: str, memory_type: str) -> list[dict]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT key, value, source_ids
-                FROM memory_items
+                FROM {self._table}
                 WHERE namespace = $1 AND memory_type = $2
                   AND (expires_at IS NULL OR expires_at > now())
                 """,
@@ -245,8 +253,8 @@ class PostgresMemoryStore:
         embedding = await self._embed(json.dumps(value))
         async with self._pool.acquire() as conn:
             await conn.execute(
-                """
-                INSERT INTO memory_items
+                f"""
+                INSERT INTO {self._table}
                     (namespace, key, memory_type, value, embedding, source_ids, consolidated)
                 VALUES ($1, $2, 'semantic', $3::jsonb, $4::vector, $5, TRUE)
                 ON CONFLICT (namespace, key)
@@ -267,7 +275,7 @@ class PostgresMemoryStore:
     async def _mark_consolidated(self, namespace: str, key: str) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(
-                "UPDATE memory_items SET consolidated = TRUE WHERE namespace = $1 AND key = $2",
+                f"UPDATE {self._table} SET consolidated = TRUE WHERE namespace = $1 AND key = $2",
                 namespace, key,
             )
 
@@ -275,9 +283,9 @@ class PostgresMemoryStore:
         """Return unconsolidated episodic items with their embeddings."""
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT id::text, key, value, embedding::text
-                FROM memory_items
+                FROM {self._table}
                 WHERE namespace = $1
                   AND memory_type = 'episodic'
                   AND consolidated = FALSE
@@ -298,7 +306,7 @@ class PostgresMemoryStore:
     async def _delete_expired(self, namespace: str) -> int:
         async with self._pool.acquire() as conn:
             result = await conn.execute(
-                "DELETE FROM memory_items WHERE namespace = $1 AND expires_at IS NOT NULL AND expires_at <= now()",
+                f"DELETE FROM {self._table} WHERE namespace = $1 AND expires_at IS NOT NULL AND expires_at <= now()",
                 namespace,
             )
         # asyncpg returns "DELETE n"
@@ -327,6 +335,8 @@ class PostgresMemoryStore:
         s = s.strip("[]")
         return np.array([float(x) for x in s.split(",")], dtype=np.float32)
 
-    @staticmethod
-    def _redis_key(namespace: str, key: str) -> str:
-        return f"memory:{namespace}:{key}"
+    def _redis_key(self, namespace: str, key: str) -> str:
+        # Scoped by table (which encodes the active embedding dimension) so a
+        # hot-read cache entry from one dimension's table can never be served
+        # back for a different dimension's store after a dimension change.
+        return f"memory:{self._table}:{namespace}:{key}"

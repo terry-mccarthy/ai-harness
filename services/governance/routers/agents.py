@@ -110,7 +110,7 @@ async def _check_or_raise(caller_role: str, target: str, correlation_id: str | N
         {"role": caller_role, "action": "invoke", "target": target},
     )
     if target not in (allowed_targets or []):
-        write_audit(
+        await write_audit(
             claims["sub"], f"agent_invoke:{target}", target,
             "", "", "deny", f"invoke_denied[{caller_role}->{target}]", 0, correlation_id,
         )

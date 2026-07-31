@@ -6,10 +6,11 @@ import jwt
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from governance_core.auth import decode_jwt
+from governance_core.auth import decode_jwt, validate_approval_token
 from governance_core.config import (
     CLIENTS,
     EXPIRY_PASS_INTERVAL,
+    JWT_SECRET,
     PRIVATE_KEY,
     PUBLIC_KEY,
     TOKEN_TTL,
@@ -76,19 +77,29 @@ async def check_policy(
     body = await request.json()
     full_tool = body.get("tool_name", "")
     short_tool = full_tool.split("__")[-1] if "__" in full_tool else full_tool
+    thread_id = body.get("thread_id", "")
     rule = f"harness.allow[{claims['role']}]"
 
-    if short_tool == "shell_exec" and not x_human_approval_token:
-        tool_calls_total.labels(agent_role=claims["role"], decision="deny").inc()
-        write_audit(
-            claims["sub"], full_tool, short_tool, "", "", "deny",
-            "shell_exec_requires_human_approval", 0, x_correlation_id,
-        )
-        raise HTTPException(403, "shell_exec_requires_human_approval")
+    if short_tool == "shell_exec":
+        if not x_human_approval_token:
+            tool_calls_total.labels(agent_role=claims["role"], decision="deny").inc()
+            await write_audit(
+                claims["sub"], full_tool, short_tool, "", "", "deny",
+                "shell_exec_requires_human_approval", 0, x_correlation_id,
+            )
+            raise HTTPException(403, "shell_exec_requires_human_approval")
+
+        if not validate_approval_token(x_human_approval_token, thread_id, short_tool, JWT_SECRET):
+            tool_calls_total.labels(agent_role=claims["role"], decision="deny").inc()
+            await write_audit(
+                claims["sub"], full_tool, short_tool, "", "", "deny",
+                "shell_exec_approval_token_invalid", 0, x_correlation_id,
+            )
+            raise HTTPException(403, "shell_exec_approval_token_invalid")
 
     if not await check_opa("harness/allow", {"agent_role": claims["role"], "tool_name": short_tool}):
         tool_calls_total.labels(agent_role=claims["role"], decision="deny").inc()
-        write_audit(
+        await write_audit(
             claims["sub"], full_tool, short_tool, "", "", "deny",
             rule, 0, x_correlation_id,
         )

@@ -238,8 +238,22 @@ class DynamicSREAgent:
             "reason": f"exceeded {MAX_TURNS} turns without final response",
         }}
 
+    def _sync_gateway_approval_context(self, state: AgentState) -> None:
+        """Propagate thread_id/human_approval_token from graph state onto the
+        shared gateway so a resumed shell_exec call can be verified by
+        governance's /check (ADR 0012, issue #01). GatewayClient is a single
+        instance shared across agents/threads for the life of the process, so
+        this mutation is only safe because requests are processed one at a
+        time per resumed thread; it is not concurrency-safe across
+        simultaneously in-flight threads (a pre-existing property of the
+        shared-gateway design, not introduced here).
+        """
+        self.gateway.thread_id = state.get("thread_id")
+        self.gateway.human_approval_token = state.get("human_approval_token")
+
     async def run(self, state: AgentState) -> AgentState:
         task = state.get("task", "")
+        self._sync_gateway_approval_context(state)
 
         force_refresh = state.get("force_refresh", False)
         cached = await self._cache_lookup(task, force_refresh=force_refresh)

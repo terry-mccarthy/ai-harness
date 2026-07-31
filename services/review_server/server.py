@@ -1,111 +1,81 @@
-import asyncio
+"""review_server FastMCP app: tool/route registration + DI-seam-blocked handlers.
+
+Issue #10 status (final slice of the server.py decomposition started in
+issues #06-#09): every FastMCP tool/HTTP route that has no
+GatewayClient/LLM-provider dependency-injection seam has been extracted into
+routers/ (routers/config.py, issue #09; routers/review.py, issue #10) or
+services/ (services/code_analysis.py, issue #07;
+services/architecture_gate.py, issue #08).
+
+What deliberately stays in THIS file: review_diff/http_review,
+adversarial_review/http_adversarial_review, architecture_review,
+bootstrap_architecture, http_architecture_review,
+adversarial_architecture_review/http_adversarial_architecture_review, and
+their local _run_*/_run_chained_* thin-wrapper glue.
+
+Why: packages/harness-tests/ loads this file via
+importlib.util.spec_from_file_location under a locally-scoped module alias
+(e.g. "review_server" or "_srv"), then does
+unittest.mock.patch.object(review_server, "GatewayClient", ...) /
+patch.object(review_server, "_build_llm_provider", ...) and, for some tests,
+calls review_server._run_adversarial_review(...) /
+review_server._run_adversarial_architecture_review(...) /
+_srv.bootstrap_architecture(...) directly. patch.object(module, name, ...)
+only overrides a bare global as resolved, at call time, by a function body
+physically defined in that module's own namespace (Python's late-binding
+global lookup) — it does not reach a closure that captured the old value at
+import time, and it does not reach a same-path-but-different sys.modules-key
+import of "the same" module. Moving these functions' definitions into
+routers/review.py would make them resolve GatewayClient/_build_llm_provider
+against routers.review's own globals instead, silently breaking every one of
+those patches with no fix that doesn't also modify the test files (forbidden)
+or reintroduce this exact late-binding structure elsewhere. This is a
+documented, deliberate divergence from the issue's literal "no inline
+endpoint logic" instruction — see ways-of-working.md rule #3 — not a
+silently-dropped scope item. As a result, server.py does not reach "well
+under 200 lines"; see PROGRESS.md / the issue #10 close-out notes for the
+actual line count.
+"""
 from contextlib import asynccontextmanager
-import json
 import logging
 import os
-from typing import Any
 
-import asyncpg
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
 from harness_gateway.client import GatewayClient
-from harness_agents.reviewer import CodeReviewerAgent
-from harness_agents.adversarial_code_critic import AdversarialCodeCritic
-from harness_agents.adversarial_architecture_critic import AdversarialArchitectureCritic
-from harness_agents.types import AgentState
 from metrics import REGISTRY, MonitoredLLMProvider
-
-_PG_POOL: asyncpg.Pool | None = None
-
-
-async def _init_pg_pool() -> None:
-    global _PG_POOL
-    dsn = os.environ.get("PG_DSN", "postgresql://harness:harness@localhost:5432/harness")
-    if not dsn:
-        return
-    for attempt in range(1, 6):
-        try:
-            _PG_POOL = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
-            logging.info("connected to postgres config store")
-            return
-        except Exception:
-            if attempt < 5:
-                wait = attempt * 2
-                logging.warning(
-                    "pg connect attempt %d/5 failed, retrying in %ds...", attempt, wait
-                )
-                await asyncio.sleep(wait)
-            else:
-                logging.warning(
-                    "config persistence unavailable — pg not reachable after 5 attempts",
-                    exc_info=True,
-                )
-
-
-async def _close_pg_pool() -> None:
-    global _PG_POOL
-    if _PG_POOL:
-        await _PG_POOL.close()
-        _PG_POOL = None
-
-
-async def _ensure_config_table() -> None:
-    if not _PG_POOL:
-        return
-    async with _PG_POOL.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS server_config (
-                id         INTEGER PRIMARY KEY DEFAULT 1,
-                config     JSONB NOT NULL DEFAULT '{}',
-                updated_at TIMESTAMPTZ DEFAULT now(),
-                CONSTRAINT single_row CHECK (id = 1)
-            )
-        """)
-        await conn.execute("""
-            INSERT INTO server_config (id, config)
-            VALUES (1, '{}')
-            ON CONFLICT (id) DO NOTHING
-        """)
-
-
-def _apply_config_overrides(overrides: dict) -> None:
-    if "llm_provider" in overrides:
-        _CONFIG["llm_provider"] = overrides["llm_provider"]
-    for prov in ("ollama", "gemini", "openrouter"):
-        if prov in overrides:
-            _CONFIG[prov] = overrides[prov]
-
-
-async def _load_config_from_pg() -> None:
-    if not _PG_POOL:
-        return
-    async with _PG_POOL.acquire() as conn:
-        row = await conn.fetchrow("SELECT config FROM server_config WHERE id = 1")
-    if row and row["config"]:
-        _apply_config_overrides(json.loads(row["config"]))
-
-
-async def _save_config_to_pg() -> None:
-    if not _PG_POOL:
-        return
-    payload: dict = {}
-    if _CONFIG["llm_provider"] is not None:
-        payload["llm_provider"] = _CONFIG["llm_provider"]
-    for prov in ("ollama", "gemini", "openrouter"):
-        if _CONFIG.get(prov):
-            payload[prov] = _CONFIG[prov]
-    async with _PG_POOL.acquire() as conn:
-        await conn.execute(
-            "UPDATE server_config SET config = $1::jsonb, updated_at = now() WHERE id = 1",
-            json.dumps(payload),
-        )
+from review_server_core.config import (
+    _CONFIG,
+    _check_api_key,
+    _close_pg_pool,
+    _ensure_config_table,
+    _get_cfg,
+    _init_pg_pool,
+    _load_config_from_pg,
+    _pg_pool_connected,
+)
+from routers.config import register_config_routes
+from routers.review import register_review_routes
+from services.code_analysis import (
+    _DEFAULT_ADVERSARIAL_TASK,
+    _build_llm_provider,
+    _chain_adversarial_verdict,
+    _run_adversarial_review as _ca_run_adversarial_review,
+    _run_review_maybe_chained as _ca_run_review_maybe_chained,
+)
+from services.architecture_gate import (
+    _DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK,
+    _parse_adversarial_architecture_review_body as _ag_parse_adversarial_architecture_review_body,
+    _run_adversarial_architecture_review as _ag_run_adversarial_architecture_review,
+    _run_architecture_review_chain as _ag_run_architecture_review_chain,
+    _run_bootstrap_architecture as _ag_run_bootstrap_architecture,
+)
 
 
 @asynccontextmanager
@@ -113,7 +83,7 @@ async def lifespan(server):
     await _init_pg_pool()
     await _ensure_config_table()
     await _load_config_from_pg()
-    if _PG_POOL:
+    if _pg_pool_connected():
         logging.info("loaded runtime config from postgres")
     yield
     await _close_pg_pool()
@@ -136,245 +106,18 @@ _DEFAULT_TASK = (
     "Verdict is 'fail' if any CRITICAL finding exists."
 )
 
-_DEFAULT_ADVERSARIAL_TASK = (
-    "Attack the first-pass reviewer's findings. Confirm, refute, escalate, downgrade, "
-    "or leave unresolved each one. A confirmed or escalated CRITICAL finding requires "
-    "a concrete exploit_scenario — an actual input or request that triggers it, not a "
-    "restatement of the severity."
-)
-
-_DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK = (
-    "Attack the first-pass architect's synthesis findings. Confirm, refute, escalate, "
-    "downgrade, or leave unresolved each one. A confirmed or escalated HIGH/CRITICAL "
-    "finding requires a concrete regression_scenario — a specific failure trace grounded "
-    "in the codebase, not a restatement of the severity."
-)
-
-# ---------------------------------------------------------------------------
-# Runtime config store — set via PUT /config, persisted in postgres server_config
-# table. Loaded at startup via lifespan hook; saved on every PUT /config.
-# Each provider sub-dict holds typed overrides that take precedence over env vars.
-# Setting a value to None (or omitting the key) falls through to the env var / default.
-# ---------------------------------------------------------------------------
-_CONFIG: dict = {
-    "llm_provider": None,   # overrides LLM_PROVIDER env var
-    "ollama": {},
-    "gemini": {},
-    "openrouter": {},
-}
-
-_SENSITIVE_KEYS = {"api_key", "client_secret", "secret"}
-
-
-_ENV_CFG = {
-    "llm_provider": ("LLM_PROVIDER", "ollama"),
-    "ollama": {
-        "model": ("OLLAMA_MODEL", "qwen2.5-coder:7b"),
-        "host": ("OLLAMA_HOST", "http://localhost:11434"),
-        "num_ctx": ("OLLAMA_NUM_CTX", 8192),
-        "temperature": ("OLLAMA_TEMPERATURE", 0.1),
-        "num_predict": ("OLLAMA_NUM_PREDICT", 1024),
-    },
-    "gemini": {
-        "model": ("GEMINI_MODEL", "gemini-2.5-flash"),
-        "api_key": ("GEMINI_API_KEY", None),
-    },
-    "openrouter": {
-        "model": ("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
-        "api_key": ("OPENROUTER_API_KEY", None),
-    },
-}
-
-
-def _env_cfg() -> dict:
-    result = {}
-    result["llm_provider"] = _CONFIG.get("llm_provider") or os.environ.get("LLM_PROVIDER", "ollama")
-    for provider in ("ollama", "gemini", "openrouter"):
-        sub = {}
-        for k, (env_var, default) in _ENV_CFG[provider].items():
-            sub[k] = _get_cfg(provider, k) or os.environ.get(env_var, default)
-        result[provider] = sub
-    return result
-
-
-def _should_mask(key: str, val) -> bool:
-    if key.lower() not in _SENSITIVE_KEYS:
-        return False
-    if not isinstance(val, str):
-        return False
-    if not val:
-        return False
-    return True
-
-
-def _mask_value(val: str) -> str:
-    return val[:4] + "..." if len(val) > 8 else "***"
-
-
-def _sanitize_cfg(val, key=""):
-    """Mask sensitive values (api keys, secrets) for display."""
-    if isinstance(val, dict):
-        return {k: _sanitize_cfg(v, k) for k, v in val.items()}
-    if _should_mask(key, val):
-        return _mask_value(val)
-    return val
-
-
-def _get_cfg(provider: str, key: str):
-    """Return a config override value, or None if not set."""
-    prov = _CONFIG.get(provider, {})
-    if not isinstance(prov, dict):
-        return None
-    return prov.get(key)
-
-
-def _resolve(override, provider: str, key: str, env_var: str, default, *, cast=None):
-    if override is not None:
-        return override
-    cfg = _get_cfg(provider, key)
-    if cfg is not None:
-        return cfg
-    raw = os.environ.get(env_var)
-    if raw is not None:
-        if cast:
-            try:
-                return cast(raw)
-            except (ValueError, TypeError):
-                logging.warning("Invalid value for %s: %r, using default %r", env_var, raw, default)
-        else:
-            return raw
-    return default
-
-
-def _env_float(key: str, default: float) -> float:
-    try:
-        return float(os.environ.get(key, default))
-    except ValueError:
-        logging.warning("Invalid value for %s, using default %s", key, default)
-        return default
-
-
-def _env_int(key: str, default: int) -> int:
-    try:
-        return int(os.environ.get(key, default))
-    except ValueError:
-        logging.warning("Invalid value for %s, using default %s", key, default)
-        return default
-
-
-def _build_gemini_provider(**kwargs):
-    from harness_agents.llm import GeminiProvider
-    api_key = _resolve(None, "gemini", "api_key", "GEMINI_API_KEY", "")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY is required for the gemini provider")
-    return GeminiProvider(
-        model=_resolve(kwargs.get("model"), "gemini", "model", "GEMINI_MODEL", "gemini-2.5-flash"),
-        api_key=api_key,
-        temperature=_resolve(kwargs.get("temperature"), "gemini", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
-        max_output_tokens=_resolve(kwargs.get("max_tokens"), "gemini", "max_output_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
-    )
-
-
-def _build_openrouter_provider(**kwargs):
-    from harness_agents.llm import OpenRouterProvider
-    api_key = _resolve(None, "openrouter", "api_key", "OPENROUTER_API_KEY", "")
-    if not api_key:
-        raise ValueError("OPENROUTER_API_KEY is required for the openrouter provider")
-    return OpenRouterProvider(
-        api_key=api_key,
-        model=_resolve(kwargs.get("model"), "openrouter", "model", "OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
-        temperature=_resolve(kwargs.get("temperature"), "openrouter", "temperature", "LLM_TEMPERATURE", 0.1, cast=float),
-        max_tokens=_resolve(kwargs.get("max_tokens"), "openrouter", "max_tokens", "LLM_MAX_TOKENS", 1024, cast=int),
-    )
-
-
-def _build_ollama_provider(host=None, model=None, temperature=None, max_tokens=None, num_ctx=None, num_predict=None):
-    from harness_agents.llm import OllamaProvider
-    return OllamaProvider(
-        host=_resolve(host, "ollama", "host", "OLLAMA_HOST", "http://localhost:11434"),
-        model=_resolve(model, "ollama", "model", "OLLAMA_MODEL", "qwen2.5-coder:7b"),
-        num_ctx=_resolve(num_ctx, "ollama", "num_ctx", "OLLAMA_NUM_CTX", 8192, cast=int),
-        temperature=_resolve(
-            temperature, "ollama", "temperature", "LLM_TEMPERATURE",
-            _env_float("OLLAMA_TEMPERATURE", 0.1),
-            cast=float,
-        ),
-        num_predict=_resolve(
-            num_predict, "ollama", "num_predict", "LLM_MAX_TOKENS",
-            _env_int("OLLAMA_NUM_PREDICT", 1024),
-            cast=int,
-        ),
-    )
-
-
-_BUILDERS = {
-    "gemini": _build_gemini_provider,
-    "openrouter": _build_openrouter_provider,
-    "ollama": _build_ollama_provider,
-}
-
-
-def _build_llm_provider(provider_name: str, **kwargs):
-    """Factory: return a concrete LLMProvider. Resolution: kwarg > config > env > default."""
-    builder = _BUILDERS.get(provider_name)
-    if not builder:
-        raise ValueError(f"Unknown LLM provider: {provider_name!r}. Supported: ollama, gemini, openrouter")
-    return builder(**kwargs)
-
-
-async def _run_review(
-    diff_text: str,
-    task: str,
-    provider: str | None = None,
-    model: str | None = None,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    num_ctx: int | None = None,
-    num_predict: int | None = None,
-    host: str | None = None,
-) -> dict:
-    """Run the CodeReviewerAgent and return structured findings.
-
-    Raises ValueError if the agent returns an error.
-    """
-    gateway = GatewayClient(
-        gateway_url=os.environ["MCPJUNGLE_URL"],
-        governance_url=os.environ.get("GOVERNANCE_URL"),
-        client_id="code-reviewer",
-        client_secret=os.environ.get("CODE_REVIEWER_SECRET", ""),
-    )
-    resolved_provider = (
-        provider
-        or _CONFIG.get("llm_provider")
-        or os.environ.get("LLM_PROVIDER", "ollama")
-    ).lower()
-    llm_provider = _build_llm_provider(
-        resolved_provider,
-        host=host,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        num_ctx=num_ctx,
-        num_predict=num_predict,
-    )
-    llm_provider = MonitoredLLMProvider(llm_provider, agent_role="code_reviewer")
-    agent = CodeReviewerAgent(gateway=gateway, llm_provider=llm_provider)
-    state = AgentState(
-        task=task,
-        diff=diff_text,
-        thread_id="mcp-call",
-        agent_output=None,
-        requires_human_approval=False,
-        error=None,
-    )
-    result = await agent.run(state)
-    if result.get("error"):
-        raise ValueError(result["error"]["reason"])
-    return result["agent_output"]
-
-
 # ---------------------------------------------------------------------------
 # MCP tool: review_diff
+#
+# The LLM-provider factory and the _run_review*/_run_chained_review
+# orchestration now live in services/code_analysis.py (issue #07). The thin
+# wrapper below exists only so that unittest.mock.patch.object(review_server,
+# "GatewayClient" / "_build_llm_provider", ...) (used throughout
+# packages/harness-tests/) keeps working: those names are resolved as bare
+# globals *inside this module* at call time, so this wrapper reads its own
+# (possibly patched) current values and threads them into
+# services.code_analysis explicitly, rather than letting the moved functions
+# silently fall back to their own module's unpatched originals.
 # ---------------------------------------------------------------------------
 
 
@@ -398,16 +141,11 @@ async def _run_review_maybe_chained(
     returns the combined {"first_pass", "critic", "verdict"} shape from
     _run_chained_review.
     """
-    if chain_adversarial:
-        return await _run_chained_review(
-            diff_text, task, provider,
-            model=model, temperature=temperature, max_tokens=max_tokens,
-            num_ctx=num_ctx, num_predict=num_predict, host=host,
-        )
-    return await _run_review(
-        diff_text, task, provider,
+    return await _ca_run_review_maybe_chained(
+        diff_text, task, provider, chain_adversarial,
         model=model, temperature=temperature, max_tokens=max_tokens,
         num_ctx=num_ctx, num_predict=num_predict, host=host,
+        gateway_client_cls=GatewayClient, build_llm_provider=_build_llm_provider,
     )
 
 
@@ -456,20 +194,6 @@ async def review_diff(
 # ---------------------------------------------------------------------------
 # HTTP endpoint: POST /review
 # ---------------------------------------------------------------------------
-
-def _check_api_key(request: Request) -> bool:
-    """Return True if the request is authorised.
-
-    When REVIEW_API_KEY is unset the endpoint is open (dev/local mode).
-    When set, the request must carry 'Authorization: Bearer <key>'.
-    """
-    required = os.environ.get("REVIEW_API_KEY")
-    if not required:
-        return True
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return False
-    return header[len("Bearer "):] == required
 
 
 @mcp.custom_route("/review", methods=["POST"])
@@ -531,23 +255,16 @@ async def http_review(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Shared verdict synthesis for chain_adversarial=True (issues #03, #04)
-# ---------------------------------------------------------------------------
-
-
-def _chain_adversarial_verdict(critic_findings: list[dict], fail_severities: set[str]) -> str:
-    """'fail' if any critic finding is at a fail-tier severity with outcome
-    confirmed/escalated; 'pass' otherwise. A refuted/downgraded/unresolved
-    finding never fails the build on its own.
-    """
-    for finding in critic_findings:
-        if finding["severity"] in fail_severities and finding["outcome"] in ("confirmed", "escalated"):
-            return "fail"
-    return "pass"
-
-
-# ---------------------------------------------------------------------------
 # MCP tool: adversarial_review — attacks the first-pass review_diff output
+#
+# _run_adversarial_review's real implementation (GatewayClient + LLM-provider
+# construction, AdversarialCodeCritic invocation) now lives in
+# services/code_analysis.py (issue #07). This thin wrapper exists so that (a)
+# tests patching review_server.GatewayClient / review_server._build_llm_provider
+# still take effect (see the _run_review_maybe_chained wrapper above for why),
+# and (b) packages/harness-tests/test_adversarial_review_http.py, which calls
+# review_server._run_adversarial_review(...) directly (bypassing the
+# adversarial_review tool entirely), keeps working unchanged.
 # ---------------------------------------------------------------------------
 
 
@@ -567,78 +284,12 @@ async def _run_adversarial_review(
 
     Raises ValueError if the agent returns an error.
     """
-    gateway = GatewayClient(
-        gateway_url=os.environ["MCPJUNGLE_URL"],
-        governance_url=os.environ.get("GOVERNANCE_URL"),
-        client_id="adversarial-code-critic",
-        client_secret=os.environ.get("ADVERSARIAL_CODE_CRITIC_SECRET", ""),
-    )
-    resolved_provider = (
-        provider
-        or _CONFIG.get("llm_provider")
-        or os.environ.get("LLM_PROVIDER", "ollama")
-    ).lower()
-    llm_provider = _build_llm_provider(
-        resolved_provider,
-        host=host,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        num_ctx=num_ctx,
-        num_predict=num_predict,
-    )
-    llm_provider = MonitoredLLMProvider(llm_provider, agent_role="adversarial_code_critic")
-    agent = AdversarialCodeCritic(gateway=gateway, llm_provider=llm_provider)
-    state = AgentState(
-        task=task,
-        diff=diff_text,
-        first_pass_output=first_pass_output,
-        thread_id="mcp-call",
-        agent_output=None,
-        requires_human_approval=False,
-        error=None,
-    )
-    result = await agent.run(state)
-    if result.get("error"):
-        raise ValueError(result["error"]["reason"])
-    return result["agent_output"]
-
-
-# ---------------------------------------------------------------------------
-# chain_adversarial=True support for review_diff / POST /review (issue #03):
-# runs the first-pass reviewer, then attacks its own output with the
-# adversarial code critic, and synthesizes a combined verdict.
-# ---------------------------------------------------------------------------
-
-
-async def _run_chained_review(
-    diff_text: str,
-    task: str,
-    provider: str | None = None,
-    model: str | None = None,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    num_ctx: int | None = None,
-    num_predict: int | None = None,
-    host: str | None = None,
-) -> dict:
-    """Run the first-pass reviewer, then attack its output with the adversarial
-    code critic, and return the combined result.
-
-    Raises ValueError if either stage's agent returns an error.
-    """
-    first_pass_output = await _run_review(
-        diff_text, task, provider,
+    return await _ca_run_adversarial_review(
+        diff_text, first_pass_output, task, provider,
         model=model, temperature=temperature, max_tokens=max_tokens,
         num_ctx=num_ctx, num_predict=num_predict, host=host,
+        gateway_client_cls=GatewayClient, build_llm_provider=_build_llm_provider,
     )
-    critic_output = await _run_adversarial_review(
-        diff_text, first_pass_output, _DEFAULT_ADVERSARIAL_TASK, provider,
-        model=model, temperature=temperature, max_tokens=max_tokens,
-        num_ctx=num_ctx, num_predict=num_predict, host=host,
-    )
-    verdict = _chain_adversarial_verdict(critic_output["findings"], {"CRITICAL"})
-    return {"first_pass": first_pass_output, "critic": critic_output, "verdict": verdict}
 
 
 @mcp.tool()
@@ -732,90 +383,47 @@ async def http_adversarial_review(request: Request) -> JSONResponse:
 
 # ---------------------------------------------------------------------------
 # Config API — read / write runtime overrides
+#
+# The GET/PUT /config route handlers now live in routers/config.py (issue
+# #09), built on the config infra core.config.py already extracted (issue
+# #06). There's no GatewayClient/LLM-provider construction behind these
+# routes, so no DI seam/thin-wrapper is needed here — register_config_routes
+# just needs the live `mcp` instance to decorate its routes onto, since
+# `mcp.custom_route` (unlike FastAPI's APIRouter) has no standalone
+# router object to build and mount separately.
 # ---------------------------------------------------------------------------
 
-@mcp.custom_route("/config", methods=["GET"])
-async def get_config(request: Request) -> JSONResponse:
-    """Return effective runtime config (env vars + overrides, secrets masked)."""
-    if not _check_api_key(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return JSONResponse(_sanitize_cfg(_env_cfg()))
-
-
-async def _parse_json_body(request: Request) -> dict | None:
-    try:
-        body = await request.json()
-    except Exception:
-        return None
-    if not isinstance(body, dict):
-        return None
-    return body
-
-
-def _update_provider_config(prov: str, overrides: Any) -> None:
-    if not isinstance(overrides, dict):
-        return
-    _CONFIG.setdefault(prov, {})
-    for k, v in overrides.items():
-        if v is None:
-            _CONFIG[prov].pop(k, None)
-        else:
-            _CONFIG[prov][k] = v
-
-
-@mcp.custom_route("/config", methods=["PUT"])
-async def put_config(request: Request) -> JSONResponse:
-    if not _check_api_key(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-
-    body = await _parse_json_body(request)
-    if body is None:
-        return JSONResponse({"error": "invalid JSON body"}, status_code=422)
-
-    if "llm_provider" in body:
-        _CONFIG["llm_provider"] = body["llm_provider"]
-
-    for prov in ("ollama", "gemini", "openrouter"):
-        _update_provider_config(prov, body.get(prov))
-
-    await _save_config_to_pg()
-
-    return JSONResponse({"status": "ok", "config": _sanitize_cfg(_CONFIG)})
-
+register_config_routes(mcp)
 
 # ---------------------------------------------------------------------------
-# MCP tool: run_skill (unchanged)
+# run_skill / execute_architecture_check / code_health_score /
+# codebase_hotspots / logical_coupling / GET /metrics (issue #10)
+#
+# These have no GatewayClient/LLM-provider DI seam that any test patches via
+# unittest.mock.patch.object(review_server, ...), and nothing calls them
+# directly as review_server.<name>(...)/_srv.<name>(...) — verified by grep
+# across packages/harness-tests/ before moving them. They now live in
+# services/review_server/routers/review.py as register_review_routes(mcp),
+# mirroring register_config_routes(mcp) above (issue #09).
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def run_skill(
-    skill_id: str,
-    inputs: dict | None = None,
-) -> dict:
-    """Execute a promoted governed skill by ID, running each step through OPA.
-
-    Args:
-        skill_id: The skill identifier (e.g. ``"sre:triage-incident"``).
-        inputs: Optional input parameters passed to each step.
-    """
-    gateway = GatewayClient(
-        gateway_url=os.environ["MCPJUNGLE_URL"],
-        governance_url=os.environ.get("GOVERNANCE_URL"),
-        client_id=os.environ.get("SKILL_CLIENT_ID", "sre"),
-        client_secret=os.environ.get("SKILL_CLIENT_SECRET", os.environ.get("SRE_SECRET", "")),
-    )
-    try:
-        return await gateway.execute_skill(skill_id, inputs)
-    except Exception as e:
-        logging.exception("run_skill failed for %s", skill_id)
-        raise RuntimeError(str(e)) from e
+register_review_routes(mcp)
 
 
 # ---------------------------------------------------------------------------
 # MCP tool: architecture_review
+#
+# The chain constant/glue (_ARCHITECTURE_CHAIN_FAIL_SEVERITIES,
+# _run_architecture_review_chain) now lives in services/architecture_gate.py
+# (issue #08). This thin wrapper exists so that unittest.mock.patch.object(
+# review_server, "_run_adversarial_architecture_review", ...) (used in
+# packages/harness-tests/test_review_mcp.py and test_review_http.py) keeps
+# affecting the chain_adversarial=True path: that name is resolved as a bare
+# global *inside this module* at call time, so this wrapper reads its own
+# (possibly patched) current value and threads it into
+# services.architecture_gate explicitly, rather than letting the moved chain
+# function silently fall back to its own module's unpatched original.
 # ---------------------------------------------------------------------------
-
-_ARCHITECTURE_CHAIN_FAIL_SEVERITIES = {"CRITICAL", "HIGH"}
 
 
 async def _run_architecture_review_chain(
@@ -833,33 +441,13 @@ async def _run_architecture_review_chain(
     num_predict: int | None,
     host: str | None,
 ) -> dict:
-    """Run the first-pass architecture synthesis and, when requested, chain the
-    adversarial architecture critic on top of it.
-
-    Returns the first-pass output unchanged when ``chain_adversarial`` is False.
-    Otherwise returns ``{"first_pass", "critic", "verdict"}`` where verdict is
-    computed per the confirmed/escalated-only-fails rule (HIGH+ threshold).
-    """
-    from architecture_review import architecture_review as _architecture_review
-
-    first_pass_output = await _architecture_review(
-        repo=repo,
-        target_mode=target_mode,
-        diff=diff,
-        llm_provider=llm_provider,
+    return await _ag_run_architecture_review_chain(
+        repo=repo, target_mode=target_mode, diff=diff, llm_provider=llm_provider,
+        chain_adversarial=chain_adversarial, provider=provider, model=model,
+        temperature=temperature, max_tokens=max_tokens, num_ctx=num_ctx,
+        num_predict=num_predict, host=host,
+        run_adversarial_architecture_review=_run_adversarial_architecture_review,
     )
-    if not chain_adversarial:
-        return first_pass_output
-
-    critic_output = await _run_adversarial_architecture_review(
-        repo, first_pass_output, _DEFAULT_ADVERSARIAL_ARCHITECTURE_TASK, provider,
-        diff=diff, model=model, temperature=temperature, max_tokens=max_tokens,
-        num_ctx=num_ctx, num_predict=num_predict, host=host,
-    )
-    verdict = _chain_adversarial_verdict(
-        critic_output.get("findings", []), _ARCHITECTURE_CHAIN_FAIL_SEVERITIES
-    )
-    return {"first_pass": first_pass_output, "critic": critic_output, "verdict": verdict}
 
 
 @mcp.tool()
@@ -927,6 +515,15 @@ async def architecture_review(
 
 # ---------------------------------------------------------------------------
 # MCP tool: bootstrap_architecture
+#
+# The ArchitectAgent invocation/state-building/result-shaping now lives in
+# services/architecture_gate.py (issue #08) as _run_bootstrap_architecture.
+# The LLM-provider build + MonitoredLLMProvider wrap stay here (mirroring
+# architecture_review's wrapper) so that unittest.mock.patch.object(
+# review_server, "_build_llm_provider" / "MonitoredLLMProvider" / "GatewayClient",
+# ...) (used in packages/harness-tests/test_unit_bootstrap_mcp_tool.py) keeps
+# affecting this tool: those names are resolved as bare globals *inside this
+# module* at call time.
 # ---------------------------------------------------------------------------
 
 
@@ -959,10 +556,6 @@ async def bootstrap_architecture(
         num_predict: Override num_predict (Ollama only).
         host: Override Ollama host URL.
     """
-    import uuid
-    from harness_agents.architect import ArchitectAgent
-    from harness_agents.types import AgentState
-
     resolved_provider = (
         provider
         or _CONFIG.get("llm_provider")
@@ -980,34 +573,7 @@ async def bootstrap_architecture(
         ),
         agent_role="architect",
     )
-    gateway = GatewayClient(
-        gateway_url=os.environ.get("MCPJUNGLE_URL", "http://mcpjungle:8080"),
-        governance_url=os.environ.get("GOVERNANCE_URL"),
-        client_id="architect",
-        client_secret=os.environ.get("ARCHITECT_SECRET", ""),
-    )
-    agent = ArchitectAgent(gateway=gateway, llm_provider=llm, repo=repo)
-    state: AgentState = {
-        "task": task or f"Bootstrap ARCHITECTURE.md for {repo}",
-        "task_type": "bootstrap",
-        "diff": "",
-        "thread_id": str(uuid.uuid4()),
-        "agent_output": None,
-        "requires_human_approval": False,
-        "error": None,
-        "human_approval_token": None,
-        "memory_context": None,
-    }
-    result = await agent.run(state)
-    if result.get("error"):
-        raise RuntimeError(result["error"].get("reason", "bootstrap failed"))
-    output = result.get("agent_output") or {}
-    return {
-        "architecture_md": output.get("architecture_md", ""),
-        "summary": output.get("summary", ""),
-        "findings": output.get("findings", []),
-        "recommendations": output.get("recommendations", []),
-    }
+    return await _ag_run_bootstrap_architecture(repo, task, llm, gateway_client_cls=GatewayClient)
 
 
 # ---------------------------------------------------------------------------
@@ -1086,6 +652,17 @@ async def http_architecture_review(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 # MCP tool: adversarial_architecture_review — attacks the first-pass
 # ArchitectAgent synthesis output
+#
+# _run_adversarial_architecture_review's real implementation (GatewayClient +
+# LLM-provider construction, AdversarialArchitectureCritic invocation) now
+# lives in services/architecture_gate.py (issue #08). This thin wrapper exists
+# so that (a) tests patching review_server.GatewayClient /
+# review_server._build_llm_provider still take effect (see the
+# _run_architecture_review_chain wrapper above for why), and (b)
+# packages/harness-tests/test_adversarial_architecture_review_http.py, which
+# calls review_server._run_adversarial_architecture_review(...) directly
+# (bypassing the adversarial_architecture_review tool entirely), keeps working
+# unchanged.
 # ---------------------------------------------------------------------------
 
 
@@ -1102,45 +679,12 @@ async def _run_adversarial_architecture_review(
     num_predict: int | None = None,
     host: str | None = None,
 ) -> dict:
-    """Run the AdversarialArchitectureCritic and return structured findings.
-
-    Raises ValueError if the agent returns an error.
-    """
-    gateway = GatewayClient(
-        gateway_url=os.environ["MCPJUNGLE_URL"],
-        governance_url=os.environ.get("GOVERNANCE_URL"),
-        client_id="adversarial-architecture-critic",
-        client_secret=os.environ.get("ADVERSARIAL_ARCHITECTURE_CRITIC_SECRET", ""),
+    return await _ag_run_adversarial_architecture_review(
+        repo, first_pass_output, task, provider, diff=diff,
+        model=model, temperature=temperature, max_tokens=max_tokens,
+        num_ctx=num_ctx, num_predict=num_predict, host=host,
+        gateway_client_cls=GatewayClient, build_llm_provider=_build_llm_provider,
     )
-    resolved_provider = (
-        provider
-        or _CONFIG.get("llm_provider")
-        or os.environ.get("LLM_PROVIDER", "ollama")
-    ).lower()
-    llm_provider = _build_llm_provider(
-        resolved_provider,
-        host=host,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        num_ctx=num_ctx,
-        num_predict=num_predict,
-    )
-    llm_provider = MonitoredLLMProvider(llm_provider, agent_role="adversarial_architecture_critic")
-    agent = AdversarialArchitectureCritic(gateway=gateway, llm_provider=llm_provider, repo=repo)
-    state = AgentState(
-        task=task,
-        diff=diff or "",
-        first_pass_output=first_pass_output,
-        thread_id="mcp-call",
-        agent_output=None,
-        requires_human_approval=False,
-        error=None,
-    )
-    result = await agent.run(state)
-    if result.get("error"):
-        raise ValueError(result["error"]["reason"])
-    return result["agent_output"]
 
 
 @mcp.tool()
@@ -1188,20 +732,10 @@ async def adversarial_architecture_review(
         raise RuntimeError(str(e)) from e
 
 
-async def _parse_adversarial_architecture_review_body(request: Request) -> tuple[dict, JSONResponse | None]:
-    """Parse and validate the POST /review-architecture-adversarial body.
-
-    Returns (body, None) on success or ({}, error_response) on the first failure.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return {}, JSONResponse({"error": "invalid JSON body"}, status_code=422)
-    if not body.get("repo"):
-        return {}, JSONResponse({"error": "repo is required"}, status_code=422)
-    if body.get("first_pass_output") is None:
-        return {}, JSONResponse({"error": "first_pass_output is required"}, status_code=422)
-    return body, None
+# _parse_adversarial_architecture_review_body's implementation now lives in
+# services/architecture_gate.py (issue #08) — it's a pure request-body
+# validation helper with no GatewayClient/LLM dependency, so no DI seam is
+# needed; it's imported directly as _ag_parse_adversarial_architecture_review_body.
 
 
 @mcp.custom_route("/review-architecture-adversarial", methods=["POST"])
@@ -1223,7 +757,7 @@ async def http_adversarial_architecture_review(request: Request) -> JSONResponse
     if not _check_api_key(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
-    body, error = await _parse_adversarial_architecture_review_body(request)
+    body, error = await _ag_parse_adversarial_architecture_review_body(request)
     if error:
         return error
 
@@ -1247,124 +781,6 @@ async def http_adversarial_architecture_review(request: Request) -> JSONResponse
     except Exception:
         logging.exception("adversarial architecture review failed")
         return JSONResponse({"error": "adversarial architecture review failed — see server logs"}, status_code=500)
-
-
-# ---------------------------------------------------------------------------
-# Prometheus metrics
-# ---------------------------------------------------------------------------
-
-
-@mcp.custom_route("/metrics", methods=["GET"])
-async def metrics_route(request: Request) -> Response:
-    """Prometheus metrics endpoint, scraped by the monitoring stack."""
-    return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
-
-
-# ---------------------------------------------------------------------------
-# MCP tool: execute_architecture_check (unchanged)
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def execute_architecture_check(
-    target_language: str,
-    repo_path: str,
-) -> dict:
-    """Execute static analysis checks on the target codebase and return a GateSignalContract.
-
-    Args:
-        target_language: The programming language of the codebase (e.g., ``'python'``, ``'php'``, ``'typescript'``).
-        repo_path: The directory path or GitHub URL of the codebase to analyze.
-    """
-    from architecture_gate.runner import run_gate
-
-    logging.info(
-        "execute_architecture_check called for lang=%s repo=%s",
-        target_language,
-        repo_path,
-    )
-    signal = await run_gate(repo_path, target_language)
-    return signal.to_dict()
-
-
-# ---------------------------------------------------------------------------
-# MCP tools: code-forensics style analysis
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def code_health_score(
-    file_paths: list[str],
-    repo: str,
-) -> list[dict]:
-    """Analyze code health (complexity, function length) for specific files in a GitHub repo.
-
-    Fetches each file from the GitHub API and runs radon cyclomatic
-    complexity analysis. Returns scores 0-10 (higher = healthier),
-    sorted worst-first.
-
-    Args:
-        file_paths: List of file paths relative to the repo root (e.g. ``["src/main.py", "lib/utils.ts"]``).
-        repo: GitHub URL (e.g. ``"https://github.com/owner/repo"``).
-    """
-    from code_analysis import get_code_health as _get_code_health
-
-    try:
-        return await _get_code_health(file_paths, repo)
-    except Exception as e:
-        logging.exception("code_health_score failed")
-        return [{"error": str(e)}]
-
-
-@mcp.tool()
-async def codebase_hotspots(
-    repo: str,
-    top_n: int = 10,
-    language: str | None = None,
-) -> list[dict]:
-    """Rank files in a GitHub repo by complexity-based hotspot risk.
-
-    Fetches the file tree from the GitHub API, downloads source files,
-    and ranks them by cyclomatic complexity. High-complexity files
-    are hotspots most likely to contain bugs.
-
-    Args:
-        repo: GitHub URL (e.g. ``"https://github.com/owner/repo"``).
-        top_n: Number of top hotspots to return (default 10).
-        language: Optional language filter (e.g. ``"python"``, ``"typescript"``).
-    """
-    from code_analysis import get_hotspots as _get_hotspots
-
-    try:
-        return await _get_hotspots(repo, top_n=top_n, language=language)
-    except Exception as e:
-        logging.exception("codebase_hotspots failed")
-        return [{"error": str(e)}]
-
-
-@mcp.tool()
-async def logical_coupling(
-    repo: str,
-    file_path: str,
-    max_commits: int = 50,
-) -> list[dict]:
-    """Find files that historically change together with a given file.
-
-    Uses the GitHub commits API to find recent commits touching
-    ``file_path``, then extracts all other files changed in those
-    commits. Returns the co-changing files ranked by frequency.
-
-    Args:
-        repo: GitHub URL (e.g. ``"https://github.com/owner/repo"``).
-        file_path: Path to the file to analyse (e.g. ``"src/main.py"``).
-        max_commits: Maximum recent commits to inspect (default 50).
-    """
-    from code_analysis import get_logical_coupling as _get_logical_coupling
-
-    try:
-        return await _get_logical_coupling(repo, file_path, max_commits=max_commits)
-    except Exception as e:
-        logging.exception("logical_coupling failed")
-        return [{"error": str(e)}]
 
 
 if __name__ == "__main__":

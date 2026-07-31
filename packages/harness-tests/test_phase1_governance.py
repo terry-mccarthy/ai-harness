@@ -8,16 +8,24 @@ Governance is now a policy+audit sidecar (no forwarding proxy):
 
 import os
 import time
+import uuid
 import pytest
 import httpx
 import pymysql
 import jwt
+
+from harness_supervisor.approval import issue_approval_token
 
 GOVERNANCE_URL = os.environ.get("GOVERNANCE_URL", "http://localhost:8090")
 OPA_URL = os.environ.get("OPA_URL", "http://localhost:8181")
 
 DOLT_HOST = os.environ.get("DOLT_HOST", "localhost")
 DOLT_PORT = int(os.environ.get("DOLT_PORT", "3306"))
+
+# Same default as harness_supervisor.graph._JWT_SECRET and
+# services/governance/core/config.JWT_SECRET — the secret governance uses to
+# verify X-Human-Approval-Token (issue #01).
+JWT_SECRET = os.environ.get("JWT_SECRET", "dev-jwt-secret-change-in-prod-xyz")
 
 
 def get_token(client_id: str, client_secret: str) -> str:
@@ -33,12 +41,21 @@ def get_token(client_id: str, client_secret: str) -> str:
     return resp.json()["access_token"]
 
 
-def check_policy(token: str, tool_name: str) -> httpx.Response:
+def check_policy(
+    token: str, tool_name: str, thread_id: str | None = None,
+    approval_token: str | None = None,
+) -> httpx.Response:
     """POST /check — returns 200 (allowed) or 403 (denied) or 401 (bad token)."""
+    body = {"tool_name": tool_name}
+    if thread_id is not None:
+        body["thread_id"] = thread_id
+    headers = {"Authorization": f"Bearer {token}"}
+    if approval_token is not None:
+        headers["X-Human-Approval-Token"] = approval_token
     return httpx.post(
         f"{GOVERNANCE_URL}/check",
-        json={"tool_name": tool_name},
-        headers={"Authorization": f"Bearer {token}"},
+        json=body,
+        headers=headers,
         timeout=30.0,
     )
 
@@ -169,6 +186,94 @@ def test_sre_allowed_tool():
     assert resp.json().get("allowed") is True
 
 
+# ---------------------------------------------------------------------------
+# shell_exec human-approval token crypto validation (issue #01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_shell_exec_missing_approval_header_denied():
+    """sre token calling shell_exec with no X-Human-Approval-Token → 403."""
+    token = get_token("sre", os.environ.get("SRE_SECRET", "sre-secret"))
+    resp = check_policy(token, "sre_stub__shell_exec", thread_id=str(uuid.uuid4()))
+    assert resp.status_code == 403
+    assert resp.json().get("detail") == "shell_exec_requires_human_approval"
+
+
+@pytest.mark.integration
+def test_shell_exec_arbitrary_string_token_denied():
+    """An arbitrary non-empty header value (not a real JWT) must be rejected.
+
+    This is the exploit issue #01 closes: previously any non-empty string
+    cleared the gate because check_policy only checked truthiness.
+    """
+    token = get_token("sre", os.environ.get("SRE_SECRET", "sre-secret"))
+    resp = check_policy(
+        token, "sre_stub__shell_exec",
+        thread_id=str(uuid.uuid4()), approval_token="true",
+    )
+    assert resp.status_code == 403
+    assert resp.json().get("detail") == "shell_exec_approval_token_invalid"
+
+
+@pytest.mark.integration
+def test_shell_exec_valid_scoped_token_allowed():
+    """A correctly-scoped, unexpired approval token passes (regression, happy path)."""
+    token = get_token("sre", os.environ.get("SRE_SECRET", "sre-secret"))
+    thread_id = str(uuid.uuid4())
+    approval_token = issue_approval_token(thread_id=thread_id, tool_name="shell_exec", secret=JWT_SECRET)
+    resp = check_policy(
+        token, "sre_stub__shell_exec",
+        thread_id=thread_id, approval_token=approval_token,
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("allowed") is True
+
+
+@pytest.mark.integration
+def test_shell_exec_token_scoped_to_different_thread_denied():
+    """Token minted for a different thread_id must not authorize this thread."""
+    token = get_token("sre", os.environ.get("SRE_SECRET", "sre-secret"))
+    thread_id = str(uuid.uuid4())
+    approval_token = issue_approval_token(thread_id="some-other-thread", tool_name="shell_exec", secret=JWT_SECRET)
+    resp = check_policy(
+        token, "sre_stub__shell_exec",
+        thread_id=thread_id, approval_token=approval_token,
+    )
+    assert resp.status_code == 403
+    assert resp.json().get("detail") == "shell_exec_approval_token_invalid"
+
+
+@pytest.mark.integration
+def test_shell_exec_token_scoped_to_different_tool_denied():
+    """Token minted for a different tool_name must not authorize shell_exec."""
+    token = get_token("sre", os.environ.get("SRE_SECRET", "sre-secret"))
+    thread_id = str(uuid.uuid4())
+    approval_token = issue_approval_token(thread_id=thread_id, tool_name="log_search", secret=JWT_SECRET)
+    resp = check_policy(
+        token, "sre_stub__shell_exec",
+        thread_id=thread_id, approval_token=approval_token,
+    )
+    assert resp.status_code == 403
+    assert resp.json().get("detail") == "shell_exec_approval_token_invalid"
+
+
+@pytest.mark.integration
+def test_shell_exec_expired_token_denied():
+    """An expired approval token must be rejected even though it is well-formed."""
+    token = get_token("sre", os.environ.get("SRE_SECRET", "sre-secret"))
+    thread_id = str(uuid.uuid4())
+    approval_token = issue_approval_token(
+        thread_id=thread_id, tool_name="shell_exec", secret=JWT_SECRET, ttl_seconds=-10,
+    )
+    resp = check_policy(
+        token, "sre_stub__shell_exec",
+        thread_id=thread_id, approval_token=approval_token,
+    )
+    assert resp.status_code == 403
+    assert resp.json().get("detail") == "shell_exec_approval_token_invalid"
+
+
 @pytest.mark.integration
 def test_unknown_token_rejected():
     """Request with 'Bearer invalid-token' returns 401 from /check."""
@@ -176,7 +281,7 @@ def test_unknown_token_rejected():
     assert resp.status_code == 401
 
 
-# Every governance endpoint funnels auth through the same core.auth.decode_jwt
+# Every governance endpoint funnels auth through the same governance_core.auth.decode_jwt
 # helper, so "missing token → 401" is one behaviour, tested once across all
 # endpoints rather than duplicated per endpoint. Each endpoint additionally has
 # its own valid-token functional test, which proves decode_jwt is on its path.

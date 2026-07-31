@@ -69,6 +69,10 @@ class GatewayClient:
     cf_server_name: str = "harness_all"
     timeout: float = 180.0
     human_approval_token: str | None = None
+    # Scopes the human-approval token to a LangGraph thread (ADR 0012). Mutable
+    # instance field mirroring human_approval_token's existing convention — set
+    # by the caller (e.g. DynamicSREAgent.run) before invoking shell_exec.
+    thread_id: str | None = None
     last_calls: list = field(default_factory=list, repr=False)
     _token: str | None = field(default=None, init=False, repr=False)
     _token_exp: float = field(default=0.0, init=False, repr=False)
@@ -176,10 +180,13 @@ class GatewayClient:
         headers: dict = {"Authorization": f"Bearer {token}"}
         if self.human_approval_token:
             headers["X-Human-Approval-Token"] = self.human_approval_token
+        body: dict = {"tool_name": full_name}
+        if self.thread_id:
+            body["thread_id"] = self.thread_id
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{self.governance_url}/check",
-                json={"tool_name": full_name},
+                json=body,
                 headers=headers,
                 timeout=10.0,
             )
