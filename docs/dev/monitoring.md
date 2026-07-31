@@ -53,6 +53,25 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 claude
 
 **Key metrics:** `claude_code_session_count_total`, `claude_code_cost_usage_USD_total`, `claude_code_token_usage_tokens_total`.
 
+## Antigravity CLI exporter
+
+`scripts/antigravity_otel_exporter.py` tails Antigravity CLI transcript logs
+(`~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl`)
+and serves Prometheus metrics on `:9011` (estimated token counts, step counts,
+tool calls, active conversations — token counts are a `len(text) // 4`
+estimate, not exact). Run it with:
+
+```bash
+make antigravity-exporter
+```
+
+Prometheus already scrapes it (`antigravity-exporter` job in
+`services/prometheus/prometheus.yml`, targeting
+`host.docker.internal:9011`) and Grafana has a pre-provisioned dashboard,
+`services/grafana/dashboards/antigravity-telemetry.json`. Like the Claude Code
+pipeline, this only reports data while the exporter process is running on the
+host — it isn't started by `docker compose`.
+
 ## Gotchas
 
 **otel-collector restart inflates `increase()` for ~24h.** The `deltatocumulative` processor holds cumulative counter state in memory. When the monitoring stack restarts (`make monitoring-up` or `docker compose down/up`), the processor resets to 0 while Prometheus still has the old (large) counter values. Prometheus sees a counter reset and `increase()` over any window that spans the restart will be inflated by the pre-restart total. Values return to normal ~24h after the last restart. Workaround: clear the Prometheus volume (`docker volume rm friday-monitoring_prometheus-data`) to start fresh if the inflation is a problem.
@@ -68,3 +87,5 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 claude
 **Prometheus (and Postgres) data lived in anonymous volumes and was wiped on every restart — fixed 2026-07-13.** Neither service declared a named `volumes:` entry; each only got the image's implicit `VOLUME` (e.g. `/prometheus`, `/var/lib/postgresql/data`), which is tied to the specific container instance. `docker compose down` removes that container, and the next `up` creates a fresh container with a brand-new empty anonymous volume — the old one is orphaned on disk (visible via `docker volume ls -f dangling=true`) but never reattached. Since the documented restart workflow is `docker compose down && docker compose up -d`, this meant Prometheus's TSDB (and Postgres's data dir) were silently reset on essentially every stack bounce. Fix: both `docker-compose.yml` (`postgres` → `postgres-data:/var/lib/postgresql/data`) and `docker-compose.monitoring.yml` (`prometheus` → `prometheus-data:/prometheus`) now mount named volumes, so `down`/`up` cycles preserve data. Orphaned anonymous volumes from before the fix are harmless leftovers — `docker volume prune` to reclaim the disk space once you're sure you don't need them. Grafana's own state (`/var/lib/grafana`) is still on an anonymous volume; low priority since dashboards/datasources are provisioned from files in git, not stored there.
 
 **`project_branch` is frozen at Claude Code process startup — it does not track branch switches mid-session.** `.envrc` sets `OTEL_RESOURCE_ATTRIBUTES` with `project.branch=$(git branch --show-current)`, a shell substitution direnv evaluates once when the env loads. Per Claude Code's own docs (Monitoring usage), OTEL resource attributes are read at startup only and never re-read during a running session — there is no built-in mechanism to refresh the branch (or any resource attribute) without restarting the `claude` process. This compounds with a direnv issue: direnv only re-runs `.envrc` when the file's own mtime changes, so it has no reason to notice a `git checkout` in the same shell. Fix applied: `watch_file .git/HEAD` was added to `.envrc` so direnv reloads `OTEL_RESOURCE_ATTRIBUTES` whenever HEAD changes — this fixes the direnv-side staleness, but the Claude Code-side limit is a hard ceiling. Net effect: to get accurate per-branch attribution in the "By Project" dashboard, start a new Claude Code session after switching branches; a session that lives across a branch switch will keep attributing all subsequent usage to the branch it started on.
+
+**Mitigation: session-start branch recording + drift warning hooks.** Since Claude Code can't be made to refresh `project.branch` mid-session, `.claude/hooks/record-session-branch.sh` (a `SessionStart` hook) snapshots the current branch to `.claude/.state/session-branch` when a session begins. `.claude/hooks/warn-branch-drift.sh` (a `UserPromptSubmit` hook) compares that snapshot to the live branch on every prompt and, on first divergence, injects an `additionalContext` message telling Claude to warn the user that OTEL telemetry is still being attributed to the stale branch and a session restart is needed. It fires once per drift (a `.claude/.state/branch-drift-warned` flag suppresses repeats) and resets on the next `SessionStart`. Both scripts read `$CLAUDE_PROJECT_DIR`, which is only set by the real Claude Code hook runtime — running them by hand for testing requires exporting it first. Packaged as the reusable `branch-drift-guard` skill (`~/.claude/skills/branch-drift-guard`) for installing into other projects.

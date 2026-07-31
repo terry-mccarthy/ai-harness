@@ -1,4 +1,4 @@
-"""Unit tests for services/governance/core/dolt.py — issue #03.
+"""Unit tests for services/governance/governance_core/dolt.py — issue #03.
 
 Verifies that write_audit / write_episode / write_gate_failure are async,
 share a single lazily-created aiomysql connection pool, and reuse it across
@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-# Governance service modules use bare `core.xxx` imports (no package prefix
-# beyond `core`/`routers`), matching the WORKDIR=/app layout in its Dockerfile.
-# core.config requires these env vars at import time.
+# Governance service modules use bare `governance_core.xxx` / `routers.xxx`
+# imports, matching the WORKDIR=/app layout in its Dockerfile.
+# governance_core.config requires these env vars at import time.
 os.environ.setdefault("JWT_PRIVATE_KEY_FILE", str(
     Path(__file__).resolve().parents[2] / "test-fixtures" / "jwt-test-key.pem"
 ))
@@ -23,17 +23,12 @@ os.environ.setdefault("CODE_REVIEWER_SECRET", "test-code-reviewer-secret")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services/governance"))
 
-import core.dolt as dolt  # noqa: E402
+import governance_core.dolt as dolt  # noqa: E402
 
-# `server.py` pulls in the full router chain, including core/metrics.py,
-# which registers Prometheus counters under the same names as
-# services/review_server/metrics.py (both use the process-global default
-# CollectorRegistry). The two services never share a process in production,
-# but in a shared pytest session — if a review_server test has already
-# imported its metrics module — importing governance's `server` here raises
-# ValueError: Duplicated timeseries. That collision is pre-existing and out
-# of scope for issue #03, so the lifespan tests below are skipped rather than
-# failing the whole file when it happens.
+# governance and review_server each own an explicit CollectorRegistry (issue
+# #03), so importing both metrics modules in one process no longer raises
+# ValueError: Duplicated timeseries. Import is still wrapped defensively in
+# case of future regressions.
 try:
     import server  # noqa: E402
     _SERVER_IMPORT_ERROR = None
@@ -130,9 +125,9 @@ async def test_write_audit_swallows_exceptions(monkeypatch):
 async def test_write_audit_failure_increments_metric(monkeypatch):
     """Issue #04: write_audit's swallow-and-log except block must also
     increment a durable, observable failure counter — a Dolt outage should
-    not vanish into nothing but a log line. See core/metrics.py's
+    not vanish into nothing but a log line. See governance_core/metrics.py's
     audit_write_failures_total and ARCHITECTURE.md's updated [HARD] line."""
-    from core.metrics import audit_write_failures_total
+    from governance_core.metrics import audit_write_failures_total
 
     before = audit_write_failures_total._value.get()
 

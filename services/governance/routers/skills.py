@@ -8,10 +8,10 @@ import pymysql
 import pymysql.cursors
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
-from core.auth import decode_jwt
-from core.config import MIN_EPISODES, RECENT_DAYS
-from core.dolt import get_dolt_conn, serialise_row, write_audit
-from core.opa import check_opa
+from governance_core.auth import decode_jwt
+from governance_core.config import MIN_EPISODES, RECENT_DAYS
+from governance_core.dolt import get_dolt_conn, serialise_row, write_audit
+from governance_core.opa import check_opa
 
 
 logger = logging.getLogger(__name__)

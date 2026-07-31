@@ -8,10 +8,10 @@ import httpx
 import jwt
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Header, Request
 
-from core.auth import decode_jwt
-from core.config import PRIVATE_KEY, TOKEN_TTL
-from core.dolt import write_audit
-from core.opa import check_opa
+from governance_core.auth import decode_jwt
+from governance_core.config import PRIVATE_KEY, TOKEN_TTL
+from governance_core.dolt import write_audit
+from governance_core.opa import check_opa
 
 logger = logging.getLogger(__name__)
 

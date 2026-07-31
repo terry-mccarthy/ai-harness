@@ -49,8 +49,8 @@ from starlette.responses import JSONResponse
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
 from harness_gateway.client import GatewayClient
-from metrics import MonitoredLLMProvider
-from core.config import (
+from metrics import REGISTRY, MonitoredLLMProvider
+from review_server_core.config import (
     _CONFIG,
     _check_api_key,
     _close_pg_pool,

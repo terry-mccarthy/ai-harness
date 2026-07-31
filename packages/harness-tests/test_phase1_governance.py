@@ -281,7 +281,7 @@ def test_unknown_token_rejected():
     assert resp.status_code == 401
 
 
-# Every governance endpoint funnels auth through the same core.auth.decode_jwt
+# Every governance endpoint funnels auth through the same governance_core.auth.decode_jwt
 # helper, so "missing token → 401" is one behaviour, tested once across all
 # endpoints rather than duplicated per endpoint. Each endpoint additionally has
 # its own valid-token functional test, which proves decode_jwt is on its path.

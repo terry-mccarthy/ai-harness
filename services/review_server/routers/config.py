@@ -37,7 +37,7 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from core.config import (
+from review_server_core.config import (
     _CONFIG,
     _check_api_key,
     _env_cfg,

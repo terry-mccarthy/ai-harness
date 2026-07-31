@@ -16,7 +16,7 @@ COPY services/review_server/server.py /app/server.py
 COPY services/review_server/architecture_review.py /app/architecture_review.py
 COPY services/review_server/code_analysis.py /app/code_analysis.py
 COPY services/review_server/architecture_gate/ /app/architecture_gate/
-COPY services/review_server/core/ /app/core/
+COPY services/review_server/review_server_core/ /app/review_server_core/
 COPY services/review_server/services/ /app/services/
 COPY services/review_server/routers/ /app/routers/
 

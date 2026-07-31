@@ -4,8 +4,30 @@ import httpx
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env from repo root so tests work without `source .env` in the shell
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
+def load_env_with_fallback(repo_root: Path) -> None:
+    """Load .env from repo root, falling back to .env.example for any vars
+    it doesn't set.
+
+    A fresh git worktree (this repo's convention for AFK issue work) has no
+    `.env` -- it's gitignored and `git worktree add` doesn't copy it. Without
+    a fallback, bracket-access lookups like `os.environ["CODE_REVIEWER_SECRET"]`
+    raise KeyError, which reads like a real regression rather than a known
+    environment gap. `.env.example` already documents safe dev/test defaults
+    for these values, so load it too.
+
+    `.env` always wins: load_dotenv's default `override=False` will not
+    clobber a var already set in os.environ, so loading .env first and then
+    .env.example only fills in gaps -- it never overwrites a real .env value.
+    """
+    load_dotenv(repo_root / ".env")
+    load_dotenv(repo_root / ".env.example")
+
+
+# Load .env from repo root so tests work without `source .env` in the shell.
+# Falls back to .env.example's documented dev defaults when .env is missing
+# (e.g. in a fresh worktree) -- see README.md.
+load_env_with_fallback(Path(__file__).resolve().parents[2])
 
 # Test suite runs with the committed dev-default secrets (JWT_SECRET, governance's
 # test RSA key, etc.) — declare that explicitly so the import-time tripwires in

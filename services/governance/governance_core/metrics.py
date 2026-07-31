@@ -1,11 +1,21 @@
 """Prometheus metric definitions."""
-from prometheus_client import Counter, Histogram
+from prometheus_client import CollectorRegistry, Counter, Histogram
 
+# Each service owns its own explicit registry instead of relying on
+# prometheus_client's implicit global default (`prometheus_client.REGISTRY`).
+# In production each service is a separate process, so the implicit global
+# default is harmless there — but sharing it means importing this module
+# alongside another service's metrics module (e.g. in a combined pytest
+# session) raises `ValueError: Duplicated timeseries in CollectorRegistry`
+# for any same-named metric. See issue #03 / packages/harness-tests/
+# test_no_prometheus_registry_collision.py.
+REGISTRY = CollectorRegistry()
 
 tool_calls_total = Counter(
     "harness_tool_calls_total",
     "Total tool invocations by agent role and decision",
     ["agent_role", "decision"],
+    registry=REGISTRY,
 )
 
 tool_call_latency = Histogram(
@@ -13,21 +23,24 @@ tool_call_latency = Histogram(
     "Tool call latency in milliseconds",
     ["agent_role"],
     buckets=[10, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
+    registry=REGISTRY,
 )
 
 llm_calls_total = Counter(
     "harness_llm_calls_total",
     "Total LLM invocations reported via audit, by agent role, provider, and model",
     ["agent_role", "provider", "model"],
+    registry=REGISTRY,
 )
 
 llm_tokens_total = Counter(
     "harness_llm_tokens_total",
     "Total LLM tokens consumed, by agent role, provider, model, and token type",
     ["agent_role", "provider", "model", "token_type"],
+    registry=REGISTRY,
 )
 
-# Issue #04: write_audit swallows Dolt failures (see core/dolt.py) so a tool
+# Issue #04: write_audit swallows Dolt failures (see governance_core/dolt.py) so a tool
 # call's response is never blocked by an audit outage. This counter is the
 # durable, observable failure signal that replaces "just a log line" —
 # scrape via /metrics and alert on rate() > 0. It does not recover the lost
@@ -36,6 +49,7 @@ audit_write_failures_total = Counter(
     "harness_audit_write_failures_total",
     "Total failed Dolt audit_log writes (write_audit exceptions)",
     [],
+    registry=REGISTRY,
 )
 
 

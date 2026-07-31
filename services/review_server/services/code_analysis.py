@@ -38,7 +38,7 @@ from harness_agents.reviewer import CodeReviewerAgent
 from harness_agents.adversarial_code_critic import AdversarialCodeCritic
 from harness_agents.types import AgentState
 from metrics import MonitoredLLMProvider
-from core.config import _CONFIG, _get_cfg
+from review_server_core.config import _CONFIG, _get_cfg
 
 
 def _resolve(override, provider: str, key: str, env_var: str, default, *, cast=None):

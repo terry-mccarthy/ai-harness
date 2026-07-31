@@ -23,7 +23,7 @@ make test-integration
 
 **Gotcha — git worktrees don't inherit `.env`:** `.env` is gitignored, so a fresh worktree has none. Integration tests then get spurious `401 Unauthorized` against the shared dev stack (client secrets resolve empty/wrong) rather than a clear "missing config" error. Copy the repo root's `.env` into the worktree before running `make test-integration`.
 
-**Gotcha — cross-service `core` package name collision breaks full-suite collection:** `services/governance/core/` and `services/review_server/core/` are both bare `core` packages (no unique top-level name) added to `sys.path` ad hoc by individual test files. Because neither has an `__init__.py`, Python treats `core` as an implicit namespace package — whichever service's `core.config` (or similar submodule) is imported *first* in a pytest session gets cached in `sys.modules` and is reused by every later `from .config import ...` in the *other* service's modules, raising `ImportError: cannot import name 'X' from 'core.config'`. This is order-dependent (only reproduces when both services' tests are collected in the same session, e.g. plain `pytest packages/harness-tests/ -m integration`) and pre-dates issue #04 — confirmed via `git stash` that it reproduces on unmodified `main`. Workaround for now: run the affected test file(s) directly or with `--continue-on-collection-errors` rather than fixing the namespace collision, which is a larger structural change outside any single issue's scope.
+**Resolved gotcha — cross-service `core` package name collision:** `services/governance/core/` and `services/review_server/core/` used to both be bare `core` packages, which could shadow each other (`sys.modules["core"]`) if both were ever put on `sys.path` in the same pytest session. Fixed by renaming each to a unique top-level package: `services/governance/governance_core/` and `services/review_server/review_server_core/`. See `packages/harness-tests/test_no_core_namespace_collision.py` for the regression test.
 
 ## Python environment
 
@@ -77,3 +77,19 @@ Detailed gotchas and internals live in `docs/dev/`. Read the relevant file befor
 | Memory layer, SRE signals, DynamicSREAgent, cache, orchestration, architectural gate | `docs/dev/memory-agents.md` |
 | FastMCP config, adding tools/servers, review_server HTTP endpoint, linter, prompts, evals | `docs/dev/mcp-servers.md` |
 | Monitoring stack, Prometheus, Grafana, Claude Code OTEL pipeline | `docs/dev/monitoring.md` |
+
+---
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, `done`) recorded as `Status:` lines in issue files. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context repo: one `CONTEXT.md` (not yet created — use `/grill-with-docs` to generate it) + `docs/adr/` at root. See `docs/agents/domain.md`.

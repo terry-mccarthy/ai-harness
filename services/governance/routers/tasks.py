@@ -8,8 +8,8 @@ import pymysql
 import pymysql.cursors
 from fastapi import APIRouter, HTTPException, Header, Request
 
-from core.auth import decode_jwt
-from core.dolt import get_dolt_conn
+from governance_core.auth import decode_jwt
+from governance_core.dolt import get_dolt_conn
 
 logger = logging.getLogger(__name__)
 

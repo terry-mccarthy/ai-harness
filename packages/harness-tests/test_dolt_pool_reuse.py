@@ -81,7 +81,14 @@ async def test_concurrent_audits_reuse_pooled_connections():
 
     assert all(s == 202 for s in statuses), f"unexpected statuses: {statuses}"
 
-    await asyncio.sleep(0.5)  # let background_tasks finish writing
+    # 0.5s isn't always enough: governance's EXPIRY_PASS_INTERVAL is set low
+    # for dev/test (docker-compose.yml), so a burst of CONCURRENCY /audit
+    # calls can trigger a few background_expiry_pass() runs. Those use their
+    # own unpooled sync connection (get_dolt_conn(), deliberately out of
+    # scope for this issue's pooling — see its docstring) and can briefly
+    # push the live count above the pool's steady-state size before settling
+    # back down once each pass finishes.
+    await asyncio.sleep(2)
     live_connections = _connection_count()
     assert live_connections <= MAX_EXPECTED_CONNECTIONS, (
         f"expected pooled connection count <= {MAX_EXPECTED_CONNECTIONS} after "

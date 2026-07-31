@@ -1,12 +1,32 @@
 """Unit tests for github_mcp/server.py — repo_conventions_read tool."""
+import importlib.util
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services/github_mcp"))
-from server import repo_conventions_read  # noqa: E402
+# Loaded under a unique sys.modules key rather than a bare `import server` —
+# multiple services ship a same-named server.py, so a bare import would
+# collide with (or be shadowed by) whichever other service's server module
+# another test file already cached under sys.modules["server"] in this
+# pytest session. See test_metrics_endpoints.py for the same pattern.
+_MODULE_NAME = "_github_mcp_server_under_test"
+_SERVER_PATH = Path(__file__).resolve().parents[2] / "services" / "github_mcp" / "server.py"
+
+
+def _load_github_mcp_server():
+    if _MODULE_NAME in sys.modules:
+        return sys.modules[_MODULE_NAME]
+    spec = importlib.util.spec_from_file_location(_MODULE_NAME, _SERVER_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[_MODULE_NAME] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_github_mcp_server = _load_github_mcp_server()
+repo_conventions_read = _github_mcp_server.repo_conventions_read
 
 SAMPLE_CONTRIBUTING = """# Contributing
 
@@ -41,7 +61,7 @@ def mock_httpx():
 
         # Mock sync httpx.get (used by _default_branch)
         sync_resp = _mock_sync_get(status=sync_status)
-        sync_patcher = patch("server.httpx.get", return_value=sync_resp)
+        sync_patcher = patch.object(_github_mcp_server.httpx, "get", return_value=sync_resp)
         sync_patcher.start()
         patchers.append(sync_patcher)
 
@@ -53,7 +73,7 @@ def mock_httpx():
             m.text = text
             async_mocks.append(m)
 
-        async_patcher = patch("server.httpx.AsyncClient")
+        async_patcher = patch.object(_github_mcp_server.httpx, "AsyncClient")
         mock_cls = async_patcher.start()
         mock_client = mock_cls.return_value.__aenter__.return_value
         mock_client.get.side_effect = async_mocks

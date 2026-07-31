@@ -49,7 +49,7 @@ from metrics import MonitoredLLMProvider
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from core.config import _CONFIG
+from review_server_core.config import _CONFIG
 from services.code_analysis import _build_llm_provider, _chain_adversarial_verdict
 
 

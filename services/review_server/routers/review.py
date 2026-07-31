@@ -35,6 +35,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from harness_gateway.client import GatewayClient
+from metrics import REGISTRY
 from services.architecture_gate import _run_execute_architecture_check
 
 
@@ -70,7 +71,7 @@ def register_review_routes(mcp) -> None:
     @mcp.custom_route("/metrics", methods=["GET"])
     async def metrics_route(request: Request) -> Response:
         """Prometheus metrics endpoint, scraped by the monitoring stack."""
-        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+        return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
     @mcp.tool()
     async def execute_architecture_check(
