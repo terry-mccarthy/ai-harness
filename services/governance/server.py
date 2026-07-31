@@ -1,7 +1,7 @@
 """Governance service entry point.
 
 All endpoints live in `routers/`. This module wires the FastAPI app and
-mounts each router. Shared helpers live in `core/`.
+mounts each router. Shared helpers live in `governance_core/`.
 """
 import logging
 import os

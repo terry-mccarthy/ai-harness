@@ -20,7 +20,7 @@ from harness_agents.reviewer import CodeReviewerAgent
 from harness_agents.adversarial_code_critic import AdversarialCodeCritic
 from harness_agents.adversarial_architecture_critic import AdversarialArchitectureCritic
 from harness_agents.types import AgentState
-from metrics import MonitoredLLMProvider
+from metrics import REGISTRY, MonitoredLLMProvider
 
 _PG_POOL: asyncpg.Pool | None = None
 
@@ -1257,7 +1257,7 @@ async def http_adversarial_architecture_review(request: Request) -> JSONResponse
 @mcp.custom_route("/metrics", methods=["GET"])
 async def metrics_route(request: Request) -> Response:
     """Prometheus metrics endpoint, scraped by the monitoring stack."""
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
 # ---------------------------------------------------------------------------
