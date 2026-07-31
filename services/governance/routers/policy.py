@@ -6,8 +6,8 @@ import jwt
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from core.auth import decode_jwt
-from core.config import (
+from governance_core.auth import decode_jwt
+from governance_core.config import (
     CLIENTS,
     EXPIRY_PASS_INTERVAL,
     PRIVATE_KEY,
@@ -15,9 +15,9 @@ from core.config import (
     TOKEN_TTL,
     b64url,
 )
-from core.dolt import write_audit, write_episode, write_gate_failure
-from core.metrics import record_llm_usage, tool_call_latency, tool_calls_total
-from core.opa import check_opa
+from governance_core.dolt import write_audit, write_episode, write_gate_failure
+from governance_core.metrics import record_llm_usage, tool_call_latency, tool_calls_total
+from governance_core.opa import check_opa
 
 logger = logging.getLogger(__name__)
 
