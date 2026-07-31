@@ -36,7 +36,7 @@ Current policy (`policies/harness.rego`) maps roles to tool sets:
 - `adversarial_architecture_critic` → `codebase_search`, `adr_read`, `codebase_hotspots` (read-only — same reconnaissance surface as `architect`, minus `issue_create`)
 - `sre` → `observability_query`, `runbook_read`, `log_search`, `shell_exec`, `skill_search`
 
-**Client ID vs agent role naming:** `CLIENTS` in `services/governance/core/config.py` keys by the hyphenated OAuth `client_id` (e.g. `adversarial-code-critic`) but each entry's `role` value — the string OPA actually checks in `harness.rego` via `input.agent_role` — is the underscored form (e.g. `adversarial_code_critic`). `GatewayClient(client_id=...)` and `MonitoredLLMProvider(agent_role=...)` are two different strings for the same agent; get either wrong and the OPA rule silently never matches.
+**Client ID vs agent role naming:** `CLIENTS` in `services/governance/governance_core/config.py` keys by the hyphenated OAuth `client_id` (e.g. `adversarial-code-critic`) but each entry's `role` value — the string OPA actually checks in `harness.rego` via `input.agent_role` — is the underscored form (e.g. `adversarial_code_critic`). `GatewayClient(client_id=...)` and `MonitoredLLMProvider(agent_role=...)` are two different strings for the same agent; get either wrong and the OPA rule silently never matches.
 
 ## Rate limiting (Phase 6+)
 
