@@ -64,7 +64,8 @@ def _state(task: str, **overrides):
 @pytest.fixture
 async def memory_store():
     from harness_memory.memory_store import PostgresMemoryStore
-    store = PostgresMemoryStore(PG_DSN, REDIS_URL, EMBED_MODEL, OLLAMA_HOST)
+    from harness_memory.embedding_provider import OllamaEmbeddingProvider
+    store = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, EMBED_MODEL))
     await store.setup()
     yield store
     await store._truncate()
