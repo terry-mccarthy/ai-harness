@@ -448,8 +448,15 @@ Schema versioned with Alembic (`packages/harness-memory/alembic/`).
 `DoltFormulaStore` (`packages/harness-memory/harness_memory/formula_store.py`):
 
 - Every `propose()` call inserts a new version row and calls `DOLT_COMMIT`.
-- `lookup(agent_role, task)` uses TF-IDF keyword overlap (no ML model); returns the
-  best-matching active formula above a 0.05 score threshold.
+- `list_matches(agent_role, task, min_score=0.05)` uses TF-IDF keyword overlap (no ML
+  model) to score every ACTIVE candidate and returns all matches above the threshold as
+  `list[tuple[Formula, float]]`, ranked best-first. `lookup(agent_role, task)` calls
+  `list_matches()` internally and returns just the top result (or `None`) — kept for
+  backwards compatibility with existing callers (`DynamicSREAgent._load_formula`, the
+  supervisor's `formula_lookup` node). The `skill_search` MCP tool
+  (`stub_servers/sre_server.py` → `skill_retriever.retrieve_skill()`) calls
+  `list_matches()` directly so the SRE agent can see every ranked candidate, each with
+  its id and score, not just the single winner.
 - Quality scoring: `ConsolidationWorker.run_pass()` reads `formula_pours`, computes
   success rate, and updates `quality_score` + `status` (active / proven / review).
 

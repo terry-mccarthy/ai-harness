@@ -29,6 +29,19 @@ All three signal-source tools share the same lazy-init + fallback pattern: they 
 | `log_search` | `log_retriever.py` | `PostgresMemoryStore` | `"logs"` | `make seed-logs` |
 | `skill_search` | `skill_retriever.py` | `DoltFormulaStore` | N/A (TF-IDF lookup) | Dolt seed formulas |
 
+**`skill_search` contract (issue 05):** read-only discovery, never executes or mutates a
+skill. `retrieve_skill()` calls `DoltFormulaStore.list_matches(agent_role, task)` — a new
+method that returns *every* ACTIVE, above-threshold match as `list[tuple[Formula, float]]`
+sorted by TF-IDF score descending — and formats it as `{"matches": [{"id", "name",
+"description", "steps", "input_schema", "output_contract", "score"}, ...], "matched": bool,
+"query": task}`. `matches` is `[]` (not `None`) when nothing qualifies. `deprecated`,
+`revoked`, and `expired` skills never appear — `list_matches()` is built on the same
+`list_active()` (`status = 'active'` only) that `lookup()` already relied on.
+`DoltFormulaStore.lookup(agent_role, task) -> Formula | None` is unchanged in signature and
+behaviour — it now just calls `list_matches()` internally and returns the top result (or
+`None`), so existing callers (`DynamicSREAgent._load_formula`, the supervisor's
+`formula_lookup` node) are unaffected.
+
 `sre_stub` (`stub_servers/sre_server.py`) holds two lazy singletons:
 - `_store` — `PostgresMemoryStore`, async-init on first `runbook_read` or `log_search` call when `PG_DSN` set
 - `_dolt_store` — `DoltFormulaStore`, sync-init on first `skill_search` call when `DOLT_HOST` set

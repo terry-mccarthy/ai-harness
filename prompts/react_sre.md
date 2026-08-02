@@ -12,7 +12,7 @@ Investigation tools (call these during your loop):
 - observability_query: query metrics and alerts (params: query)
 - log_search: search logs for error patterns (params: query)
 - runbook_read: retrieve a runbook by incident signature (params: runbook_name)
-- skill_search: find a proven formula for this type of incident (params: agent_role, task)
+- skill_search: find proven formulas for this type of incident, ranked by match score (params: agent_role, task) — read-only, pick the best-scoring match and pass its id to run_skill
 
 DO NOT CALL during investigation — propose in the report only:
 - shell_exec: remediation commands require human approval before execution. List them in recommended_steps with requires_approval=true; the human gate will approve and run them. Calling shell_exec directly will be rejected.

@@ -128,15 +128,28 @@ class DoltFormulaStore:
 
     def lookup(self, agent_role: str, task: str) -> Formula | None:
         """Return best-matching active formula for the task using keyword similarity."""
+        matches = self.list_matches(agent_role, task)
+        return matches[0][0] if matches else None
+
+    def list_matches(
+        self, agent_role: str, task: str, min_score: float = 0.05
+    ) -> list[tuple[Formula, float]]:
+        """Return all active formulas scoring above `min_score`, best match first.
+
+        Same ACTIVE-only/non-expired/non-deprecated/non-revoked semantics as
+        `lookup()` (inherited from `list_active()`), but returns every
+        qualifying match with its score instead of only the single winner.
+        """
         candidates = self.list_active(agent_role)
         if not candidates:
-            return None
+            return []
         scored = [
             (f, _tfidf_score(task, f"{f.name} {f.description}"))
             for f in candidates
         ]
-        best_formula, best_score = max(scored, key=lambda x: x[1])
-        return best_formula if best_score > 0.05 else None
+        matches = [(f, s) for f, s in scored if s > min_score]
+        matches.sort(key=lambda x: x[1], reverse=True)
+        return matches
 
     # ------------------------------------------------------------------
     # Quality / lifecycle

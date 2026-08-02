@@ -44,7 +44,7 @@ pytest -m eval -v -s    # 19 eval tests (requires Ollama only)
 | `test_opa_deny_cross_role` | OPA returns `false` for architect + shell_exec |
 | `test_token_expiry` | Expired JWT returns 401 |
 
-## Phase 2 — Persistent Memory Layer (27 tests)
+## Phase 2 — Persistent Memory Layer (30 tests)
 
 | Test | What it proves |
 |---|---|
@@ -72,9 +72,35 @@ pytest -m eval -v -s    # 19 eval tests (requires Ollama only)
 | `test_formula_write_creates_dolt_commit` | `propose()` creates a Dolt commit containing the formula id |
 | `test_formula_lookup_by_task` | `lookup()` returns best-matching formula for a task description |
 | `test_formula_lookup_no_match` | `lookup()` returns None for unmatched task |
+| `test_formula_list_matches_returns_score_and_id` | `list_matches()` surfaces id + TF-IDF score for a qualifying match |
+| `test_formula_list_matches_no_match_returns_empty_list` | `list_matches()` returns `[]` (not `None`) below the score threshold |
+| `test_formula_list_matches_excludes_deprecated` | Deprecated formula never appears in `list_matches()` results |
 | `test_formula_version_history` | Two `propose()` calls → two Dolt commits; both versions queryable |
 | `test_formula_deprecate` | Deprecated formula excluded from `list_active()` and `lookup()` |
 | `test_formula_interface_compliance` | `DoltFormulaStore` satisfies `FormulaStore` Protocol |
+
+## Skill discovery — `skill_search` / `retrieve_skill` (unit, 12 tests, `test_unit_skill_retriever.py`)
+
+`DoltFormulaStore.list_matches()` (new) returns every ACTIVE, above-threshold match
+ranked by TF-IDF score instead of only the single best one; `lookup()` now calls it
+internally and keeps its existing `Formula | None` signature/behaviour unchanged.
+`retrieve_skill()` calls `list_matches()` and returns a ranked list of scored matches
+instead of a single skill — the shape backing the `skill_search` MCP tool.
+
+| Test | What it proves |
+|---|---|
+| `test_retrieve_skill_matched_returns_id_and_score` | A qualifying match includes `id` and `score` in the response |
+| `test_retrieve_skill_ranks_multiple_matches_by_score_desc` | Multiple qualifying matches are returned ranked best-first |
+| `test_retrieve_skill_no_match_returns_well_formed_empty_result` | No qualifying match → `matched=False`, `matches=[]` |
+| `test_retrieve_skill_forwards_args` | `agent_role`/`task` forwarded to `store.list_matches()` |
+| `test_retrieve_skill_query_echoed` | `query` field in the result matches the input task |
+| `test_retrieve_skill_includes_output_contract_and_input_schema` | Each match includes `output_contract` and `input_schema` |
+| `test_list_matches_ranks_candidates_by_score_desc` | `DoltFormulaStore.list_matches()` sorts candidates by score descending |
+| `test_list_matches_excludes_scores_at_or_below_threshold` | Candidates scoring ≤ `min_score` are dropped |
+| `test_list_matches_empty_when_no_active_candidates` | No active candidates → `[]`, not an error |
+| `test_lookup_returns_top_scoring_formula` | `lookup()` still returns the single best match via `list_matches()` |
+| `test_lookup_returns_none_when_no_match_above_threshold` | `lookup()` still returns `None` below threshold |
+| `test_lookup_returns_none_when_no_active_candidates` | `lookup()` still returns `None` with no candidates |
 
 ## Bootstrap — Architecture doc generation (15 tests)
 
