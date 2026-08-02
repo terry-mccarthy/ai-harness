@@ -4,6 +4,20 @@ status: ready-for-agent
 type: AFK
 ---
 
+## Implementation status (audited 2026-08-02)
+
+Partial. `sre_stub.skill_search` → `harness_memory/skill_retriever.py` →
+`DoltFormulaStore.lookup(agent_role, task)` is wired and read-only.
+`lookup()` already excludes non-ACTIVE/deprecated/expired formulas via
+`list_active()` and applies a match-quality floor (score > 0.05). A
+no-qualifying-skill signature correctly returns `{"skill": None, "matched":
+false}`. Missing: it returns a single best match, not the ranked
+list-of-matches-with-scores the AC calls for, and no `score` field is exposed
+in the response at all (the underlying TF-IDF score is computed in `lookup()`
+but discarded before it reaches `retrieve_skill()`'s return value). Remaining
+work: surface the score and, if callers need it, return more than the single
+top match.
+
 ## Parent
 
 [SRE Agent Enhancement PRD](../PRD.md) — Slice 4 (discovery surface).

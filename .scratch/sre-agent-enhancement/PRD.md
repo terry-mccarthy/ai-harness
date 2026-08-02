@@ -1,6 +1,44 @@
 # PRD: SRE Agent Enhancement — Dynamic ReAct Loop, Bounded Logs, Semantic Runbooks
 
-Status: ready-for-agent
+Status: partially implemented (audited 2026-08-02, revised 2026-08-03)
+
+## Implementation Status (audited 2026-08-02, revised 2026-08-03)
+
+Code exists on `main` for every slice, but coverage against this PRD's acceptance
+criteria is uneven. None of the 7 issue files below had ever been flipped to
+`done` in the tracker before this audit — the tracker was accurate; work had
+simply landed without status updates. Findings, per issue:
+
+| Issue | Status | Notes |
+|---|---|---|
+| [01 — DynamicSREAgent ReAct loop](issues/01-dynamic-sre-react-loop.md) | `done` | Matches spec closely. `packages/harness-agents/harness_agents/dynamic_sre.py` + `prompts/react_sre.md`; 17 unit tests in `test_unit_dynamic_sre.py`, all passing. Static `SREAgent` fully retired (no references left). Supervisor routes `incident` → `DynamicSREAgent`. |
+| [02 — Bounded log_search](issues/02-bounded-log-search.md) | `ready-for-agent` (revised scope, now `Blocked by` 04) | **Deviates from spec, decision made to keep it.** `log_search` uses `PostgresMemoryStore.search()` (pgvector/Ollama semantic similarity) instead of the PRD's dependency-free substring/term-overlap scheme — accepted, since Postgres+Ollama is already mandatory for `runbook_read`/memory on this agent, and semantic recall is a real improvement over keyword matching. The 5-line cap *is* enforced (the MCP tool only exposes `query`, not `top_k` — an earlier pass of this audit wrongly called it bypassable). Remaining gap: `returned_count`/`total_count` truncation-detection fields need a relevance threshold that doesn't exist yet — issue 04 now owns building it (`min_score` on `PostgresMemoryStore.search()`) since it needs the identical primitive; 02 consumes it rather than building its own, to avoid two parallel worktrees colliding on the same method. Also needs a test against the real seeded `docs/logs/*.jsonl` fixtures, not just a fake store. |
+| [03 — Runbook ingestion seed](issues/03-runbook-ingestion-seed.md) | `done` | `harness_memory/runbook_seed.py` matches spec: extracts `**When to use:**` as signature, skips+warns on malformed files, idempotent upsert, exposed as both `make seed-runbooks` and an importable function. |
+| [04 — Semantic runbook_read](issues/04-semantic-runbook-read.md) | `ready-for-agent` (partial, no blockers) | Returns top-3 runbooks with id/signature/score (`harness_memory/runbook_retriever.py`), but there is no relevance threshold anywhere in the codebase — the "no matching runbook" sentinel result required when nothing scores above ≈0.80 was never built. Always returns whatever it finds. Now the designated owner of the shared `min_score` primitive on `PostgresMemoryStore.search()` (issue 02 depends on it landing here first). |
+| [05 — skill_search discovery tool](issues/05-skill-search-discovery-tool.md) | `ready-for-agent` (partial) | Tool exists (`sre_stub.skill_search` → `harness_memory/skill_retriever.py` → `DoltFormulaStore.lookup`), and `lookup` already excludes non-ACTIVE/expired skills. But it returns a single best match with no `score` field, not the ranked list-with-scores the AC calls for. |
+| [06 — Skill-aware guidance and precedence](issues/06-skill-aware-guidance.md) | `ready-for-agent` (revised scope) | **Not an open design fork — unfinished wiring.** A full `run_skill` execution engine already exists (`GatewayClient.execute_skill()` → `SkillRunner`, with per-step OPA checks and `on_failure` ABORT/CONTINUE/ROLLBACK policy) and is already exposed as an LLM-callable tool on `review_server`. The SRE agent doesn't use it: `DynamicSREAgent._execute_formula_steps()` hand-rolls a weaker duplicate that **ignores `on_failure` entirely** (a step marked ABORT still lets the loop continue) and isn't reachable as a tool call. Per-step OPA enforcement itself does hold either way — this is a correctness/reuse gap, not a security hole. Also confirmed: `Formula` has no `runbook_ref` field and `SRE_OUTPUT_SCHEMA` has no field to cite an executed skill id — the skill↔runbook report linkage has no data-model support yet, not just missing wiring. |
+| [07 — SRE enhancement doc reconciliation](issues/07-incident-demo-and-docs.md) | `ready-for-agent` (partial, rescoped 2026-08-03) | Rescoped to doc reconciliation only — the demo requirement was dropped (`scripts/demo_sre.py` already exists and is no longer tracked by this issue). `CLAUDE.md`, `ARCHITECTURE.md`, `README.md`, and `docs/dev/memory-agents.md` all reference the dynamic SRE flow. `PROGRESS.md` does not exist anywhere in the repo, so that reconciliation AC is unmet. |
+
+**Bottom line:** Slice 1 (the ReAct loop — the hardest, highest-value piece) is
+solid and complete. Slice 3's ingestion half is solid. Slices 2 and 6's
+apparent "deviations" both turned out, on closer inspection, not to be open
+architecture forks: slice 2's semantic search is a reasonable improvement over
+the original spec, and slice 6 has a `run_skill` execution engine already
+built and used elsewhere (`review_server`) — the SRE agent just isn't wired to
+it. No issue in this PRD is actually blocked on a maintainer *decision*
+anymore; every remaining item is concrete, scoped engineering work:
+- a shared relevance threshold (blocks issue 02's truncation counts and issue
+  04's "no matching runbook" result)
+- issue 05's missing `score` field
+- issue 06's reuse of `SkillRunner`/`execute_skill` (fixes a real `on_failure`
+  correctness gap) plus a `run_skill` tool for the `sre` role, and a
+  `runbook_ref` field on `Formula` + a skill-id field on `SRE_OUTPUT_SCHEMA`
+  for report linkage
+- issue 07's `PROGRESS.md`, blocked in substance until 02/04/06 land
+
+39 unit tests exist across the touched modules and all pass; they just don't
+cover the requirements above, because none of those requirements exist yet to
+test.
 
 ## Problem Statement
 
@@ -548,9 +586,13 @@ hosted-readiness is **out of scope** for this feature PRD.
   seam for embeddings. Hosted options: (a) deploy Ollama as its own service/pod
   (GPU) and point `OLLAMA_HOST`/`EMBED_MODEL` at its service DNS — smallest
   change, keeps `nomic-embed-text`; or (b) introduce an `EmbeddingProvider`
-  protocol with a hosted API backend (OpenAI/Voyage/Cohere — note OpenRouter does
-  not cover embeddings). Treat (b) as a prerequisite dependency if no Ollama pod
-  is available; it is not in this PRD's scope.
+  protocol with a hosted API backend (OpenAI/Voyage/Cohere/Gemini/OpenRouter —
+  **correction, 2026-08-03: OpenRouter added an OpenAI-shaped
+  `POST /api/v1/embeddings` endpoint since this was originally written, so it's
+  now a real option, not excluded as the original note here claimed**). Filed
+  as [issue 08 — pluggable embedding provider](issues/08-pluggable-embedding-provider.md):
+  build the seam + `OllamaEmbeddingProvider` now, add Gemini/OpenRouter
+  implementations when a hosted deployment actually needs a second backend.
 - **Embedding-dimension table recreate is a hosted footgun.** `PostgresMemoryStore`
   drops and recreates its table when the embedding model/dimension changes. On a
   shared hosted DB with multiple replicas calling `setup()`, a model swap could
