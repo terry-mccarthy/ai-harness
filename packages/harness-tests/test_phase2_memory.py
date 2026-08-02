@@ -239,6 +239,19 @@ async def test_memory_semantic_search(memory_store):
     assert results[0]["key"] == "db-issue"
 
 
+async def test_memory_search_min_score_filters_low_relevance(memory_store):
+    """search() with min_score excludes rows below the relevance threshold server-side."""
+    await memory_store.write("sre", "db-issue-2", {"text": "Database connection pool exhausted causing slow queries"})
+    await memory_store.write("sre", "unrelated-topic", {"text": "Quarterly sales report for the northeast region office"})
+
+    results = await memory_store.search("sre", "database performance problems", top_k=5, min_score=0.80)
+    keys = [r["key"] for r in results]
+    assert "db-issue-2" in keys
+    assert "unrelated-topic" not in keys
+    # Every returned row actually clears the threshold.
+    assert all(r["score"] >= 0.80 for r in results)
+
+
 async def test_memory_overwrite(memory_store):
     """write() with same namespace+key overwrites the previous value."""
     await memory_store.write("architect", "ow-key", {"version": 1})

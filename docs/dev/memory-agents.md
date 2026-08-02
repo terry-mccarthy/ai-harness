@@ -39,6 +39,10 @@ docker compose build sre-stub
 docker compose up -d --no-deps sre-stub
 ```
 
+**Relevance threshold on `search()` (issue 04)**: `PostgresMemoryStore.search(namespace, query, top_k=5, min_score=None)` takes an optional `min_score` that filters rows server-side in the SQL (`AND ($4::float8 IS NULL OR (1 - (embedding <=> $1::vector)) >= $4)`), not by post-filtering in Python — this keeps `LIMIT top_k` meaningful (K *relevant* rows, not K rows later thinned down). `min_score=None` (the default) preserves the old unfiltered top-K behavior, so existing callers are unaffected.
+
+`retrieve_runbooks()` (`runbook_retriever.py`) passes `min_score=RUNBOOK_MIN_SCORE` (0.80 by default, overridable per call) — the same ≈0.80 relevance-threshold convention as `consolidation.py`'s `CLUSTER_THRESHOLD`. When no runbook clears the threshold, `retrieve_runbooks()` returns `{"runbooks": [], "query": ...}` — the same empty-list shape already used for an empty store — so the SRE agent can null out `runbook_ref` without a separate "no match" flag to check. `log_search`'s `retrieve_logs()` (issue 02) reuses this same `min_score` primitive with its own threshold.
+
 Before the agent can find runbooks and logs, seed them once with:
 ```bash
 make seed-runbooks   # docs/runbooks/*.md  → pgvector "runbooks" namespace

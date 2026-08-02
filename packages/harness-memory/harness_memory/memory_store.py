@@ -156,7 +156,16 @@ class PostgresMemoryStore:
         await self._redis.set(rk, json.dumps(row), ex=3600)
         return row
 
-    async def search(self, namespace: str, query: str, top_k: int = 5) -> list[dict]:
+    async def search(
+        self, namespace: str, query: str, top_k: int = 5, min_score: float | None = None
+    ) -> list[dict]:
+        """Top-K nearest-neighbor search, optionally filtered by relevance.
+
+        When `min_score` is set, rows scoring below it are excluded
+        server-side (in the SQL WHERE clause) rather than post-filtered in
+        Python, so `LIMIT top_k` still returns the K most relevant rows
+        instead of K rows that are then filtered down further.
+        """
         embedding = await self._embed(query)
         vec_str = self._vec_to_pg(embedding)
 
@@ -169,10 +178,11 @@ class PostgresMemoryStore:
                 WHERE namespace = $2
                   AND (expires_at IS NULL OR expires_at > now())
                   AND embedding IS NOT NULL
+                  AND ($4::float8 IS NULL OR (1 - (embedding <=> $1::vector)) >= $4)
                 ORDER BY embedding <=> $1::vector
                 LIMIT $3
                 """,
-                vec_str, namespace, top_k,
+                vec_str, namespace, top_k, min_score,
             )
         return [{"key": r["key"], "value": json.loads(r["value"]), "score": r["score"]} for r in rows]
 
