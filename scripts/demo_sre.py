@@ -53,11 +53,11 @@ async def _build_memory_store():
     if not pg_dsn:
         return None
     from harness_memory.memory_store import PostgresMemoryStore
+    from harness_memory.embedding_provider import build_embedding_provider_from_env
     store = PostgresMemoryStore(
         pg_dsn,
         os.environ.get("REDIS_URL", "redis://localhost:6379"),
-        os.environ.get("EMBED_MODEL", "nomic-embed-text"),
-        os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+        build_embedding_provider_from_env(),
     )
     await store.setup()
     return store

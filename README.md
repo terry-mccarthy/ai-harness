@@ -146,7 +146,7 @@ MCP_TOOL_TIMEOUT=300000 claude   # 5-minute timeout
 
 ## Tests
 
-602 tests total — see [docs/tests.md](docs/tests.md) for full coverage tables.
+614 tests total — see [docs/tests.md](docs/tests.md) for full coverage tables.
 
 ```bash
 make test-integration   # 267 integration tests

@@ -102,6 +102,25 @@ instead of a single skill — the shape backing the `skill_search` MCP tool.
 | `test_lookup_returns_none_when_no_match_above_threshold` | `lookup()` still returns `None` below threshold |
 | `test_lookup_returns_none_when_no_active_candidates` | `lookup()` still returns `None` with no candidates |
 
+## Pluggable embedding provider — issue 08 (12 tests)
+
+`packages/harness-tests/test_unit_embedding_provider.py`. No live Ollama required — provider construction/dispatch only, mirroring `test_unit_llm_factory.py`'s coverage of `build_llm_from_env()`.
+
+| Test | What it proves |
+|---|---|
+| `test_defaults_to_ollama_provider` | No `EMBEDDING_PROVIDER` set → defaults to `OllamaEmbeddingProvider` |
+| `test_ollama_reads_env_vars` | `EMBED_MODEL`/`OLLAMA_HOST` env vars flow into the constructed provider |
+| `test_kwarg_overrides_env` | `model=` kwarg beats `EMBED_MODEL` env var |
+| `test_config_dict_selects_provider` | `config['embedding_provider']` overrides `EMBEDDING_PROVIDER` env var |
+| `test_config_dict_model_overrides_env` | `config['ollama']['model']` overrides `EMBED_MODEL` env var |
+| `test_kwarg_overrides_config_dict` | Direct kwarg beats config dict value |
+| `test_config_dict_provider_kwarg_still_wins` | Explicit `provider=` kwarg beats `config['embedding_provider']` |
+| `test_empty_config_dict_falls_through_to_env` | `config={}` behaves like no config |
+| `test_unknown_provider_raises_listing_only_implemented` | Unknown provider (`gemini`) raises `ValueError` naming only `ollama`, not `openrouter` |
+| `test_unknown_provider_openrouter_raises` | Unknown provider (`openrouter`) also raises `ValueError` |
+| `test_memory_store_embed_delegates_to_provider` | `PostgresMemoryStore._embed()` is a thin delegation to the injected `EmbeddingProvider` |
+| `test_memory_store_dim_cache_keys_off_provider_model_name` | `_embed_dim_cache` keys off `provider.model_name`, not a raw string param |
+
 ## Bootstrap — Architecture doc generation (15 tests)
 
 | Test | What it proves |

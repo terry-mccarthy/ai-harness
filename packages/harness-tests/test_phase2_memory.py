@@ -37,7 +37,8 @@ DOLT_CONN = dict(
 async def setup_memory_schema():
     """Create memory_items table once per test session."""
     from harness_memory.memory_store import PostgresMemoryStore
-    store = PostgresMemoryStore(PG_DSN, REDIS_URL, EMBED_MODEL, OLLAMA_HOST)
+    from harness_memory.embedding_provider import OllamaEmbeddingProvider
+    store = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, EMBED_MODEL))
     await store.setup()
     await store.close()
 
@@ -45,7 +46,8 @@ async def setup_memory_schema():
 @pytest.fixture
 async def memory_store():
     from harness_memory.memory_store import PostgresMemoryStore
-    store = PostgresMemoryStore(PG_DSN, REDIS_URL, EMBED_MODEL, OLLAMA_HOST)
+    from harness_memory.embedding_provider import OllamaEmbeddingProvider
+    store = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, EMBED_MODEL))
     await store.setup()
     yield store
     await store._truncate()
@@ -192,11 +194,12 @@ async def test_memory_namespace_isolation(memory_store):
 async def test_memory_cross_session_persistence(memory_store):
     """Item written in session 1 is readable in session 2 (new DB connection)."""
     from harness_memory.memory_store import PostgresMemoryStore
+    from harness_memory.embedding_provider import OllamaEmbeddingProvider
 
     await memory_store.write("architect", "persist-key", {"fact": "cross-session"})
 
     # Simulate new session: new store with fresh connection
-    store2 = PostgresMemoryStore(PG_DSN, REDIS_URL, EMBED_MODEL, OLLAMA_HOST)
+    store2 = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, EMBED_MODEL))
     await store2.setup()
     try:
         result = await store2.read("architect", "persist-key")
@@ -275,6 +278,7 @@ async def test_memory_dimension_change_creates_new_table_and_preserves_old():
     """
     import numpy as np
     from harness_memory.memory_store import PostgresMemoryStore
+    from harness_memory.embedding_provider import OllamaEmbeddingProvider
 
     # Distinct fake model names so the class-level embed-dim cache doesn't collide
     # with EMBED_MODEL (or other tests) and so we fully control the dimension
@@ -289,7 +293,7 @@ async def test_memory_dimension_change_creates_new_table_and_preserves_old():
     async def fake_embed_b(text: str):
         return np.zeros(dim_b, dtype=np.float32)
 
-    store_a = PostgresMemoryStore(PG_DSN, REDIS_URL, model_a, OLLAMA_HOST)
+    store_a = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, model_a))
     store_a._embed = fake_embed_a
     await store_a.setup()
     try:
@@ -298,7 +302,7 @@ async def test_memory_dimension_change_creates_new_table_and_preserves_old():
     finally:
         await store_a.close()
 
-    store_b = PostgresMemoryStore(PG_DSN, REDIS_URL, model_b, OLLAMA_HOST)
+    store_b = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, model_b))
     store_b._embed = fake_embed_b
     await store_b.setup()
     try:
