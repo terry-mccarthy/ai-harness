@@ -169,6 +169,12 @@ dolt add -A && dolt commit -m "seed: three starter skills (migrated from formula
   dolt add -A && dolt commit -m "migration: add manually_authored to skills"; } \
   || echo "(manually_authored migration already applied, skipping)"
 
+# Migration: add runbook_ref to skills — links a skill to the runbook it
+# documents, so a report that ran the skill can cite both (issue 06 — idempotent)
+{ dolt sql -q "ALTER TABLE skills ADD COLUMN runbook_ref VARCHAR(256) NULL" && \
+  dolt add -A && dolt commit -m "migration: add runbook_ref to skills"; } \
+  || echo "(runbook_ref migration already applied, skipping)"
+
 # Start SQL server in background — newer Dolt: root has no password by default
 dolt sql-server --host 0.0.0.0 --port 3306 &
 SERVER_PID=$!

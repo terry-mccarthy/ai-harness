@@ -137,7 +137,9 @@ async def main() -> None:
     print(json.dumps(report, indent=2))
 
     runbook = report.get("runbook_ref")
-    print(f"\n  Runbook cited : {runbook or '(none)'}")
+    skill = report.get("skill_ref")
+    print(f"\n  Skill executed: {skill or '(none)'}")
+    print(f"  Runbook cited : {runbook or '(none)'}")
     print(f"  Severity      : {report.get('severity', '?')}")
     print(f"  Needs approval: {report.get('requires_human_approval', False)}")
 

@@ -64,11 +64,17 @@ make seed-runbooks   # docs/runbooks/*.md  → pgvector "runbooks" namespace
 make seed-logs       # docs/logs/*.jsonl   → pgvector "logs" namespace
 ```
 
-## DynamicSREAgent — skill-aware guidance (slice 6)
+## DynamicSREAgent — skill-aware guidance (slice 6, issue 06)
 
 `DynamicSREAgent(gateway, llm_provider, memory_store=None, formula_store=None)`.
 
-When `formula_store` is provided, `_load_formula(task)` calls `store.lookup(self.name, task)` synchronously before the ReAct loop. A matched formula's steps are injected into the opening user message as a structured investigation plan (precedence over free-form investigation).
+When `formula_store` is provided, `_load_formula(task)` calls `store.lookup(self.name, task)` synchronously before the ReAct loop. A matched formula's **name, id, and description** are injected into the opening user message as a steer ("A proven skill exists for this incident type... Prefer calling run_skill with this id over improvising") — **not** its raw steps. The LLM decides for itself whether to call `run_skill`; the harness no longer forces execution.
+
+**`run_skill` is a native dispatch, not a gateway/MCP tool (issue 06).** Two pre-existing "run a skill" mechanisms (`services/skills_registry/server.py`'s `registry_execute_skill`, which trusts the skill's own declared `agent_role` rather than the caller's identity, and `review_server`'s `run_skill`, wired to unset `SKILL_CLIENT_ID`/`SKILL_CLIENT_SECRET` env vars) both have real authorization footguns, so `DynamicSREAgent` doesn't reuse either. Instead, `_handle_tool_call` intercepts `tool == "run_skill"` *before* it would reach `self.gateway.call_tool()` (there is no `TOOL_NAME_MAP` entry for it and no MCP server hosts it) and instead calls `SkillRunner(self.gateway).execute(skill_id, inputs)` directly in Python, using the agent's own already-authenticated `GatewayClient`. `SkillRunner` fetches the skill from governance, walks its steps through `gateway.call_tool()` — so every step still gets a fresh per-step OPA check under the agent's real credentials, and each step's `on_failure` policy (ABORT/CONTINUE/ROLLBACK) is honoured — no authority decoupling and no silently-ignored failure policy (the previous `_execute_formula_steps` hand-rolled loop had both problems: it always continued past a denied step regardless of `on_failure`, and it duplicated a weaker subset of `SkillRunner`). A `run_skill` call that raises `ToolAccessDenied` (a step got denied) is fed back to the LLM as a recoverable corrective message — same "denial is recoverable, not fatal" convention as a direct denied tool call.
+
+**Report linkage:** the run_skill dispatch merges the matched formula's `runbook_ref` into the tool-result payload returned to the LLM (`{**skill_runner_result, "runbook_ref": formula.runbook_ref}` — `SkillRunner.execute()` itself doesn't know about `runbook_ref`). `SRE_OUTPUT_SCHEMA` gained a required, nullable `skill_ref` field (matching the existing `runbook_ref` convention) so a report can cite the executed skill id; `prompts/react_sre.md` instructs the LLM to set `skill_ref`/`runbook_ref` from the run_skill result after a successful call.
+
+**`Formula.runbook_ref: str | None`** links a skill to the runbook it documents. Backed by an additive nullable `skills.runbook_ref VARCHAR(256)` Dolt column (`services/dolt/init.sh`, same idempotent `ALTER TABLE ... ADD COLUMN` migration pattern as `prompt_template`/`manually_authored`/`preconditions`).
 
 `make demo-sre` wires both stores when env vars are set; shows a capability banner on startup.
 

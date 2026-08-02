@@ -25,6 +25,7 @@ _VALID_OUTPUT = {
         {"action": "Restart connection pool", "rationale": "Clears stale connections", "requires_approval": False}
     ],
     "runbook_ref": None,
+    "skill_ref": None,
     "requires_human_approval": False,
 }
 
