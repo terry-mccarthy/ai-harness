@@ -476,6 +476,34 @@ async def test_formula_lookup_no_match(formula_store):
     assert result is None
 
 
+async def test_formula_list_matches_returns_score_and_id(formula_store):
+    """list_matches() surfaces the id and TF-IDF score for a qualifying match."""
+    formula_store.propose(_triage_formula())
+
+    matches = formula_store.list_matches("test_sre", "DB latency alert fired")
+
+    assert len(matches) == 1
+    formula, score = matches[0]
+    assert formula.id == "test:triage-incident"
+    assert score > 0.05
+
+
+async def test_formula_list_matches_no_match_returns_empty_list(formula_store):
+    """list_matches() returns [] (not None) when no formula scores above threshold."""
+    matches = formula_store.list_matches("test_sre", "birthday party planning catering")
+    assert matches == []
+
+
+async def test_formula_list_matches_excludes_deprecated(formula_store):
+    """A deprecated skill never appears in list_matches() results — same
+    ACTIVE-only contract as lookup()/list_active()."""
+    formula_store.propose(_triage_formula())
+    formula_store.deprecate("test:triage-incident")
+
+    matches = formula_store.list_matches("test_sre", "DB latency alert fired")
+    assert matches == []
+
+
 async def test_formula_version_history(formula_store):
     """After two propose() calls with same id, dolt log shows two commits; both versions queryable."""
     formula_store.propose(_triage_formula(version=1))

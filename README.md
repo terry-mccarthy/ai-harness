@@ -142,7 +142,7 @@ MCP_TOOL_TIMEOUT=300000 claude   # 5-minute timeout
 | `log_search` | `sre_stub__log_search` | sre | Semantic search over log events |
 | `observability_query` | `sre_stub__observability_query` | sre | Observability query (stub) |
 | `shell_exec` | `sre_stub__shell_exec` | sre | Execute shell command; requires human approval token |
-| `skill_search` | `sre_stub__skill_search` | sre | TF-IDF lookup of proven remediation formulas |
+| `skill_search` | `sre_stub__skill_search` | sre | Read-only TF-IDF discovery — returns ranked, scored ACTIVE `sre` skill matches (id + score) for an incident signature; excludes deprecated/revoked/expired |
 
 ## Tests
 
