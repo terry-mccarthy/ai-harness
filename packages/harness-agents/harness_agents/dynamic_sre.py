@@ -6,6 +6,7 @@ from pathlib import Path
 
 import jsonschema
 from harness_gateway.client import GatewayClient, ToolAccessDenied
+from harness_gateway.skill_runner import SkillRunner
 from harness_agents.types import AgentState, SRE_OUTPUT_SCHEMA
 from harness_agents.llm import LLMProvider
 
@@ -34,7 +35,7 @@ def _coerce_approval(report: dict) -> dict:
 
 class DynamicSREAgent:
     name = "sre"
-    allowed_tools = ["observability_query", "log_search", "runbook_read", "shell_exec", "skill_search"]
+    allowed_tools = ["observability_query", "log_search", "runbook_read", "shell_exec", "skill_search", "run_skill"]
     memory_namespace = "sre"
 
     def __init__(
@@ -76,12 +77,49 @@ class DynamicSREAgent:
             messages.append({"role": "user", "content": f"Invalid schema: {e.message}. Try again."})
             return None
 
+    async def _run_skill(self, params: dict, state: AgentState) -> dict:
+        """Native dispatch for run_skill — NOT a gateway/MCP tool.
+
+        run_skill has no TOOL_NAME_MAP entry and no MCP server hosts it, so
+        it must never reach self.gateway.call_tool(). Instead it drives
+        SkillRunner directly against the agent's own (already-authenticated)
+        GatewayClient, so every step inside the skill still gets its own
+        per-step OPA check under the agent's real credentials — running a
+        skill grants no extra authority over calling its steps by hand.
+        """
+        skill_id = params.get("skill_id")
+        result = await SkillRunner(self.gateway).execute(skill_id, params.get("inputs"))
+        formula = self._resolve_run_formula(skill_id, state)
+        if formula is not None:
+            result = {**result, "runbook_ref": getattr(formula, "runbook_ref", None)}
+        return result
+
+    def _resolve_run_formula(self, skill_id, state: AgentState):
+        """Find the Formula for the skill actually run, for runbook_ref linkage.
+
+        The preloaded formula in state (from _load_formula, if any) only
+        matches when the LLM ran that exact preloaded skill. When it instead
+        discovers and runs a different skill via skill_search (the
+        cold-start/no-preload path this feature is largely for), the
+        preloaded formula is absent or stale — fetch the real one by id so
+        report linkage doesn't silently drop for that path.
+        """
+        formula = state.get("formula")
+        if formula is not None and getattr(formula, "id", None) == skill_id:
+            return formula
+        if self.formula_store is not None and skill_id:
+            return self.formula_store.get(skill_id)
+        return None
+
     async def _handle_tool_call(
         self, tool: str, params: dict, raw: str, messages: list[dict],
         state: AgentState, token_usage: dict,
     ):
         try:
-            result = await self.gateway.call_tool(tool, params)
+            if tool == "run_skill":
+                result = await self._run_skill(params, state)
+            else:
+                result = await self.gateway.call_tool(tool, params)
         except ToolAccessDenied:
             messages.append({"role": "assistant", "content": raw})
             messages.append({"role": "user", "content": (
@@ -128,23 +166,6 @@ class DynamicSREAgent:
             return None
         return self.formula_store.lookup(self.name, task)
 
-    async def _execute_formula_steps(self, formula, messages: list[dict]) -> None:
-        """Call each non-LLM formula step directly and append results to messages."""
-        for step in formula.steps:
-            action = step.get("action", "")
-            if action == "llm_synthesise" or action not in self.allowed_tools:
-                continue
-            params = step.get("params", {})
-            tool_raw = json.dumps({"action": "call_tool", "tool": action, "params": params})
-            try:
-                result = await self.gateway.call_tool(action, params)
-            except ToolAccessDenied:
-                result = {"error": f"access denied for tool '{action}'"}
-            except Exception as e:
-                result = {"error": str(e)}
-            messages.append({"role": "assistant", "content": tool_raw})
-            messages.append({"role": "user", "content": f"Tool result:\n{json.dumps(result, indent=2)}"})
-
     async def _load_memory(self, task: str) -> list:
         if not self.memory:
             return []
@@ -187,13 +208,12 @@ class DynamicSREAgent:
     def _build_prompt_blocks(self, task: str, formula, memory_context) -> tuple[str, str]:
         formula_block = ""
         if formula:
-            steps_text = "\n".join(
-                f"{i + 1}. {json.dumps(s)}" for i, s in enumerate(formula.steps)
-            )
             formula_block = (
-                f"\nProven formula for this incident type: '{formula.name}'\n"
-                f"Follow these steps in order:\n{steps_text}\n"
-                f"Deviate only if a step's result is clearly inapplicable.\n"
+                f"\nA proven skill exists for this incident type: '{formula.name}' "
+                f"(id: {formula.id}).\n"
+                f"Description: {formula.description}\n"
+                f"Prefer calling run_skill with this id over improvising, unless its "
+                f"description is clearly inapplicable.\n"
             )
         context_block = (
             f"\nPast incidents from memory:\n{json.dumps(memory_context, indent=2)}\n"
@@ -273,8 +293,12 @@ class DynamicSREAgent:
             {"role": "user", "content": f"Incident: {task}{formula_block}{context_block}\n\nBegin your investigation."},
         ]
 
-        if formula:
-            await self._execute_formula_steps(formula, messages)
+        # Make the resolved formula visible to _handle_tool_call (e.g. so a
+        # run_skill dispatch can attach the matched formula's runbook_ref to
+        # its tool result) — state may not have carried it in if it was
+        # loaded here rather than pre-loaded by the supervisor.
+        if formula is not None:
+            state = {**state, "formula": formula}
 
         try:
             return await self._react_loop(messages, state, token_usage, token_budget)

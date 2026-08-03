@@ -3,8 +3,8 @@
 All tests live in `packages/harness-tests/`. Run them with:
 
 ```bash
-make test-integration   # 267 integration tests (requires Docker stack)
-make test-unit          # 314 unit tests (no infra needed)
+make test-integration   # 285 integration tests (requires Docker stack)
+make test-unit          # 393 unit tests (no infra needed)
 pytest -m eval -v -s    # 19 eval tests (requires Ollama only)
 ```
 
@@ -102,6 +102,27 @@ instead of a single skill — the shape backing the `skill_search` MCP tool.
 | `test_lookup_returns_none_when_no_match_above_threshold` | `lookup()` still returns `None` below threshold |
 | `test_lookup_returns_none_when_no_active_candidates` | `lookup()` still returns `None` with no candidates |
 
+## Skill-aware guidance — `run_skill` native dispatch (issue 06, `test_unit_dynamic_sre.py`)
+
+`run_skill` is not a gateway/MCP tool — `_handle_tool_call` intercepts it before it would
+reach `self.gateway.call_tool()` (no `TOOL_NAME_MAP` entry, no MCP server hosts it) and
+drives `SkillRunner(self.gateway).execute(...)` directly instead, so every step of the
+skill still gets its own per-step OPA check under the agent's real credentials. The
+formula-preload prompt block now steers the LLM toward calling `run_skill(<formula.id>)`
+rather than listing raw steps for the harness to auto-execute (the old
+`_execute_formula_steps` server-side loop, which ignored each step's `on_failure` policy,
+was deleted).
+
+| Test | What it proves |
+|---|---|
+| `test_llm_steered_to_call_run_skill_with_formula_id` | Skill precedence: matching formula preloaded → scripted turn calls `run_skill(formula.id)`, recorded by a fake `SkillRunner`, never via `gateway.call_tool` |
+| `test_cold_start_no_formula_never_calls_run_skill` | No matching formula → agent never calls `run_skill`, uses `runbook_read`/other tools instead |
+| `test_run_skill_denial_is_recoverable` | A `ToolAccessDenied` raised from `SkillRunner.execute()` (a skill step got denied) is fed back as a recoverable corrective message, not a fatal error |
+| `test_run_skill_result_carries_formula_runbook_ref_into_conversation` | The run_skill tool-result payload carries the matched formula's `runbook_ref`; a report echoing `skill_ref` + `runbook_ref` validates against `SRE_OUTPUT_SCHEMA` |
+| `test_sre_output_schema_requires_skill_ref` | `SRE_OUTPUT_SCHEMA` rejects a report missing the now-required `skill_ref` field |
+| `test_sre_output_schema_accepts_skill_ref_set` | `SRE_OUTPUT_SCHEMA` accepts a report with `skill_ref` set |
+| `test_sre_skill_discovery_and_execution_through_live_gateway` (integration) | End-to-end: a real ACTIVE skill seeded for `sre`, discovered via `skill_search` and executed via `run_skill` through the live `GatewayClient`, with every step OPA-checked |
+
 ## Pluggable embedding provider — issue 08 (12 tests)
 
 `packages/harness-tests/test_unit_embedding_provider.py`. No live Ollama required — provider construction/dispatch only, mirroring `test_unit_llm_factory.py`'s coverage of `build_llm_from_env()`.
@@ -173,7 +194,7 @@ instead of a single skill — the shape backing the `skill_search` MCP tool.
 | `test_formula_lookup_miss` | `lookup()` returns None for unmatched task |
 | `test_formula_outcome_recorded` | Formula pours recorded after synthesise node |
 | `test_agent_executes_ad_hoc_without_formula` | SRE agent runs freely without formula guidance |
-| `test_agent_executes_formula_steps` | Agent follows formula steps in order |
+| `test_agent_executes_formula_steps` | Agent is steered to call `run_skill` with the matched formula's id (issue 06 — no longer auto-executes steps server-side) |
 | `test_propose_formula_on_novel_task` | Draft formula created for unmatched ad-hoc run |
 | `test_human_gate_pauses_graph` | Graph pauses when `requires_human_approval=True` |
 | `test_human_gate_resumes_with_valid_token` | Valid approval token resumes graph |

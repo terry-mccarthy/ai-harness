@@ -68,8 +68,8 @@ class DoltFormulaStore:
                         (id, name, agent_role, version, status, description,
                          input_schema, steps, output_contract,
                          promoted_by, source_candidate_id, expires_at,
-                         revoked_reason, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         revoked_reason, runbook_ref, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         formula.id, formula.name, formula.agent_role,
@@ -78,7 +78,8 @@ class DoltFormulaStore:
                         json.dumps(formula.steps),
                         json.dumps(formula.output_contract),
                         formula.promoted_by, formula.source_candidate_id,
-                        formula.expires_at, formula.revoked_reason, now,
+                        formula.expires_at, formula.revoked_reason,
+                        formula.runbook_ref, now,
                     ),
                 )
                 cur.execute(
@@ -267,4 +268,5 @@ class DoltFormulaStore:
             source_candidate_id=row.get("source_candidate_id"),
             expires_at=row.get("expires_at"),
             revoked_reason=row.get("revoked_reason"),
+            runbook_ref=row.get("runbook_ref"),
         )

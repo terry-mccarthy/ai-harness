@@ -459,6 +459,20 @@ Schema versioned with Alembic (`packages/harness-memory/alembic/`).
   its id and score, not just the single winner.
 - Quality scoring: `ConsolidationWorker.run_pass()` reads `formula_pours`, computes
   success rate, and updates `quality_score` + `status` (active / proven / review).
+- `Formula.runbook_ref: str | None` (issue 06) links a skill to the runbook it documents,
+  backed by an additive nullable `skills.runbook_ref VARCHAR(256)` Dolt column.
+- **`run_skill` is a native dispatch inside `DynamicSREAgent`, not a gateway/MCP tool
+  (issue 06).** When a formula matches, its name/id/description are injected into the
+  opening prompt as a steer toward calling `run_skill(<id>)` — the LLM decides for itself
+  rather than the harness auto-executing steps server-side. `_handle_tool_call`
+  intercepts `tool == "run_skill"` before it would reach `self.gateway.call_tool()`
+  (there is no `TOOL_NAME_MAP` entry for it) and instead calls
+  `SkillRunner(self.gateway).execute(skill_id, inputs)` directly, so every step of the
+  skill still gets its own per-step OPA check under the agent's real credentials and each
+  step's `on_failure` policy (ABORT/CONTINUE/ROLLBACK) is honoured. The dispatch merges
+  the matched formula's `runbook_ref` into the tool result returned to the LLM;
+  `SRE_OUTPUT_SCHEMA` gained a required, nullable `skill_ref` field so the final report
+  can cite the executed skill alongside its runbook.
 
 ```
 formulas schema (Dolt):

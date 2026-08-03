@@ -18,6 +18,7 @@ class Formula:
     source_candidate_id: str | None = None
     expires_at: datetime | None = None
     revoked_reason: str | None = None
+    runbook_ref: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

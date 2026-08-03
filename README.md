@@ -146,11 +146,11 @@ MCP_TOOL_TIMEOUT=300000 claude   # 5-minute timeout
 
 ## Tests
 
-614 tests total — see [docs/tests.md](docs/tests.md) for full coverage tables.
+699 tests total — see [docs/tests.md](docs/tests.md) for full coverage tables.
 
 ```bash
-make test-integration   # 267 integration tests
-make test-unit          # 314 unit tests
+make test-integration   # 285 integration tests
+make test-unit          # 393 unit tests
 pytest -m eval -v -s    # 19 eval tests (Ollama only)
 ```
 

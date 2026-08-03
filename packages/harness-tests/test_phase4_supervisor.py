@@ -74,6 +74,7 @@ _VALID_INCIDENT_REPORT = {
         {"action": "Restart pool", "rationale": "Clears stale connections", "requires_approval": False}
     ],
     "runbook_ref": None,
+    "skill_ref": None,
     "requires_human_approval": False,
 }
 _VALID_INCIDENT = json.dumps({"action": "respond", "result": _VALID_INCIDENT_REPORT})
@@ -86,6 +87,7 @@ _INCIDENT_NEEDS_APPROVAL = json.dumps({"action": "respond", "result": {
         {"action": "rm -rf /tmp/*", "rationale": "Free disk space", "requires_approval": True}
     ],
     "runbook_ref": None,
+    "skill_ref": None,
     "requires_human_approval": True,
 }})
 
@@ -300,12 +302,22 @@ async def test_propose_formula_on_novel_task():
 
 
 # ---------------------------------------------------------------------------
-# Slice 6 — agent_executes_formula_steps (1 integration test)
+# Slice 6 — skill-aware guidance: agent is steered to run_skill (issue 06)
+#
+# The SRE agent no longer auto-executes formula steps server-side (that
+# hand-rolled loop ignored each step's on_failure policy). When a formula is
+# preloaded, the prompt steers the LLM to call run_skill(formula.id) as a
+# normal ReAct turn instead — run_skill is a native dispatch that drives
+# SkillRunner directly (not a gateway/MCP tool), so this fakes at the
+# SkillRunner boundary rather than mocking governance's live skill-fetch
+# HTTP endpoint.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
-async def test_agent_executes_formula_steps():
-    """When formula_id is set, SRE agent calls tools in formula step order."""
+async def test_agent_executes_formula_steps(monkeypatch):
+    """When formula_id is set, the SRE agent calls run_skill with the
+    formula's id rather than improvising or auto-executing steps."""
+    import harness_agents.dynamic_sre as dynamic_sre_module
     from harness_supervisor.nodes import run_agent_node
     from harness_agents.dynamic_sre import DynamicSREAgent
     from harness_memory.formula_store import DoltFormulaStore
@@ -314,9 +326,24 @@ async def test_agent_executes_formula_steps():
     formula = fstore.get("sre:triage-incident")
     assert formula is not None
 
-    _react_respond = _VALID_INCIDENT
+    captured = {}
+
+    class _FakeSkillRunner:
+        def __init__(self, gateway):
+            pass
+
+        async def execute(self, skill_id, inputs=None):
+            captured["skill_id"] = skill_id
+            return {"skill_id": skill_id, "steps_completed": 3, "results": []}
+
+    monkeypatch.setattr(dynamic_sre_module, "SkillRunner", _FakeSkillRunner)
+
+    llm = SequentialMockLLMProvider(
+        json.dumps({"action": "call_tool", "tool": "run_skill", "params": {"skill_id": formula.id}}),
+        _VALID_INCIDENT,
+    )
     gw = _mock_gateway({"observability_query": {}, "log_search": {}, "runbook_read": {}})
-    agent = DynamicSREAgent(gateway=gw, llm_provider=MockLLMProvider(_react_respond))
+    agent = DynamicSREAgent(gateway=gw, llm_provider=llm)
 
     state = {
         **_base_state("DB latency alert"),
@@ -327,11 +354,10 @@ async def test_agent_executes_formula_steps():
     }
     result = await run_agent_node(state, agent=agent, formula=formula)
     assert result["error"] is None
-
-    called_tools = [c["tool"] for c in gw.last_calls]
-    formula_actions = [s["action"] for s in formula.steps if s["action"] != "llm_synthesise"]
-    for action in formula_actions:
-        assert action in called_tools, f"Expected formula step '{action}' to be called"
+    assert captured.get("skill_id") == formula.id
+    # run_skill is a native dispatch — it must never reach the generic
+    # gateway.call_tool path (there is no TOOL_NAME_MAP entry for it).
+    assert "run_skill" not in [c["tool"] for c in gw.last_calls]
 
 
 # ---------------------------------------------------------------------------

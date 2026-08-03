@@ -22,6 +22,7 @@ _CACHED_OUTPUT = {
         {"action": "Restart pool", "rationale": "Clears stale connections", "requires_approval": False}
     ],
     "runbook_ref": None,
+    "skill_ref": None,
     "requires_human_approval": False,
 }
 
