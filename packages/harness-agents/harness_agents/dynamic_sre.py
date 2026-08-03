@@ -87,13 +87,29 @@ class DynamicSREAgent:
         per-step OPA check under the agent's real credentials — running a
         skill grants no extra authority over calling its steps by hand.
         """
-        result = await SkillRunner(self.gateway).execute(
-            params.get("skill_id"), params.get("inputs")
-        )
-        formula = state.get("formula")
+        skill_id = params.get("skill_id")
+        result = await SkillRunner(self.gateway).execute(skill_id, params.get("inputs"))
+        formula = self._resolve_run_formula(skill_id, state)
         if formula is not None:
             result = {**result, "runbook_ref": getattr(formula, "runbook_ref", None)}
         return result
+
+    def _resolve_run_formula(self, skill_id, state: AgentState):
+        """Find the Formula for the skill actually run, for runbook_ref linkage.
+
+        The preloaded formula in state (from _load_formula, if any) only
+        matches when the LLM ran that exact preloaded skill. When it instead
+        discovers and runs a different skill via skill_search (the
+        cold-start/no-preload path this feature is largely for), the
+        preloaded formula is absent or stale — fetch the real one by id so
+        report linkage doesn't silently drop for that path.
+        """
+        formula = state.get("formula")
+        if formula is not None and getattr(formula, "id", None) == skill_id:
+            return formula
+        if self.formula_store is not None and skill_id:
+            return self.formula_store.get(skill_id)
+        return None
 
     async def _handle_tool_call(
         self, tool: str, params: dict, raw: str, messages: list[dict],

@@ -357,13 +357,21 @@ _MATCHED_FORMULA = _Formula(
 
 
 class _FakeFormulaStore:
-    def __init__(self, formula=None):
+    def __init__(self, formula=None, by_id: dict | None = None):
         self.calls: list[dict] = []
+        self.get_calls: list[str] = []
         self._formula = formula
+        self._by_id = by_id or {}
 
     def lookup(self, agent_role: str, task: str):
         self.calls.append({"agent_role": agent_role, "task": task})
         return self._formula
+
+    def get(self, formula_id: str, version: int | None = None):
+        self.get_calls.append(formula_id)
+        if self._formula is not None and self._formula.id == formula_id:
+            return self._formula
+        return self._by_id.get(formula_id)
 
 
 async def test_formula_steps_injected_into_opening_message():
@@ -586,6 +594,53 @@ async def test_run_skill_result_carries_formula_runbook_ref_into_conversation(mo
     jsonschema.validate(result["agent_output"], SRE_OUTPUT_SCHEMA)
     assert result["agent_output"]["skill_ref"] == formula.id
     assert result["agent_output"]["runbook_ref"] == "runbook:db-pool-exhaustion"
+
+
+async def test_run_skill_discovered_via_skill_search_still_links_runbook_ref(monkeypatch):
+    """Cold-start discovery path: no formula is preloaded (formula_store.lookup
+    returns None), so state carries no preloaded formula at all. The LLM
+    instead finds a skill itself (e.g. via skill_search, not scripted here —
+    only its consequence matters) and calls run_skill with that id directly.
+    runbook_ref must still be attached by fetching the formula by id from the
+    store, not silently dropped just because nothing was preloaded."""
+    import harness_agents.dynamic_sre as dynamic_sre_module
+    from harness_agents.dynamic_sre import DynamicSREAgent
+
+    discovered = _Formula(
+        id="sre:cost-spike:2",
+        name="cost-spike-triage",
+        agent_role="sre",
+        version=1,
+        status="active",
+        description="Investigate a sudden cost spike",
+        input_schema={},
+        steps=[],
+        output_contract={},
+        promoted_by="human_operator",
+        runbook_ref="runbook:cost-spike",
+    )
+    monkeypatch.setattr(dynamic_sre_module, "SkillRunner", _FakeSkillRunner)
+    _reset_fake_skill_runner()
+
+    report = {**_VALID_REPORT, "skill_ref": discovered.id, "runbook_ref": discovered.runbook_ref}
+    llm = _Turns(
+        _call_tool("run_skill", skill_id=discovered.id),
+        _respond(report),
+    )
+    gw = _Gateway()
+    # lookup() (the preload path) returns None — nothing was preloaded — but
+    # get(skill_id) can still resolve the skill the LLM actually chose to run.
+    store = _FakeFormulaStore(formula=None, by_id={discovered.id: discovered})
+
+    result = await DynamicSREAgent(
+        gateway=gw, llm_provider=llm, formula_store=store
+    ).run(_state())
+
+    assert result.get("error") is None
+    assert store.get_calls == [discovered.id]
+    tool_result_msg = llm.messages_received[-1][-1]["content"]
+    assert "runbook:cost-spike" in tool_result_msg
+    assert result["agent_output"]["runbook_ref"] == "runbook:cost-spike"
 
 
 # ---------------------------------------------------------------------------
