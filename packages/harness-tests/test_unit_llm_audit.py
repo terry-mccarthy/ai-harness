@@ -121,7 +121,7 @@ def _respond_report():
     import json
     return json.dumps({"action": "respond", "result": {
         "timeline": "t", "likely_cause": "c", "severity": "P3",
-        "recommended_steps": [], "runbook_ref": None, "requires_human_approval": False,
+        "recommended_steps": [], "runbook_ref": None, "skill_ref": None, "requires_human_approval": False,
     }})
 
 

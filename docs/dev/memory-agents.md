@@ -29,6 +29,19 @@ All three signal-source tools share the same lazy-init + fallback pattern: they 
 | `log_search` | `log_retriever.py` | `PostgresMemoryStore` | `"logs"` | `make seed-logs` |
 | `skill_search` | `skill_retriever.py` | `DoltFormulaStore` | N/A (TF-IDF lookup) | Dolt seed formulas |
 
+**`skill_search` contract (issue 05):** read-only discovery, never executes or mutates a
+skill. `retrieve_skill()` calls `DoltFormulaStore.list_matches(agent_role, task)` — a new
+method that returns *every* ACTIVE, above-threshold match as `list[tuple[Formula, float]]`
+sorted by TF-IDF score descending — and formats it as `{"matches": [{"id", "name",
+"description", "steps", "input_schema", "output_contract", "score"}, ...], "matched": bool,
+"query": task}`. `matches` is `[]` (not `None`) when nothing qualifies. `deprecated`,
+`revoked`, and `expired` skills never appear — `list_matches()` is built on the same
+`list_active()` (`status = 'active'` only) that `lookup()` already relied on.
+`DoltFormulaStore.lookup(agent_role, task) -> Formula | None` is unchanged in signature and
+behaviour — it now just calls `list_matches()` internally and returns the top result (or
+`None`), so existing callers (`DynamicSREAgent._load_formula`, the supervisor's
+`formula_lookup` node) are unaffected.
+
 `sre_stub` (`stub_servers/sre_server.py`) holds two lazy singletons:
 - `_store` — `PostgresMemoryStore`, async-init on first `runbook_read` or `log_search` call when `PG_DSN` set
 - `_dolt_store` — `DoltFormulaStore`, sync-init on first `skill_search` call when `DOLT_HOST` set
@@ -39,17 +52,29 @@ docker compose build sre-stub
 docker compose up -d --no-deps sre-stub
 ```
 
+**Relevance threshold on `search()` (issue 04)**: `PostgresMemoryStore.search(namespace, query, top_k=5, min_score=None)` takes an optional `min_score` that filters rows server-side in the SQL (`AND ($4::float8 IS NULL OR (1 - (embedding <=> $1::vector)) >= $4)`), not by post-filtering in Python — this keeps `LIMIT top_k` meaningful (K *relevant* rows, not K rows later thinned down). `min_score=None` (the default) preserves the old unfiltered top-K behavior, so existing callers are unaffected.
+
+`retrieve_runbooks()` (`runbook_retriever.py`) passes `min_score=RUNBOOK_MIN_SCORE` (0.80 by default, overridable per call) — the same ≈0.80 relevance-threshold convention as `consolidation.py`'s `CLUSTER_THRESHOLD`. When no runbook clears the threshold, `retrieve_runbooks()` returns `{"runbooks": [], "query": ...}` — the same empty-list shape already used for an empty store — so the SRE agent can null out `runbook_ref` without a separate "no match" flag to check. `log_search`'s `retrieve_logs()` (issue 02) reuses this same `min_score` primitive with its own threshold.
+
+**Bounded `log_search` — truncation detection (issue 02)**: `retrieve_logs()` (`log_retriever.py`) passes `min_score=LOG_MIN_SCORE` (0.55 by default, overridable per call) — lower than runbooks' 0.80 because `log_seed.py` embeds each log entry's full JSON blob (`{**entry, "id": key}`, no curated `_embedding_text`), so timestamps/trace IDs/field names dilute the semantic signal relative to a runbook's hand-written "When to use" signature. 0.55 sits in the middle of a considered ~0.5–0.7 band for short/noisy log lines, not a measured value — revisit once real query/result pairs are available. The result adds `returned_count` (rows actually returned, ≤ `MAX_LOG_RESULTS` = 5) and `total_count` (rows scoring at or above `min_score` in the namespace, independent of the display cap) so the SRE agent can tell "these are all the relevant lines" from "these are N of `total_count`, truncated." Because `PostgresMemoryStore.search()` applies `LIMIT` in SQL, a single call capped at the display `top_k` can never reveal how many more rows qualified — `retrieve_logs()` works around this without changing `search()`'s signature or adding a second store method: it calls `store.search(..., top_k=max(top_k, 200), min_score=min_score)`, uses `len()` of that fuller result for `total_count`, then slices to `top_k` for display. This costs one embedding call (same as before) instead of two, at the cost of `total_count` becoming a floor rather than exact once a namespace exceeds ~200 qualifying rows — acceptable today since `docs/logs/*.jsonl` totals 14 lines. A no-match query returns `{"logs": [], "returned_count": 0, "total_count": 0, "query": ...}` — well-formed, not an error.
+
 Before the agent can find runbooks and logs, seed them once with:
 ```bash
 make seed-runbooks   # docs/runbooks/*.md  → pgvector "runbooks" namespace
 make seed-logs       # docs/logs/*.jsonl   → pgvector "logs" namespace
 ```
 
-## DynamicSREAgent — skill-aware guidance (slice 6)
+## DynamicSREAgent — skill-aware guidance (slice 6, issue 06)
 
 `DynamicSREAgent(gateway, llm_provider, memory_store=None, formula_store=None)`.
 
-When `formula_store` is provided, `_load_formula(task)` calls `store.lookup(self.name, task)` synchronously before the ReAct loop. A matched formula's steps are injected into the opening user message as a structured investigation plan (precedence over free-form investigation).
+When `formula_store` is provided, `_load_formula(task)` calls `store.lookup(self.name, task)` synchronously before the ReAct loop. A matched formula's **name, id, and description** are injected into the opening user message as a steer ("A proven skill exists for this incident type... Prefer calling run_skill with this id over improvising") — **not** its raw steps. The LLM decides for itself whether to call `run_skill`; the harness no longer forces execution.
+
+**`run_skill` is a native dispatch, not a gateway/MCP tool (issue 06).** Two pre-existing "run a skill" mechanisms (`services/skills_registry/server.py`'s `registry_execute_skill`, which trusts the skill's own declared `agent_role` rather than the caller's identity, and `review_server`'s `run_skill`, wired to unset `SKILL_CLIENT_ID`/`SKILL_CLIENT_SECRET` env vars) both have real authorization footguns, so `DynamicSREAgent` doesn't reuse either. Instead, `_handle_tool_call` intercepts `tool == "run_skill"` *before* it would reach `self.gateway.call_tool()` (there is no `TOOL_NAME_MAP` entry for it and no MCP server hosts it) and instead calls `SkillRunner(self.gateway).execute(skill_id, inputs)` directly in Python, using the agent's own already-authenticated `GatewayClient`. `SkillRunner` fetches the skill from governance, walks its steps through `gateway.call_tool()` — so every step still gets a fresh per-step OPA check under the agent's real credentials, and each step's `on_failure` policy (ABORT/CONTINUE/ROLLBACK) is honoured — no authority decoupling and no silently-ignored failure policy (the previous `_execute_formula_steps` hand-rolled loop had both problems: it always continued past a denied step regardless of `on_failure`, and it duplicated a weaker subset of `SkillRunner`). A `run_skill` call that raises `ToolAccessDenied` (a step got denied) is fed back to the LLM as a recoverable corrective message — same "denial is recoverable, not fatal" convention as a direct denied tool call.
+
+**Report linkage:** the run_skill dispatch merges the matched formula's `runbook_ref` into the tool-result payload returned to the LLM (`{**skill_runner_result, "runbook_ref": formula.runbook_ref}` — `SkillRunner.execute()` itself doesn't know about `runbook_ref`). `SRE_OUTPUT_SCHEMA` gained a required, nullable `skill_ref` field (matching the existing `runbook_ref` convention) so a report can cite the executed skill id; `prompts/react_sre.md` instructs the LLM to set `skill_ref`/`runbook_ref` from the run_skill result after a successful call.
+
+**`Formula.runbook_ref: str | None`** links a skill to the runbook it documents. Backed by an additive nullable `skills.runbook_ref VARCHAR(256)` Dolt column (`services/dolt/init.sh`, same idempotent `ALTER TABLE ... ADD COLUMN` migration pattern as `prompt_template`/`manually_authored`/`preconditions`).
 
 `make demo-sre` wires both stores when env vars are set; shows a capability banner on startup.
 

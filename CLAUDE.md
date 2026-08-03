@@ -23,6 +23,8 @@ make test-integration
 
 **Gotcha — git worktrees don't inherit `.env`:** `.env` is gitignored, so a fresh worktree has none. Integration tests then get spurious `401 Unauthorized` against the shared dev stack (client secrets resolve empty/wrong) rather than a clear "missing config" error. Copy the repo root's `.env` into the worktree before running `make test-integration`.
 
+**Gotcha — git worktrees don't inherit `.venv` either:** `uv sync --all-packages` in a fresh worktree can fail with `Failed to initialize cache at /Users/.../.cache/uv ... Operation not permitted` under a sandboxed shell, because the shared `uv` cache dir contains a `.git` the sandbox denies writing to. Re-run the same `uv sync --all-packages` with the sandbox disabled for that one command — it only needs to write `.venv/` and read the shared cache, nothing destructive. Once `.venv` exists, use `.venv/bin/python -m pytest ...` directly (not `uv run pytest`) to avoid re-triggering the cache path on every test run.
+
 **Resolved gotcha — cross-service `core` package name collision:** `services/governance/core/` and `services/review_server/core/` used to both be bare `core` packages, which could shadow each other (`sys.modules["core"]`) if both were ever put on `sys.path` in the same pytest session. Fixed by renaming each to a unique top-level package: `services/governance/governance_core/` and `services/review_server/review_server_core/`. See `packages/harness-tests/test_no_core_namespace_collision.py` for the regression test.
 
 ## Python environment

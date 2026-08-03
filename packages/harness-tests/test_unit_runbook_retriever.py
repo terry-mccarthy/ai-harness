@@ -12,9 +12,21 @@ class _FakeStore:
         self._results = results or []
         self.last_call: dict = {}
 
-    async def search(self, namespace: str, query: str, top_k: int = 5) -> list[dict]:
-        self.last_call = {"namespace": namespace, "query": query, "top_k": top_k}
-        return self._results[:top_k]
+    async def search(
+        self, namespace: str, query: str, top_k: int = 5, min_score: float | None = None
+    ) -> list[dict]:
+        self.last_call = {
+            "namespace": namespace,
+            "query": query,
+            "top_k": top_k,
+            "min_score": min_score,
+        }
+        results = self._results
+        if min_score is not None:
+            # Mirrors PostgresMemoryStore.search(): filter before LIMIT,
+            # not after, so top_k stays meaningful.
+            results = [r for r in results if r["score"] >= min_score]
+        return results[:top_k]
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +123,54 @@ async def test_result_order_matches_store():
         {"key": "high", "value": {"signature": "h", "body": "h"}, "score": 0.95},
         {"key": "low",  "value": {"signature": "l", "body": "l"}, "score": 0.61},
     ])
-    result = await retrieve_runbooks(store, "query")
+    # min_score explicitly lowered here — this test is about ordering, not
+    # thresholding, and 0.61 would otherwise be excluded by the default.
+    result = await retrieve_runbooks(store, "query", min_score=0.5)
 
     assert result["runbooks"][0]["id"] == "high"
     assert result["runbooks"][1]["id"] == "low"
+
+
+# ---------------------------------------------------------------------------
+# Behavior 7 — a relevance threshold (~0.80) is applied by default and
+# forwarded to the store, so filtering happens server-side
+# ---------------------------------------------------------------------------
+
+async def test_min_score_defaults_to_relevance_threshold_and_is_forwarded():
+    from harness_memory.runbook_retriever import retrieve_runbooks
+
+    store = _FakeStore(results=[])
+    await retrieve_runbooks(store, "pod crashing")
+
+    assert store.last_call["min_score"] == 0.80
+
+
+# ---------------------------------------------------------------------------
+# Behavior 8 — the threshold is tunable via a min_score override
+# ---------------------------------------------------------------------------
+
+async def test_min_score_is_overridable():
+    from harness_memory.runbook_retriever import retrieve_runbooks
+
+    store = _FakeStore(results=[])
+    await retrieve_runbooks(store, "pod crashing", min_score=0.5)
+
+    assert store.last_call["min_score"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Behavior 9 — a signature with no result clearing the relevance threshold
+# returns an empty runbooks list (the "no matching runbook" shape), not a
+# weak/irrelevant match
+# ---------------------------------------------------------------------------
+
+async def test_below_threshold_results_are_excluded():
+    from harness_memory.runbook_retriever import retrieve_runbooks
+
+    store = _FakeStore(results=[
+        {"key": "barely-related", "value": {"signature": "s", "body": "b"}, "score": 0.42},
+    ])
+    result = await retrieve_runbooks(store, "totally unrelated incident")
+
+    assert result["runbooks"] == []
+    assert result["query"] == "totally unrelated incident"

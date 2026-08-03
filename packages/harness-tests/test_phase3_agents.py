@@ -104,6 +104,7 @@ _VALID_INCIDENT_REPORT = {
         {"action": "Restart connection pool", "rationale": "Clears stale connections", "requires_approval": False}
     ],
     "runbook_ref": None,
+    "skill_ref": None,
     "requires_human_approval": False,
 }
 _VALID_INCIDENT = json.dumps({"action": "respond", "result": _VALID_INCIDENT_REPORT})

@@ -1,13 +1,14 @@
-"""PostgreSQL-backed memory store with Redis hot-read cache and Ollama embeddings."""
+"""PostgreSQL-backed memory store with Redis hot-read cache and a pluggable embedding provider."""
 import json
 import asyncio
-import httpx
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
 import asyncpg
 import numpy as np
 import redis.asyncio as aioredis
+
+from harness_memory.embedding_provider import EmbeddingProvider
 
 BASE_CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS {table} (
@@ -44,13 +45,11 @@ class PostgresMemoryStore:
         self,
         pg_dsn: str,
         redis_url: str,
-        embed_model: str,
-        ollama_host: str,
+        embedding_provider: EmbeddingProvider,
     ) -> None:
         self._pg_dsn = pg_dsn
         self._redis_url = redis_url
-        self._embed_model = embed_model
-        self._ollama_host = ollama_host.rstrip("/")
+        self._provider = embedding_provider
         self._pool: asyncpg.Pool | None = None
         self._redis: aioredis.Redis | None = None
         self.cache_hits: int = 0
@@ -63,10 +62,11 @@ class PostgresMemoryStore:
             self._redis = aioredis.from_url(self._redis_url, decode_responses=False)
 
     async def _resolve_embedding_dim(self) -> int:
-        if self._embed_model not in PostgresMemoryStore._embed_dim_cache:
+        model_name = self._provider.model_name
+        if model_name not in PostgresMemoryStore._embed_dim_cache:
             sample = await self._embed("setup")
-            PostgresMemoryStore._embed_dim_cache[self._embed_model] = len(sample)
-        return PostgresMemoryStore._embed_dim_cache[self._embed_model]
+            PostgresMemoryStore._embed_dim_cache[model_name] = len(sample)
+        return PostgresMemoryStore._embed_dim_cache[model_name]
 
     async def _ensure_table(self, dim: int) -> str:
         """Create the dimension-versioned table for `dim` if it doesn't exist yet.
@@ -156,7 +156,16 @@ class PostgresMemoryStore:
         await self._redis.set(rk, json.dumps(row), ex=3600)
         return row
 
-    async def search(self, namespace: str, query: str, top_k: int = 5) -> list[dict]:
+    async def search(
+        self, namespace: str, query: str, top_k: int = 5, min_score: float | None = None
+    ) -> list[dict]:
+        """Top-K nearest-neighbor search, optionally filtered by relevance.
+
+        When `min_score` is set, rows scoring below it are excluded
+        server-side (in the SQL WHERE clause) rather than post-filtered in
+        Python, so `LIMIT top_k` still returns the K most relevant rows
+        instead of K rows that are then filtered down further.
+        """
         embedding = await self._embed(query)
         vec_str = self._vec_to_pg(embedding)
 
@@ -169,10 +178,11 @@ class PostgresMemoryStore:
                 WHERE namespace = $2
                   AND (expires_at IS NULL OR expires_at > now())
                   AND embedding IS NOT NULL
+                  AND ($4::float8 IS NULL OR (1 - (embedding <=> $1::vector)) >= $4)
                 ORDER BY embedding <=> $1::vector
                 LIMIT $3
                 """,
-                vec_str, namespace, top_k,
+                vec_str, namespace, top_k, min_score,
             )
         return [{"key": r["key"], "value": json.loads(r["value"]), "score": r["score"]} for r in rows]
 
@@ -317,14 +327,7 @@ class PostgresMemoryStore:
     # ------------------------------------------------------------------
 
     async def _embed(self, text: str) -> np.ndarray:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{self._ollama_host}/api/embed",
-                json={"model": self._embed_model, "input": text},
-            )
-            resp.raise_for_status()
-        data = resp.json()
-        return np.array(data["embeddings"][0], dtype=np.float32)
+        return await self._provider.embed(text)
 
     @staticmethod
     def _vec_to_pg(vec: np.ndarray) -> str:

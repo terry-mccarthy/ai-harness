@@ -68,8 +68,8 @@ class DoltFormulaStore:
                         (id, name, agent_role, version, status, description,
                          input_schema, steps, output_contract,
                          promoted_by, source_candidate_id, expires_at,
-                         revoked_reason, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         revoked_reason, runbook_ref, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         formula.id, formula.name, formula.agent_role,
@@ -78,7 +78,8 @@ class DoltFormulaStore:
                         json.dumps(formula.steps),
                         json.dumps(formula.output_contract),
                         formula.promoted_by, formula.source_candidate_id,
-                        formula.expires_at, formula.revoked_reason, now,
+                        formula.expires_at, formula.revoked_reason,
+                        formula.runbook_ref, now,
                     ),
                 )
                 cur.execute(
@@ -128,15 +129,28 @@ class DoltFormulaStore:
 
     def lookup(self, agent_role: str, task: str) -> Formula | None:
         """Return best-matching active formula for the task using keyword similarity."""
+        matches = self.list_matches(agent_role, task)
+        return matches[0][0] if matches else None
+
+    def list_matches(
+        self, agent_role: str, task: str, min_score: float = 0.05
+    ) -> list[tuple[Formula, float]]:
+        """Return all active formulas scoring above `min_score`, best match first.
+
+        Same ACTIVE-only/non-expired/non-deprecated/non-revoked semantics as
+        `lookup()` (inherited from `list_active()`), but returns every
+        qualifying match with its score instead of only the single winner.
+        """
         candidates = self.list_active(agent_role)
         if not candidates:
-            return None
+            return []
         scored = [
             (f, _tfidf_score(task, f"{f.name} {f.description}"))
             for f in candidates
         ]
-        best_formula, best_score = max(scored, key=lambda x: x[1])
-        return best_formula if best_score > 0.05 else None
+        matches = [(f, s) for f, s in scored if s > min_score]
+        matches.sort(key=lambda x: x[1], reverse=True)
+        return matches
 
     # ------------------------------------------------------------------
     # Quality / lifecycle
@@ -254,4 +268,5 @@ class DoltFormulaStore:
             source_candidate_id=row.get("source_candidate_id"),
             expires_at=row.get("expires_at"),
             revoked_reason=row.get("revoked_reason"),
+            runbook_ref=row.get("runbook_ref"),
         )

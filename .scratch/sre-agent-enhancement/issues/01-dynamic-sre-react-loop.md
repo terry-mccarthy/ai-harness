@@ -1,8 +1,18 @@
 ---
 title: "DynamicSREAgent ReAct loop"
-status: ready-for-agent
+status: done
 type: AFK
 ---
+
+## Implementation status (audited 2026-08-02)
+
+Done. `packages/harness-agents/harness_agents/dynamic_sre.py` + `prompts/react_sre.md`
+implement the ReAct loop, turn cap, token-budget abort, malformed-JSON
+re-prompt, schema-validated `respond`, `tool_access_denied` recovery, memory
+load/write-back, and `requires_human_approval` coercion. Supervisor routes
+`incident` tasks to it (`packages/harness-supervisor/harness_supervisor/graph.py`).
+Static `SREAgent` fully retired. 17 unit tests in
+`packages/harness-tests/test_unit_dynamic_sre.py`, all passing.
 
 ## Parent
 

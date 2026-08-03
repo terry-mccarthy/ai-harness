@@ -37,7 +37,8 @@ DOLT_CONN = dict(
 async def setup_memory_schema():
     """Create memory_items table once per test session."""
     from harness_memory.memory_store import PostgresMemoryStore
-    store = PostgresMemoryStore(PG_DSN, REDIS_URL, EMBED_MODEL, OLLAMA_HOST)
+    from harness_memory.embedding_provider import OllamaEmbeddingProvider
+    store = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, EMBED_MODEL))
     await store.setup()
     await store.close()
 
@@ -45,7 +46,8 @@ async def setup_memory_schema():
 @pytest.fixture
 async def memory_store():
     from harness_memory.memory_store import PostgresMemoryStore
-    store = PostgresMemoryStore(PG_DSN, REDIS_URL, EMBED_MODEL, OLLAMA_HOST)
+    from harness_memory.embedding_provider import OllamaEmbeddingProvider
+    store = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, EMBED_MODEL))
     await store.setup()
     yield store
     await store._truncate()
@@ -192,11 +194,12 @@ async def test_memory_namespace_isolation(memory_store):
 async def test_memory_cross_session_persistence(memory_store):
     """Item written in session 1 is readable in session 2 (new DB connection)."""
     from harness_memory.memory_store import PostgresMemoryStore
+    from harness_memory.embedding_provider import OllamaEmbeddingProvider
 
     await memory_store.write("architect", "persist-key", {"fact": "cross-session"})
 
     # Simulate new session: new store with fresh connection
-    store2 = PostgresMemoryStore(PG_DSN, REDIS_URL, EMBED_MODEL, OLLAMA_HOST)
+    store2 = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, EMBED_MODEL))
     await store2.setup()
     try:
         result = await store2.read("architect", "persist-key")
@@ -239,6 +242,19 @@ async def test_memory_semantic_search(memory_store):
     assert results[0]["key"] == "db-issue"
 
 
+async def test_memory_search_min_score_filters_low_relevance(memory_store):
+    """search() with min_score excludes rows below the relevance threshold server-side."""
+    await memory_store.write("sre", "db-issue-2", {"text": "Database connection pool exhausted causing slow queries"})
+    await memory_store.write("sre", "unrelated-topic", {"text": "Quarterly sales report for the northeast region office"})
+
+    results = await memory_store.search("sre", "database performance problems", top_k=5, min_score=0.80)
+    keys = [r["key"] for r in results]
+    assert "db-issue-2" in keys
+    assert "unrelated-topic" not in keys
+    # Every returned row actually clears the threshold.
+    assert all(r["score"] >= 0.80 for r in results)
+
+
 async def test_memory_overwrite(memory_store):
     """write() with same namespace+key overwrites the previous value."""
     await memory_store.write("architect", "ow-key", {"version": 1})
@@ -262,6 +278,7 @@ async def test_memory_dimension_change_creates_new_table_and_preserves_old():
     """
     import numpy as np
     from harness_memory.memory_store import PostgresMemoryStore
+    from harness_memory.embedding_provider import OllamaEmbeddingProvider
 
     # Distinct fake model names so the class-level embed-dim cache doesn't collide
     # with EMBED_MODEL (or other tests) and so we fully control the dimension
@@ -276,7 +293,7 @@ async def test_memory_dimension_change_creates_new_table_and_preserves_old():
     async def fake_embed_b(text: str):
         return np.zeros(dim_b, dtype=np.float32)
 
-    store_a = PostgresMemoryStore(PG_DSN, REDIS_URL, model_a, OLLAMA_HOST)
+    store_a = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, model_a))
     store_a._embed = fake_embed_a
     await store_a.setup()
     try:
@@ -285,7 +302,7 @@ async def test_memory_dimension_change_creates_new_table_and_preserves_old():
     finally:
         await store_a.close()
 
-    store_b = PostgresMemoryStore(PG_DSN, REDIS_URL, model_b, OLLAMA_HOST)
+    store_b = PostgresMemoryStore(PG_DSN, REDIS_URL, OllamaEmbeddingProvider(OLLAMA_HOST, model_b))
     store_b._embed = fake_embed_b
     await store_b.setup()
     try:
@@ -474,6 +491,34 @@ async def test_formula_lookup_no_match(formula_store):
     """lookup() returns None for a task with no matching formula — does not error."""
     result = formula_store.lookup("test_sre", "birthday party planning catering")
     assert result is None
+
+
+async def test_formula_list_matches_returns_score_and_id(formula_store):
+    """list_matches() surfaces the id and TF-IDF score for a qualifying match."""
+    formula_store.propose(_triage_formula())
+
+    matches = formula_store.list_matches("test_sre", "DB latency alert fired")
+
+    assert len(matches) == 1
+    formula, score = matches[0]
+    assert formula.id == "test:triage-incident"
+    assert score > 0.05
+
+
+async def test_formula_list_matches_no_match_returns_empty_list(formula_store):
+    """list_matches() returns [] (not None) when no formula scores above threshold."""
+    matches = formula_store.list_matches("test_sre", "birthday party planning catering")
+    assert matches == []
+
+
+async def test_formula_list_matches_excludes_deprecated(formula_store):
+    """A deprecated skill never appears in list_matches() results — same
+    ACTIVE-only contract as lookup()/list_active()."""
+    formula_store.propose(_triage_formula())
+    formula_store.deprecate("test:triage-incident")
+
+    matches = formula_store.list_matches("test_sre", "DB latency alert fired")
+    assert matches == []
 
 
 async def test_formula_version_history(formula_store):

@@ -1,8 +1,17 @@
 ---
 title: "Runbook ingestion seed into pgvector"
-status: ready-for-agent
+status: done
 type: AFK
 ---
+
+## Implementation status (audited 2026-08-02)
+
+Done. `packages/harness-memory/harness_memory/runbook_seed.py` extracts the
+`**When to use:**` line as the embedded signature, stores the full body,
+skips malformed files with a logged warning, and upserts idempotently
+(unchanged files are a no-op, edited files update in place). Exposed as both
+`make seed-runbooks` and the importable `seed_runbooks()` function
+(`scripts/seed_runbooks.py`).
 
 ## Parent
 

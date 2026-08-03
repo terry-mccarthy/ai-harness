@@ -106,13 +106,40 @@ The table schema:
 ```json
 {
   "llm_provider": "gemini",
+  "embedding_provider": "ollama",
   "gemini": { "model": "gemini-2.5-flash", "api_key": "..." },
   "ollama": { "model": "qwen2.5-coder:7b" },
   "openrouter": { "model": "anthropic/claude-3.5-sonnet" }
 }
 ```
 
-Only the active provider's sub-dict is used; the others are ignored.
+Only the active provider's sub-dict is used; the others are ignored. `llm_provider` and `embedding_provider` are independent keys — e.g. chat can run on `gemini` while embeddings stay on local `ollama` (the `ollama` sub-dict is shared; embeddings read `model`/`host` from it, chat reads `model`/`num_ctx`/etc. from the same sub-dict).
+
+## Embedding provider factory — `build_embedding_provider_from_env()`
+
+`PostgresMemoryStore` (`packages/harness-memory`) takes an `EmbeddingProvider` instance instead of raw `embed_model`/`ollama_host` strings — the same seam pattern as `build_llm_from_env()` above, but for embeddings. The factory lives in `harness_memory/embedding_provider.py` (not `harness_agents`) since `harness_memory` is the only package that needs embeddings and already owns `httpx`/`asyncpg`.
+
+```python
+from harness_memory.embedding_provider import build_embedding_provider_from_env, OllamaEmbeddingProvider
+
+# env-driven (EMBEDDING_PROVIDER, EMBED_MODEL, OLLAMA_HOST)
+provider = build_embedding_provider_from_env()
+
+# kwarg overrides
+provider = build_embedding_provider_from_env(model="mxbai-embed-large")
+
+# config dict layer — same server_config JSONB schema as build_llm_from_env,
+# reading the "embedding_provider" key instead of "llm_provider"
+provider = build_embedding_provider_from_env(config={"embedding_provider": "ollama", "ollama": {"model": "nomic-embed-text"}})
+
+store = PostgresMemoryStore(pg_dsn, redis_url, provider)
+```
+
+Resolution order: **kwarg > config dict > env var > default** (same as `build_llm_from_env`).
+
+**Only `ollama` is implemented today.** Unknown provider names (e.g. `gemini`, `openrouter`) raise `ValueError` listing only what's actually supported — do not construct `OllamaEmbeddingProvider` directly in production/script call sites; use the factory so `EMBEDDING_PROVIDER`/`server_config` selection works. Tests that want a deterministic, non-env-driven store should construct `OllamaEmbeddingProvider(host, model)` explicitly instead of going through the factory, to avoid environment leakage between test runs (see `packages/harness-tests/test_phase2_memory.py`).
+
+**Gemini and OpenRouter embedding backends are deferred** — OpenRouter added an OpenAI-shaped `POST /api/v1/embeddings` endpoint (proxying models like `openai/text-embedding-3-small`), so both are viable hosted options, but implementations are only built when an actual hosted deployment needs a second backend (see `.scratch/sre-agent-enhancement/issues/08-pluggable-embedding-provider.md`).
 
 ## PG config persistence gotcha
 

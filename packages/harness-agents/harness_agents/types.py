@@ -71,7 +71,7 @@ ARCHITECT_OUTPUT_SCHEMA = {
 
 SRE_OUTPUT_SCHEMA = {
     "type": "object",
-    "required": ["timeline", "likely_cause", "severity", "recommended_steps", "runbook_ref", "requires_human_approval"],
+    "required": ["timeline", "likely_cause", "severity", "recommended_steps", "runbook_ref", "skill_ref", "requires_human_approval"],
     "properties": {
         "timeline":    {"type": "string"},
         "likely_cause": {"type": "string"},
@@ -89,6 +89,7 @@ SRE_OUTPUT_SCHEMA = {
             },
         },
         "runbook_ref":           {"type": ["string", "null"]},
+        "skill_ref":             {"type": ["string", "null"]},
         "requires_human_approval": {"type": "boolean"},
     },
     "additionalProperties": False,

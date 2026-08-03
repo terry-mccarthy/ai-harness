@@ -53,11 +53,11 @@ async def _build_memory_store():
     if not pg_dsn:
         return None
     from harness_memory.memory_store import PostgresMemoryStore
+    from harness_memory.embedding_provider import build_embedding_provider_from_env
     store = PostgresMemoryStore(
         pg_dsn,
         os.environ.get("REDIS_URL", "redis://localhost:6379"),
-        os.environ.get("EMBED_MODEL", "nomic-embed-text"),
-        os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+        build_embedding_provider_from_env(),
     )
     await store.setup()
     return store
@@ -137,7 +137,9 @@ async def main() -> None:
     print(json.dumps(report, indent=2))
 
     runbook = report.get("runbook_ref")
-    print(f"\n  Runbook cited : {runbook or '(none)'}")
+    skill = report.get("skill_ref")
+    print(f"\n  Skill executed: {skill or '(none)'}")
+    print(f"  Runbook cited : {runbook or '(none)'}")
     print(f"  Severity      : {report.get('severity', '?')}")
     print(f"  Needs approval: {report.get('requires_human_approval', False)}")
 
