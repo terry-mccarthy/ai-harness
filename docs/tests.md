@@ -4,7 +4,7 @@ All tests live in `packages/harness-tests/`. Run them with:
 
 ```bash
 make test-integration   # 285 integration tests (requires Docker stack)
-make test-unit          # 393 unit tests (no infra needed)
+make test-unit          # 394 unit tests (no infra needed)
 pytest -m eval -v -s    # 19 eval tests (requires Ollama only)
 ```
 

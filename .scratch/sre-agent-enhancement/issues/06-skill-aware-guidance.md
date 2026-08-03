@@ -1,6 +1,6 @@
 ---
 title: "Skill-aware guidance and precedence in the SRE agent"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

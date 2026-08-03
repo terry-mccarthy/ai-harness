@@ -1,6 +1,6 @@
 ---
 title: "Semantic runbook_read over the seeded corpus"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

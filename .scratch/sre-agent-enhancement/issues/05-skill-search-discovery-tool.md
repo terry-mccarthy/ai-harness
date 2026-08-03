@@ -1,6 +1,6 @@
 ---
 title: "skill_search discovery tool"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

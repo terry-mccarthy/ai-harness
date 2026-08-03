@@ -4,7 +4,9 @@ The SRE agent investigates incidents using a ReAct loop guided by runbooks, log 
 
 ## Skill-guided investigation
 
-Before the ReAct loop starts, the agent looks up the task against the Dolt `skills` table using TF-IDF keyword matching. If a matching proven skill is found, its steps are injected into the opening message as a structured investigation plan — the agent follows the steps rather than reasoning from scratch.
+Before the ReAct loop starts, the agent looks up the task against the Dolt `skills` table using TF-IDF keyword matching (`DoltFormulaStore.lookup`). If a matching proven skill is found, its **name, id, and description** — not its raw steps — are injected into the opening message as a steer: "a proven skill exists for this incident type... prefer calling `run_skill` with this id over improvising." The LLM decides for itself whether to call it; the harness no longer auto-executes a skill's steps server-side.
+
+`run_skill` is a **native dispatch inside `DynamicSREAgent`, not a gateway/MCP tool** — there is no `TOOL_NAME_MAP` entry and no MCP server hosts it. When the LLM emits `call_tool(run_skill, {skill_id, inputs})`, the agent drives `SkillRunner(self.gateway).execute(...)` directly against its own already-authenticated `GatewayClient`, so every step of the skill still gets its own per-step OPA check under the agent's real credentials and each step's `on_failure` policy (ABORT/CONTINUE/ROLLBACK) is honoured. If no skill was preloaded, the agent can discover one mid-investigation via `skill_search` (ranked, scored ACTIVE matches) and call `run_skill` with the best match's id. A successful `run_skill` call carries the matched skill's `runbook_ref` back to the LLM, and the final report can cite the executed skill via `skill_ref` (`SRE_OUTPUT_SCHEMA`).
 
 Skills are discovered through the episode → candidate → promotion pipeline (see [skills.md](skills.md)). Once promoted, a skill is automatically selected by `POST /skills/select` when its `task_patterns` match the incoming task.
 
@@ -33,10 +35,12 @@ Tokens are scoped to a specific `thread_id` and tool name — a token for thread
 | Short name | What it does |
 |---|---|
 | `observability_query` | Observability query (stub — wire to real metrics backend) |
-| `runbook_read` | Semantic pgvector search over operational runbooks; seed with `make seed-runbooks` |
-| `log_search` | Semantic pgvector search over log events; seed with `make seed-logs` |
+| `runbook_read` | Semantic pgvector search over operational runbooks, top-3 by cosine similarity, filtered to score ≥ 0.80 (`RUNBOOK_MIN_SCORE`); below threshold returns an empty `runbooks` list rather than a weak match. Seed with `make seed-runbooks` |
+| `log_search` | Bounded semantic pgvector search over log events, capped at 5 results (`MAX_LOG_RESULTS`) and filtered to score ≥ 0.55 (`LOG_MIN_SCORE`); response includes `returned_count`/`total_count` so the agent can tell "all relevant lines" from "truncated". Seed with `make seed-logs` |
 | `shell_exec` | Execute a shell command; requires scoped `human_approval_token` |
-| `skill_search` | TF-IDF lookup of proven remediation formulas from Dolt |
+| `skill_search` | Read-only TF-IDF discovery — returns ranked, scored ACTIVE skill matches (id + score) for an incident signature; excludes deprecated/revoked/expired |
+
+`run_skill` (execute a skill by id) is deliberately **not** in this table — it's a native dispatch inside `DynamicSREAgent`, not a gateway-routed MCP tool; see "Skill-guided investigation" above.
 
 The `sre` OPA role is blocked from architect and code-reviewer tools.
 
