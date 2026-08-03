@@ -71,6 +71,7 @@ fail — it just runs against non-production secrets.
 | `OLLAMA_MODEL` | `qwen2.5-coder:7b` | LLM for chat/reasoning when provider is `ollama` |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Model when provider is `gemini` (requires `GEMINI_API_KEY`) |
 | `OPENROUTER_MODEL` | `anthropic/claude-3.5-sonnet` | Model when provider is `openrouter` (requires `OPENROUTER_API_KEY`) |
+| `EMBEDDING_PROVIDER` | `ollama` | Active embedding provider for semantic memory search; only `ollama` is implemented today (issue 08) |
 | `EMBED_MODEL` | `nomic-embed-text` | Embedding model for semantic memory search (768 dims) |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint |
 | `GOVERNANCE_URL` | `http://localhost:8090` | Governance service URL |
@@ -146,11 +147,11 @@ MCP_TOOL_TIMEOUT=300000 claude   # 5-minute timeout
 
 ## Tests
 
-699 tests total — see [docs/tests.md](docs/tests.md) for full coverage tables.
+700 tests total — see [docs/tests.md](docs/tests.md) for full coverage tables.
 
 ```bash
 make test-integration   # 285 integration tests
-make test-unit          # 393 unit tests
+make test-unit          # 394 unit tests
 pytest -m eval -v -s    # 19 eval tests (Ollama only)
 ```
 
@@ -159,7 +160,7 @@ pytest -m eval -v -s    # 19 eval tests (Ollama only)
 ```
 ├── packages/
 │   ├── harness-gateway/    # GatewayClient + ContextForgeGatewayClient
-│   ├── harness-agents/     # CodeReviewerAgent, ArchitectAgent, SREAgent, LLM providers
+│   ├── harness-agents/     # CodeReviewerAgent, ArchitectAgent, DynamicSREAgent, LLM providers
 │   ├── harness-memory/     # PostgresMemoryStore, DoltFormulaStore, ConsolidationWorker
 │   ├── harness-supervisor/ # LangGraph supervisor graph, HarnessState, OTel spans
 │   └── harness-tests/      # Integration + unit + eval tests

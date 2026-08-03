@@ -1,6 +1,6 @@
 ---
 title: "Bounded log_search over a seeded log source"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

@@ -1,44 +1,47 @@
 # PRD: SRE Agent Enhancement — Dynamic ReAct Loop, Bounded Logs, Semantic Runbooks
 
-Status: partially implemented (audited 2026-08-02, revised 2026-08-03)
+Status: done — all issues closed 2026-08-03. See [`PROGRESS.md`](../../PROGRESS.md) for the consolidated slice record.
 
-## Implementation Status (audited 2026-08-02, revised 2026-08-03)
+## Implementation Status (audited 2026-08-02, revised 2026-08-03, closed 2026-08-03)
 
-Code exists on `main` for every slice, but coverage against this PRD's acceptance
-criteria is uneven. None of the 7 issue files below had ever been flipped to
-`done` in the tracker before this audit — the tracker was accurate; work had
-simply landed without status updates. Findings, per issue:
+Code exists on `main` for every slice. The table below is kept as the
+historical audit trail (what the 2026-08-02 audit found still open, and why)
+followed by what closed each gap; for a forward-looking summary see
+`PROGRESS.md` instead of re-deriving it from this table. Findings, per issue:
 
 | Issue | Status | Notes |
 |---|---|---|
 | [01 — DynamicSREAgent ReAct loop](issues/01-dynamic-sre-react-loop.md) | `done` | Matches spec closely. `packages/harness-agents/harness_agents/dynamic_sre.py` + `prompts/react_sre.md`; 17 unit tests in `test_unit_dynamic_sre.py`, all passing. Static `SREAgent` fully retired (no references left). Supervisor routes `incident` → `DynamicSREAgent`. |
-| [02 — Bounded log_search](issues/02-bounded-log-search.md) | `ready-for-agent` (revised scope, now `Blocked by` 04) | **Deviates from spec, decision made to keep it.** `log_search` uses `PostgresMemoryStore.search()` (pgvector/Ollama semantic similarity) instead of the PRD's dependency-free substring/term-overlap scheme — accepted, since Postgres+Ollama is already mandatory for `runbook_read`/memory on this agent, and semantic recall is a real improvement over keyword matching. The 5-line cap *is* enforced (the MCP tool only exposes `query`, not `top_k` — an earlier pass of this audit wrongly called it bypassable). Remaining gap: `returned_count`/`total_count` truncation-detection fields need a relevance threshold that doesn't exist yet — issue 04 now owns building it (`min_score` on `PostgresMemoryStore.search()`) since it needs the identical primitive; 02 consumes it rather than building its own, to avoid two parallel worktrees colliding on the same method. Also needs a test against the real seeded `docs/logs/*.jsonl` fixtures, not just a fake store. |
+| [02 — Bounded log_search](issues/02-bounded-log-search.md) | `done` (closed 2026-08-03) | **Deviates from spec, decision made to keep it.** `log_search` uses `PostgresMemoryStore.search()` (pgvector/Ollama semantic similarity) instead of the PRD's dependency-free substring/term-overlap scheme — accepted, since Postgres+Ollama is already mandatory for `runbook_read`/memory on this agent, and semantic recall is a real improvement over keyword matching. The 5-line cap *is* enforced (the MCP tool only exposes `query`, not `top_k`). **Closed:** `returned_count`/`total_count` truncation fields now use the shared `min_score` threshold from issue 04 (`LOG_MIN_SCORE = 0.55`); tested against the real seeded `docs/logs/*.jsonl` fixtures in `test_log_retriever_integration.py`. |
 | [03 — Runbook ingestion seed](issues/03-runbook-ingestion-seed.md) | `done` | `harness_memory/runbook_seed.py` matches spec: extracts `**When to use:**` as signature, skips+warns on malformed files, idempotent upsert, exposed as both `make seed-runbooks` and an importable function. |
-| [04 — Semantic runbook_read](issues/04-semantic-runbook-read.md) | `ready-for-agent` (partial, no blockers) | Returns top-3 runbooks with id/signature/score (`harness_memory/runbook_retriever.py`), but there is no relevance threshold anywhere in the codebase — the "no matching runbook" sentinel result required when nothing scores above ≈0.80 was never built. Always returns whatever it finds. Now the designated owner of the shared `min_score` primitive on `PostgresMemoryStore.search()` (issue 02 depends on it landing here first). |
-| [05 — skill_search discovery tool](issues/05-skill-search-discovery-tool.md) | `ready-for-agent` (partial) | Tool exists (`sre_stub.skill_search` → `harness_memory/skill_retriever.py` → `DoltFormulaStore.lookup`), and `lookup` already excludes non-ACTIVE/expired skills. But it returns a single best match with no `score` field, not the ranked list-with-scores the AC calls for. |
-| [06 — Skill-aware guidance and precedence](issues/06-skill-aware-guidance.md) | `ready-for-agent` (revised scope) | **Not an open design fork — unfinished wiring.** A full `run_skill` execution engine already exists (`GatewayClient.execute_skill()` → `SkillRunner`, with per-step OPA checks and `on_failure` ABORT/CONTINUE/ROLLBACK policy) and is already exposed as an LLM-callable tool on `review_server`. The SRE agent doesn't use it: `DynamicSREAgent._execute_formula_steps()` hand-rolls a weaker duplicate that **ignores `on_failure` entirely** (a step marked ABORT still lets the loop continue) and isn't reachable as a tool call. Per-step OPA enforcement itself does hold either way — this is a correctness/reuse gap, not a security hole. Also confirmed: `Formula` has no `runbook_ref` field and `SRE_OUTPUT_SCHEMA` has no field to cite an executed skill id — the skill↔runbook report linkage has no data-model support yet, not just missing wiring. |
-| [07 — SRE enhancement doc reconciliation](issues/07-incident-demo-and-docs.md) | `ready-for-agent` (partial, rescoped 2026-08-03) | Rescoped to doc reconciliation only — the demo requirement was dropped (`scripts/demo_sre.py` already exists and is no longer tracked by this issue). `CLAUDE.md`, `ARCHITECTURE.md`, `README.md`, and `docs/dev/memory-agents.md` all reference the dynamic SRE flow. `PROGRESS.md` does not exist anywhere in the repo, so that reconciliation AC is unmet. |
+| [04 — Semantic runbook_read](issues/04-semantic-runbook-read.md) | `done` (closed 2026-08-03) | Returns top-3 runbooks with id/signature/score (`harness_memory/runbook_retriever.py`). **Closed:** built the shared `min_score` primitive on `PostgresMemoryStore.search()`; `RUNBOOK_MIN_SCORE = 0.80` filters weak matches, returning an empty `runbooks` list below threshold (no separate "no match" error shape) so the agent falls back to `recommended_steps` instead of citing an irrelevant runbook. |
+| [05 — skill_search discovery tool](issues/05-skill-search-discovery-tool.md) | `done` (closed 2026-08-03) | Tool exists (`sre_stub.skill_search` → `harness_memory/skill_retriever.py` → `DoltFormulaStore.lookup`), and `lookup` already excludes non-ACTIVE/expired skills. **Closed:** now returns the ranked list-with-scores the AC calls for (`DoltFormulaStore.list_matches()` + `retrieve_skill()`), not just a single best match. |
+| [06 — Skill-aware guidance and precedence](issues/06-skill-aware-guidance.md) | `done` (closed 2026-08-03) | **Not an open design fork — unfinished wiring**, confirmed by the fix. **Closed:** the SRE agent now calls `run_skill`, a *native in-agent dispatch* (`SkillRunner(self.gateway).execute(...)` called directly, not the pre-existing `GatewayClient.execute_skill()`/`review_server` tool, both of which had real authorization decoupling/misconfiguration problems — see `docs/dev/memory-agents.md`). Every step still gets its own per-step OPA check and `on_failure` (ABORT/CONTINUE/ROLLBACK) is honoured; the old `_execute_formula_steps()` auto-execution loop was deleted. `Formula.runbook_ref` and `SRE_OUTPUT_SCHEMA.skill_ref` added for the skill↔runbook report linkage. |
+| [07 — SRE enhancement doc reconciliation](issues/07-incident-demo-and-docs.md) | `done` (closed 2026-08-03) | Rescoped to doc reconciliation only — the demo requirement was dropped (`scripts/demo_sre.py` already exists and is no longer tracked by this issue). **Closed:** `PROGRESS.md` created; test counts and config tables reconciled across `README.md`/`ARCHITECTURE.md`/`docs/tests.md`; stale SRE-flow descriptions (old auto-execute formula steps, missing `skill_search`/`run_skill` coverage) fixed in `ARCHITECTURE.md`, `docs/sre.md`. See `PROGRESS.md` for the full slice record. |
+| [08 — Pluggable embedding provider](issues/08-pluggable-embedding-provider.md) | `done` (closed 2026-08-03) | Not one of the PRD's 4 numbered slices — cross-cutting to `harness_memory`, filed here since that's where the gap (hardcoded Ollama in `PostgresMemoryStore._embed()`) was first written down. `EmbeddingProvider` protocol + `OllamaEmbeddingProvider` + `build_embedding_provider_from_env()` landed; `EMBEDDING_PROVIDER` alongside `EMBED_MODEL`; Gemini/OpenRouter embedding backends deliberately deferred. |
 
-**Bottom line:** Slice 1 (the ReAct loop — the hardest, highest-value piece) is
-solid and complete. Slice 3's ingestion half is solid. Slices 2 and 6's
-apparent "deviations" both turned out, on closer inspection, not to be open
-architecture forks: slice 2's semantic search is a reasonable improvement over
-the original spec, and slice 6 has a `run_skill` execution engine already
-built and used elsewhere (`review_server`) — the SRE agent just isn't wired to
-it. No issue in this PRD is actually blocked on a maintainer *decision*
-anymore; every remaining item is concrete, scoped engineering work:
-- a shared relevance threshold (blocks issue 02's truncation counts and issue
-  04's "no matching runbook" result)
-- issue 05's missing `score` field
-- issue 06's reuse of `SkillRunner`/`execute_skill` (fixes a real `on_failure`
-  correctness gap) plus a `run_skill` tool for the `sre` role, and a
-  `runbook_ref` field on `Formula` + a skill-id field on `SRE_OUTPUT_SCHEMA`
-  for report linkage
-- issue 07's `PROGRESS.md`, blocked in substance until 02/04/06 land
+**Bottom line (closed 2026-08-03):** all findings below closed without any
+maintainer *decision* being needed — every remaining item turned out to be
+concrete, scoped engineering work, not an open architecture fork:
+- a shared relevance threshold landed on `PostgresMemoryStore.search()`
+  (`min_score`), consumed by both issue 02's log truncation counts and issue
+  04's runbook "no match" empty-list result
+- issue 05's ranked, scored `skill_search` result shape
+- issue 06's `run_skill` — note this ended up as a **native in-agent
+  dispatch**, not a straight reuse of `GatewayClient.execute_skill()`/
+  `review_server`'s `run_skill` tool as this audit originally proposed; both
+  of those had real authorization decoupling/misconfiguration problems on
+  closer inspection (see the issue 06 row above and `docs/dev/memory-agents.md`)
+  — plus `Formula.runbook_ref` and `SRE_OUTPUT_SCHEMA.skill_ref` for report
+  linkage
+- issue 07's `PROGRESS.md`, plus test-count/config-table reconciliation
+  across `README.md`/`ARCHITECTURE.md`/`docs/tests.md`/`docs/sre.md`
+- issue 08 (related, not one of the 4 numbered slices): pluggable embedding
+  provider seam
 
-39 unit tests exist across the touched modules and all pass; they just don't
-cover the requirements above, because none of those requirements exist yet to
-test.
+See `PROGRESS.md` for the full slice-by-slice record and the deliberate
+divergences from this PRD's original spec (semantic search over the
+originally-specified keyword scheme; `run_skill` as native dispatch).
 
 ## Problem Statement
 

@@ -182,6 +182,8 @@ Every tool call the agent makes produces:
 2. A row in `audit_log` in Dolt (written async after the tool returns)
 3. A Dolt git commit — queryable with `dolt log` and `dolt diff`
 
+**One exception to the diagram above: `run_skill`.** The `call_tool` block shown (governance token → `/check` → MCPJungle → `sre-stub`) is what happens for `observability_query`, `runbook_read`, `log_search`, and `skill_search`. `run_skill` never reaches MCPJungle or `sre-stub` — `DynamicSREAgent._handle_tool_call` intercepts it and drives `SkillRunner(self.gateway).execute(skill_id, inputs)` in-process instead. `SkillRunner` then walks the skill's steps *through the same governance token → `/check` → MCPJungle path*, one step at a time, each producing its own OPA decision and audit row exactly like a directly-called tool — so `run_skill` adds no authority a hand-called sequence of the same steps wouldn't already have; it only changes which component (the harness vs. the LLM) decides the step sequence.
+
 ---
 
 ## Services
@@ -352,7 +354,7 @@ Violations are recorded in a dedicated Dolt table `architectural_gate_failures` 
 | `code_reviewer`  | `git_diff`, `run_linter`, `coverage_report`, `repo_conventions_read`, `review_diff`, `architecture_review`, `execute_architecture_check` |
 | `adversarial_code_critic` | `git_diff`, `run_linter` (read-only — no write/execute tools)                |
 | `adversarial_architecture_critic` | `codebase_search`, `adr_read`, `codebase_hotspots` (read-only — no `issue_create`, unlike `architect`) |
-| `sre`            | `observability_query`, `runbook_read`, `log_search`, `shell_exec`                     |
+| `sre`            | `observability_query`, `runbook_read`, `log_search`, `shell_exec`, `skill_search` (`run_skill` is a native in-agent dispatch, not a gateway/MCP tool, so it has no OPA entry of its own — see Layer 3 below) |
 | `sre` + `code_reviewer` | `episode:label` scope, `candidate:propose` scope                           |
 | `human_operator` | `skill:promote` scope (promote + reject + revoke — no tool access)                    |
 
@@ -821,7 +823,7 @@ suggestions — violating them breaks the system's core guarantees.
 
 ## Test Coverage
 
-### Integration suite (221 tests) — `make test-integration`
+### Integration suite (285 tests total — `make test-integration`; table below covers the major suites, not every file — see [docs/tests.md](docs/tests.md) for the complete, currently-accurate breakdown)
 
 | Phase / Area | File                        | Tests | What they cover                                                          |
 |--------------|-----------------------------|-------|--------------------------------------------------------------------------|
@@ -843,6 +845,8 @@ suggestions — violating them breaks the system's core guarantees.
 | 7            | `test_phase7_aac.py`       | 14    | Architectural gate node (unit), route_after_gate (unit), E2E graph flows, Dolt gate failures recording |
 | Adversarial  | `test_adversarial_code_critic_opa.py` | 5 | OPA `allow` rule for `adversarial_code_critic` role — git_diff/run_linter allowed, all else denied |
 | Adversarial  | `test_adversarial_architecture_critic_opa.py` | 6 | OPA `allow` rule for `adversarial_architecture_critic` role — codebase_search/adr_read/codebase_hotspots allowed, issue_create + all else denied |
+| SRE enh.     | `test_log_retriever_integration.py` | 3 | `log_search` semantic ranking + `returned_count`/`total_count` truncation fields against real seeded log fixtures (issue 02) |
+| SRE enh.     | `test_unit_dynamic_sre.py` (2 of 25, `@pytest.mark.integration`) | 2 | Supervisor routes `incident` → `DynamicSREAgent`; end-to-end skill discovery (`skill_search`) + execution (`run_skill`) through the live `GatewayClient` with every step OPA-checked (issue 06) |
 
 ### Unit suite additions — Adversarial code critic
 
@@ -860,11 +864,12 @@ suggestions — violating them breaks the system's core guarantees.
 | `test_unit_adversarial_architecture_critic.py`    | 8     | `AdversarialArchitectureCritic` agent — mocked gateway/LLM |
 | `test_adversarial_architecture_review_http.py`    | 12    | `POST /review-architecture-adversarial` + `adversarial_architecture_review` MCP tool contract, incl. codebase/diff target modes |
 
-### Eval suite (13 tests) — `pytest -m eval -v -s`
+### Eval suite (19 tests) — `pytest -m eval -v -s`
 
 | File                       | Tests | What they cover |
 |----------------------------|-------|-----------------|
-| `test_eval_reviewer.py`    | 7     | CodeReviewerAgent quality: 6 per-fixture tests (verdict + recall) + 1 aggregate score report |
+| `test_eval_reviewer.py`    | 9     | CodeReviewerAgent quality: 8 per-fixture tests (verdict + recall) + 1 aggregate score report |
+| `test_eval_architect.py`   | 4     | ArchitectAgent quality: 3 per-fixture tests (clean/god-controller/leaky-persistence) + 1 aggregate score report |
 | `test_eval_adversarial_code_critic.py` | 3 | AdversarialCodeCritic quality against 2 trap fixtures (underrated CRITICAL + false-positive CRITICAL) + 1 aggregate confirm/refute-rate report |
 | `test_eval_adversarial_architecture_critic.py` | 3 | AdversarialArchitectureCritic quality against 2 trap fixtures (underrated HIGH+ regression + false-positive HIGH) + 1 aggregate confirm/refute-rate report |
 

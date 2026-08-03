@@ -1,6 +1,6 @@
 ---
 title: "Pluggable embedding provider (Ollama now, Gemini/OpenRouter later)"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

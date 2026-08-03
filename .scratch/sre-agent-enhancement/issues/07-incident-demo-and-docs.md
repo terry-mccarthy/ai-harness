@@ -1,6 +1,6 @@
 ---
 title: "SRE enhancement doc reconciliation"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 
@@ -32,8 +32,51 @@ skills↔runbooks guidance model, once 02/04/06 are closed out.
 
 ## Acceptance criteria
 
-- [ ] `CLAUDE.md`, `ARCHITECTURE.md`, `README.md`, `PROGRESS.md` reconciled to the final SRE flow and the prior/posterior guidance model
-- [ ] Test counts / config tables in the docs reflect the slices delivered
+- [x] `CLAUDE.md`, `ARCHITECTURE.md`, `README.md`, `PROGRESS.md` reconciled to the final SRE flow and the prior/posterior guidance model
+- [x] Test counts / config tables in the docs reflect the slices delivered
+
+## Closed 2026-08-03
+
+02/04/06 all landed, unblocking this issue. `PROGRESS.md` created at the repo
+root with the SRE Agent Enhancement PRD recorded as a completed phase
+(4 slices + issue 08 as a related cross-cutting addition), including the
+deliberate divergences from spec (semantic search over the PRD's original
+keyword scheme; `run_skill` as a native in-agent dispatch rather than reuse
+of either pre-existing "run a skill" mechanism, both of which had real
+authorization problems).
+
+Authoritative test counts from this session's `pytest --collect-only` runs:
+**700 total / 394 unit / 285 integration / 19 eval.** `README.md`,
+`docs/tests.md`, and `ARCHITECTURE.md` previously disagreed (699/393 vs.
+700/394) and reconciled to these numbers. `README.md`'s `EMBED_MODEL` config
+row gained a sibling `EMBEDDING_PROVIDER` row (issue 08 config knob was
+undocumented there).
+
+Stale docs found and fixed:
+- `README.md` project-layout line still said `SREAgent` (the retired static
+  agent) instead of `DynamicSREAgent`.
+- `ARCHITECTURE.md`'s OPA policy table for the `sre` role was missing
+  `skill_search` (present in `policies/harness.rego` since issue 05) and had
+  no mention of `run_skill`'s OPA-exempt native-dispatch status.
+- `ARCHITECTURE.md`'s "Test Coverage" section headline counts (Integration:
+  221, Eval: 13) were stale relative to reality (285 / 19) and, in the
+  Integration table's own case, relative to its own row sum (~197) — a
+  pre-existing drift that predates this PRD. Corrected the headline numbers,
+  added the two SRE-PRD-specific integration rows, added the eval suite's
+  missing `test_eval_architect.py` row, and pointed to `docs/tests.md` as
+  the exhaustive source of truth rather than silently re-deriving a table
+  that was already known-incomplete before this PRD started.
+- `ARCHITECTURE.md`'s request-flow sequence diagram and narrative didn't
+  distinguish `run_skill`'s native dispatch from the normal
+  governance→MCPJungle→tool path every other SRE tool takes — added a
+  clarifying note.
+- `docs/sre.md` (the primary "how the SRE agent works" doc, linked from
+  README) still described the **deleted** auto-execute-formula-steps
+  behavior ("its steps are injected... the agent follows the steps rather
+  than reasoning from scratch") and didn't mention `run_skill`, the
+  relevance thresholds, or the truncation-count fields at all. Rewrote the
+  "Skill-guided investigation" section and the tools table to match
+  `dynamic_sre.py`'s actual current behavior.
 
 <details>
 <summary>Original acceptance criteria (2026-08-02, superseded — kept for history)</summary>
