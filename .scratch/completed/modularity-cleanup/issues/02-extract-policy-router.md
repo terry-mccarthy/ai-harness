@@ -1,6 +1,6 @@
 ---
 title: "Extract policy router (`/check`, `/audit`, `/oauth/token`, `/jwks`, `/metrics`)"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

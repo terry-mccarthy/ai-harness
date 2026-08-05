@@ -1,6 +1,6 @@
 ---
 title: "Extract agents router (`/agent/invoke`, `/agents`, registry)"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

@@ -1,5 +1,7 @@
 # Skill Learning
 
+Status: done
+
 Procedural, governed self-learning: the harness promotes recurring successful remediations into versioned, expiring, HITL-gated skills. No model weights change — every learned behaviour is diffable, attributable, and revocable.
 
 Source spec: SKILL-LEARNING-SPEC.md (Google Doc)

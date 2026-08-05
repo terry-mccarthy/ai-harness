@@ -1,6 +1,6 @@
 ---
 title: "Pull skill execution out of `GatewayClient` into a separate `SkillRunner`"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

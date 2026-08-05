@@ -1,6 +1,6 @@
 ---
 title: "Skill expiry and lightweight re-validation trigger"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

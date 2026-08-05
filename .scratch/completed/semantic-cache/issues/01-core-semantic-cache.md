@@ -1,6 +1,6 @@
 ---
 title: "Core semantic cache — lookup, write, threshold, TTL"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

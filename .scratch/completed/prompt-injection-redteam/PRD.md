@@ -1,6 +1,6 @@
 # PRD: Prompt Injection Red-Team Demo
 
-Status: ready-for-agent
+Status: done
 
 ## Problem Statement
 
@@ -28,7 +28,7 @@ Additionally, update the code reviewer system prompt to explicitly name prompt i
 
 6. As a developer reviewing the system prompt, I want the code reviewer prompt to explicitly enumerate prompt injection as a vulnerability class to detect, so that the eval suite can have a reliable must_flag pattern for injection diffs.
 
-7. As a developer reading the README, I want a Security Demo section that shows the demo script output (including the Dolt commit hash), so that the project's governance story is immediately legible to someone evaluating it.
+7. ~~As a developer reading the README, I want a Security Demo section that shows the demo script output (including the Dolt commit hash), so that the project's governance story is immediately legible to someone evaluating it.~~ **Won't do** — the demo script (`scripts/demo_injection.py`) and its terminal output are sufficient; a dedicated README section wasn't judged worth the upkeep.
 
 8. As an interviewer or portfolio reviewer, I want to see a test file that connects the injection input to the blocked output to the audit row, so that the governance story is traceable without needing to run the stack.
 

@@ -1,6 +1,6 @@
 ---
 title: "Extract governance core infrastructure into a `core/` package"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

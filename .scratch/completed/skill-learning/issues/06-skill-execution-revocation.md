@@ -1,6 +1,6 @@
 ---
 title: "Skill execution with per-step OPA re-check and revocation"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

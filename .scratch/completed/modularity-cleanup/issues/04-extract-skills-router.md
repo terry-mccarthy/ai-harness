@@ -1,6 +1,6 @@
 ---
 title: "Extract skills router (skill CRUD, expire, select)"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

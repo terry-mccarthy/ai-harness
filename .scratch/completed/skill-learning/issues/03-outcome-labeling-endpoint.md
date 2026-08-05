@@ -1,6 +1,6 @@
 ---
 title: "Independent outcome labeling endpoint"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

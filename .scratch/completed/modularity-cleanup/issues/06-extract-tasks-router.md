@@ -1,6 +1,6 @@
 ---
 title: "Extract tasks router (`/tasks*`, `/memory/write`)"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

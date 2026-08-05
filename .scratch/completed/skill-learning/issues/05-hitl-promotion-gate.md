@@ -1,6 +1,6 @@
 ---
 title: "HITL promotion gate"
-status: ready-for-human
+status: done
 type: HITL
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Extract learning router (episodes, candidates, label, promote, reject)"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

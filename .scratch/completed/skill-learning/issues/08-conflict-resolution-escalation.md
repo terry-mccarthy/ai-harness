@@ -1,6 +1,6 @@
 ---
 title: "Skill conflict resolution and human escalation"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

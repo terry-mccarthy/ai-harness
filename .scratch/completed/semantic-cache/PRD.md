@@ -1,6 +1,6 @@
 # PRD: Semantic Response Cache for SRE Agent
 
-Status: ready-for-agent
+Status: done
 
 ## Problem Statement
 

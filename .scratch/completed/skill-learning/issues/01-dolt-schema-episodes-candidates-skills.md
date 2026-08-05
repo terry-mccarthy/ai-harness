@@ -1,6 +1,6 @@
 ---
 title: "Dolt schema: episodes, candidates, skills tables + migrate formulas"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Force-refresh per-request"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Manual candidate proposal"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 

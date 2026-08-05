@@ -1,6 +1,6 @@
 ---
 title: "Episode capture on governance audit path"
-status: ready-for-agent
+status: done
 type: AFK
 ---
 
